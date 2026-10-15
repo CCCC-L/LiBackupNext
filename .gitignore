@@ -13,3 +13,7 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Rust
+/app/src/main/rustic_bridge/target
+/app/src/main/jniLibs

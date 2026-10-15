@@ -1,19 +1,15 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ 的数据迁移规则。
+
+  云备份：排除 SharedPreferences（里面有仓库地址和密码）。
+  设备迁移：同样排除，避免密码跟着换机流程走。
 -->
 <data-extraction-rules>
   <cloud-backup>
-    <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+    <exclude domain="sharedpref" path="." />
   </cloud-backup>
-  <!--
-    <device-transfer>
-        <include .../>
-        <exclude .../>
-    </device-transfer>
-    -->
+  <device-transfer>
+    <exclude domain="sharedpref" path="." />
+  </device-transfer>
 </data-extraction-rules>

@@ -1,0 +1,190 @@
+name: Build & Release
+
+# 打 tag（v1.2.3）自动出包并发版；也可以手动指定版本号
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "发布正式版"
+        required: true
+        default: "1.0.0"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    env:
+      NDK_VERSION: "30.0.16248370"
+      # compileSdk 37 + AGP 9 需要 JDK 17 以上
+      JAVA_VERSION: "21"
+
+    steps:
+      # 生成变更日志要读历史，必须完整 clone
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装 JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: 安装 Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 安装 NDK 与平台
+        run: |
+          set -e
+          sdkmanager --install "ndk;$NDK_VERSION" "platform-tools" > /dev/null
+
+          # compileSdk 37 的平台包在不同 SDK 版本里叫 android-37 或 android-37.0，
+          # 两个都试一遍，装不上就让 AGP 自己下载
+          sdkmanager --install "platforms;android-37" > /dev/null 2>&1 \
+            || sdkmanager --install "platforms;android-37.0" > /dev/null 2>&1 \
+            || true
+
+          # buildRust 任务优先读这个环境变量（CI 上没有 local.properties）
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: 缓存 Rust 产物
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src/main/rustic_bridge
+
+      - name: 安装 cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: 配置 Gradle 缓存
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: 计算版本号
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+
+          # versionCode 用 major*10000 + minor*100 + patch，保证单调递增
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          PATCH="${PATCH%%[!0-9]*}"
+          CODE=$(( ${MAJOR:-0} * 10000 + ${MINOR:-0} * 100 + ${PATCH:-0} ))
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "版本 $VERSION（versionCode=$CODE）"
+
+      - name: 打包 release
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease \
+            -PrustAbis=arm64-v8a \
+            -PversionName=${{ steps.ver.outputs.version }} \
+            -PversionCode=${{ steps.ver.outputs.code }} \
+            --no-daemon --stacktrace
+
+      - name: 签名
+        id: sign
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -e
+          VERSION="${{ steps.ver.outputs.version }}"
+          IN=app/build/outputs/apk/release/app-release-unsigned.apk
+          OUT="LiBackupNext-${VERSION}.apk"
+
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > /tmp/release.keystore
+            APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+            "$APKSIGNER" sign \
+              --ks /tmp/release.keystore \
+              --ks-pass "pass:$KEYSTORE_PASSWORD" \
+              --key-pass "pass:$KEY_PASSWORD" \
+              --ks-key-alias "$KEY_ALIAS" \
+              --out "$OUT" "$IN"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            # 没配 secrets 也能出包，只是装不上（Android 要求签名）
+            cp "$IN" "$OUT"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::未配置签名 secrets，产物是未签名 APK"
+          fi
+
+          sha256sum "$OUT" | tee "$OUT.sha256"
+          ls -lh "$OUT"
+
+      - name: 生成变更日志
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          APK="LiBackupNext-${VERSION}.apk"
+
+          # 上一个 tag 到 HEAD 的提交；没有上一个 tag 就取最近 30 条
+          PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+
+          {
+            echo "## 变更"
+            echo
+            if [ -n "$PREV" ]; then
+              git log "$PREV..HEAD" --no-merges --pretty=format:"- %s（\`%h\`）"
+            else
+              git log --no-merges --pretty=format:"- %s（\`%h\`）" -n 30
+            fi
+            echo
+            echo
+            echo "## 包信息"
+            echo
+            echo "| 项 | 值 |"
+            echo "| --- | --- |"
+            echo "| 版本 | ${VERSION}（versionCode ${{ steps.ver.outputs.code }}） |"
+            echo "| 架构 | arm64-v8a |"
+            echo "| 大小 | $(du -h "$APK" | cut -f1) |"
+            echo "| SHA-256 | \`$(cut -d' ' -f1 "$APK.sha256")\` |"
+            echo "| 签名 | ${{ steps.sign.outputs.signed == 'true' && '已签名' || '未签名（未配置 secrets）' }} |"
+            echo
+            echo "构建提交：\`${{ github.sha }}\`"
+          } > release-body.md
+
+          cat release-body.md
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiBackupNext-${{ steps.ver.outputs.version }}
+          path: |
+            LiBackupNext-${{ steps.ver.outputs.version }}.apk
+            LiBackupNext-${{ steps.ver.outputs.version }}.apk.sha256
+          if-no-files-found: error
+
+      - name: 创建 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # 手动触发时用计算出来的版本号建 tag，tag 触发时用原 tag
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', steps.ver.outputs.version) || github.ref_name }}
+          name: LiBackupNext v${{ steps.ver.outputs.version }}
+          body_path: release-body.md
+          files: |
+            LiBackupNext-${{ steps.ver.outputs.version }}.apk
+            LiBackupNext-${{ steps.ver.outputs.version }}.apk.sha256
+          draft: false
+          prerelease: false

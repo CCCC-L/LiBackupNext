@@ -1,12 +1,47 @@
-# Add project specific R8 rules here.
-# AGP will combine all keep rule files in src/main/keepRules to pass to R8
+# ============================================================
+# LiBackupNext 的 R8 keep 规则
 #
-# For more details, see
-#   https://d.android.com/r/tools/r8/keep-rules
+# AGP 会把 src/main/keepRules 下的所有 *.keep 合并后交给 R8，
+# 不需要在 build.gradle.kts 里再配 proguardFiles。
+# ============================================================
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# ---------------- JNI ----------------
+# RusticService 里的 native 方法是按「Java_包名_类名_方法名」找符号的，
+# 类名或方法名一旦被混淆就 UnsatisfiedLinkError。
+-keep class com.cc.libackupnext.service.RusticService { *; }
+-keepclasseswithmembernames,includedescriptorclasses class * {
+    native <methods>;
+}
+
+# ---------------- AIDL ----------------
+# IRusticService / IAppManagerService / IBackupProgressCallback 及其 Stub / Proxy
+-keep interface com.cc.libackupnext.service.I* { *; }
+-keep class com.cc.libackupnext.service.I*$Stub { *; }
+-keep class com.cc.libackupnext.service.I*$Stub$Proxy { *; }
+
+# ---------------- root 服务 ----------------
+# 由框架 / libsu 实例化，类名不能被改（RusticService$Service、AppManagerService$Service）
+-keep class * extends com.topjohnwu.superuser.ipc.RootService { *; }
+-keep class com.cc.libackupnext.service.**$Service { *; }
+
+# ---------------- Android 组件 ----------------
+-keep class com.cc.libackupnext.App { *; }
+-keep class com.cc.libackupnext.MainActivity { *; }
+-keep class com.cc.libackupnext.service.ProgressService { *; }
+
+# ---------------- 枚举 ----------------
+# SortType 通过 SharedPreferences 里存的字符串 valueOf 还原，常量名必须保留
+-keep enum com.cc.libackupnext.ui.SortType { *; }
+-keepclassmembers enum * {
+    public static **[] values();
+    public static ** valueOf(java.lang.String);
+}
+
+# ---------------- 调试信息 ----------------
+# 错误日志页要显示可读的堆栈（类名 + 行号）
+-keepattributes SourceFile,LineNumberTable
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
+
+# ---------------- 第三方兜底 ----------------
+# libsu / Refine / Compose 都自带 consumer rules，这里只压掉可能的缺类告警
+-dontwarn com.topjohnwu.superuser.**

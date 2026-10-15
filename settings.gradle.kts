@@ -34,3 +34,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "LiBackupNext"
 include(":app")
+include(":hidden-api")

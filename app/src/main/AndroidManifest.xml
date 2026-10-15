@@ -5,7 +5,17 @@
   <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
     tools:ignore="QueryAllPackagesPermission" />
 
+  <!-- 备份 / 恢复进度通知（Android 16 起用 Live Updates 提升为常驻通知） -->
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
+
+  <!-- 备份 / 恢复期间的前台服务：应用切到后台才不会被冻结，通知才能继续刷新 -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
+
   <application
+    android:name=".App"
     android:allowBackup="true"
     android:dataExtractionRules="@xml/data_extraction_rules"
     android:fullBackupContent="@xml/backup_rules"
@@ -13,7 +23,8 @@
     android:label="@string/app_name"
     android:roundIcon="@mipmap/ic_launcher_round"
     android:supportsRtl="true"
-    android:theme="@style/Theme.LiBackupNext">
+    android:theme="@style/Theme.LiBackupNext"
+    >
     <activity
       android:exported="true"
       android:label="@string/app_name"
@@ -26,6 +37,21 @@
         <category android:name="android.intent.category.LAUNCHER" />
       </intent-filter>
     </activity>
+
+    <service
+      android:name=".service.ProgressService"
+      android:exported="false"
+      android:foregroundServiceType="dataSync" />
+
+    <!-- 实际绑定的是内嵌的 Service 类（Intent 里用的是 Service::class.java），
+         这里沿用外部类名声明，lint 的 Instantiatable 检查对此报错，按现状忽略 -->
+    <service android:name=".service.AppManagerService" android:exported="false"
+       android:process=":root"
+       tools:ignore="Instantiatable"/>
+
+    <service android:name=".service.RusticService" android:exported="false"
+       android:process=":root"
+       tools:ignore="Instantiatable"/>
   </application>
 
 </manifest>

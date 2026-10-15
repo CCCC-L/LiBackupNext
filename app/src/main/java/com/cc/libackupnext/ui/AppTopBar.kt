@@ -1,13 +1,6 @@
 package com.cc.libackupnext.ui
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
@@ -23,6 +16,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.Checkbox
@@ -38,107 +32,194 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.cc.libackupnext.ui.theme.IconSlotWidth
+import com.cc.libackupnext.ui.theme.eraseToRight
+import com.cc.libackupnext.ui.theme.rememberActionGroupWidth
+import com.cc.libackupnext.ui.theme.rememberEraseProgress
+import com.cc.libackupnext.ui.theme.rememberMiddleButtonEndPadding
+import com.cc.libackupnext.ui.theme.searchBarEnterTransition
+import com.cc.libackupnext.ui.theme.searchBarExitTransition
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppTopBar(
     viewModel: MainViewModel,
-    appName: String,
+    title: String,
     pageBackground: Color,
-    searchBarBackground: Color
+    searchBarBackground: Color,
+    navigationIcon: (@Composable () -> Unit)? = null,
+    middleIcon: ImageVector = Icons.Default.Sort,
+    onMiddleClick: () -> Unit = { viewModel.isSortMenuExpanded.value = true },
+    showSortMenu: Boolean = true,
+    /** 搜索框占位文案，子页面可以改成「搜索备注」。 */
+    searchPlaceholder: String = "搜索应用名称或包名",
+    /** 外部接管搜索状态：传了就用自己的，不再读写 ViewModel 里的全局搜索状态。 */
+    searchOpen: Boolean? = null,
+    searchQueryText: String? = null,
+    onToggleSearch: (() -> Unit)? = null,
+    onSearchQueryChange: ((String) -> Unit)? = null,
+    /** 标题字号，子页面可以传小一点的样式。 */
+    titleStyle: TextStyle = MaterialTheme.typography.titleLarge,
+    /** 非空时在「更多」菜单里多一项「新建应用备份」。 */
+    onCreateBackup: (() -> Unit)? = null,
+    /** 非空时在「更多」菜单里多一项「管理应用备份」。 */
+    onManageBackup: (() -> Unit)? = null,
+    /** 非空时在「更多」菜单里多一项「设置」。 */
+    onOpenSettings: (() -> Unit)? = null,
+    /** 非空时在「更多」菜单里多一项「错误日志」。 */
+    onOpenErrorLog: (() -> Unit)? = null,
+    moreMenuContent: @Composable (onDismiss: () -> Unit) -> Unit = { onDismiss ->
+        DropdownMenuItem(
+            text = { Text("重新加载") },
+            onClick = {
+                onDismiss()
+                viewModel.loadApps()
+            }
+        )
+        if (onCreateBackup != null) {
+            DropdownMenuItem(
+                text = { Text("新建应用备份") },
+                onClick = {
+                    onDismiss()
+                    onCreateBackup()
+                }
+            )
+        }
+        if (onManageBackup != null) {
+            DropdownMenuItem(
+                text = { Text("管理应用备份") },
+                onClick = {
+                    onDismiss()
+                    onManageBackup()
+                }
+            )
+        }
+        if (onOpenSettings != null) {
+            DropdownMenuItem(
+                text = { Text("设置") },
+                onClick = {
+                    onDismiss()
+                    onOpenSettings()
+                }
+            )
+        }
+        if (onOpenErrorLog != null) {
+            DropdownMenuItem(
+                text = { Text("错误日志") },
+                onClick = {
+                    onDismiss()
+                    onOpenErrorLog()
+                }
+            )
+        }
+    }
 ) {
-    val isSearching by viewModel.isSearching.collectAsState()
-    val searchQuery by viewModel.searchQuery.collectAsState()
+    val vmIsSearching by viewModel.isSearching.collectAsState()
+    val vmSearchQuery by viewModel.searchQuery.collectAsState()
 
-    // 搜索按钮擦除进度：1 = 完整显示，0 = 完全擦除（120ms）
-    val searchButtonErase by animateFloatAsState(
-        targetValue = if (isSearching) 0f else 1f,
-        animationSpec = tween(durationMillis = 120),
-        label = "searchButtonErase"
-    )
+    // 传了 searchOpen 就用外部的状态（例如应用信息页自己管搜索）
+    val isSearching = searchOpen ?: vmIsSearching
+    val searchQuery = searchQueryText ?: vmSearchQuery
+    val toggleSearch: () -> Unit = { onToggleSearch?.invoke() ?: viewModel.toggleSearch() }
+    val updateQuery: (String) -> Unit = { onSearchQueryChange?.invoke(it) ?: viewModel.updateSearchQuery(it) }
+    val isMoreMenuExpanded by viewModel.isMoreMenuExpanded.collectAsState()
 
-    // 更多按钮擦除进度：1 = 完整显示，0 = 完全擦除（120ms）
-    val moreButtonErase by animateFloatAsState(
-        targetValue = if (isSearching) 0f else 1f,
-        animationSpec = tween(durationMillis = 120),
-        label = "moreButtonErase"
-    )
+    // 用户菜单状态
+    val users by viewModel.users.collectAsState()
+    val isUserMenuExpanded by viewModel.isUserMenuExpanded.collectAsState()
+    val currentUserId by viewModel.currentUserId.collectAsState()
 
-    // 排序按钮的右侧 padding：不搜索时 48dp（排在更多按钮左侧），搜索时 0dp（移动到更多按钮的位置）
-    val sortButtonEndPadding by animateDpAsState(
-        targetValue = if (isSearching) 0.dp else 48.dp,
-        animationSpec = tween(durationMillis = 200),
-        label = "sortButtonEndPadding"
-    )
+    // 搜索框自动聚焦
+    val searchFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    LaunchedEffect(isSearching) {
+        if (isSearching) {
+            // 等 AnimatedVisibility 把输入框布局出来再请求焦点
+            delay(120)
+            runCatching { searchFocusRequester.requestFocus() }
+            keyboardController?.show()
+        } else {
+            keyboardController?.hide()
+        }
+    }
 
-    // 排序 + 更多按钮的容器宽度也随之收缩，让搜索栏能够扩展进来
-    val sortMoreContainerWidth by animateDpAsState(
-        targetValue = if (isSearching) 48.dp else 96.dp,
-        animationSpec = tween(durationMillis = 120),
-        label = "sortMoreContainerWidth"
-    )
+    // 每个图标独立使用擦除动画
+    val searchButtonErase by rememberEraseProgress(visible = !isSearching)
+    val moreButtonErase by rememberEraseProgress(visible = !isSearching)
+
+    // 中间按钮的位置动画 & 复合容器宽度动画
+    val middleButtonEndPadding by rememberMiddleButtonEndPadding(isSearching)
+    val actionGroupWidth by rememberActionGroupWidth(isSearching)
+
+    val isDark = isSystemInDarkTheme()
+    val menuColor = if (isDark) Color(0xFF2B2D31) else Color(0xFFF2F3F7)
 
     TopAppBar(
-        colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = pageBackground
-        ),
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = pageBackground),
+        navigationIcon = {
+            if (navigationIcon != null) navigationIcon()
+        },
         title = {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // 固定高度 64dp，保证搜索框进出时标题不跳动
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .height(52.dp)
+                        .height(64.dp)
                 ) {
-                    // 标题：始终在布局中，alpha 瞬间切换，永不跳跃
                     Text(
-                        text = appName,
+                        text = title,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.titleLarge,
+                        style = titleStyle,
                         modifier = Modifier
                             .fillMaxWidth()
                             .align(Alignment.CenterStart)
                             .alpha(if (isSearching) 0f else 1f)
                     )
 
-                    // 搜索框：出现从左往右滑入，消失时文字先消失，然后整个搜索栏再滑出
                     this@Row.AnimatedVisibility(
                         visible = isSearching,
-                        enter = fadeIn(animationSpec = tween(200)) + slideInHorizontally(
-                            initialOffsetX = { -it / 3 },
-                            animationSpec = tween(200)
-                        ),
-                        exit = fadeOut(animationSpec = tween(200, delayMillis = 100)) +
-                                slideOutHorizontally(
-                                    targetOffsetX = { -it / 3 },
-                                    animationSpec = tween(200, delayMillis = 100)
-                                ),
-                        modifier = Modifier.height(52.dp)
+                        enter = searchBarEnterTransition(),
+                        exit = searchBarExitTransition(),
+                        modifier = Modifier
+                            .height(52.dp)
+                            .align(Alignment.CenterStart)
                     ) {
                         BasicTextField(
                             value = searchQuery,
-                            onValueChange = { viewModel.updateSearchQuery(it) },
+                            onValueChange = { updateQuery(it) },
                             singleLine = true,
                             textStyle = MaterialTheme.typography.bodyLarge.copy(
                                 color = MaterialTheme.colorScheme.onSurface
                             ),
                             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(searchFocusRequester),
                             decorationBox = { innerTextField ->
                                 Row(
                                     modifier = Modifier
@@ -159,7 +240,7 @@ fun AppTopBar(
                                     ) {
                                         if (searchQuery.isEmpty()) {
                                             Text(
-                                                text = "搜索应用名称或包名",
+                                                text = searchPlaceholder,
                                                 style = MaterialTheme.typography.bodyLarge,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
@@ -167,7 +248,7 @@ fun AppTopBar(
                                         innerTextField()
                                     }
                                     IconButton(
-                                        onClick = { viewModel.toggleSearch() },
+                                        onClick = { toggleSearch() },
                                         modifier = Modifier.size(40.dp)
                                     ) {
                                         Icon(
@@ -185,55 +266,100 @@ fun AppTopBar(
             }
         },
         actions = {
-            // 搜索按钮：原地擦除消失（120ms）
-            Box(
-                modifier = Modifier
-                    .width(48.dp * searchButtonErase)
-                    .clipToBounds()
-            ) {
+            // ===== 搜索按钮：使用独立擦除动画 =====
+            Box(modifier = Modifier.eraseToRight(searchButtonErase)) {
                 IconButton(
-                    onClick = { viewModel.toggleSearch() },
-                    modifier = Modifier.requiredWidth(48.dp)
+                    onClick = { toggleSearch() },
+                    modifier = Modifier.requiredWidth(IconSlotWidth)
                 ) {
                     Icon(Icons.Default.Search, contentDescription = "搜索")
                 }
             }
 
-            // 排序 + 更多按钮的复合区域
-            Box(
-                modifier = Modifier
-                    .width(sortMoreContainerWidth)
-                    .height(48.dp)
-                    .clipToBounds()
-            ) {
-                // 更多按钮：对齐右端，宽度随 moreButtonErase 收缩（PPT 擦除），120ms
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .width(48.dp * moreButtonErase)
-                        .clipToBounds()
-                ) {
-                    IconButton(
-                        onClick = { viewModel.isMoreMenuExpanded.value = true },
-                        modifier = Modifier.requiredWidth(48.dp)
-                    ) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "更多")
-                    }
-                }
-
-                // 排序按钮：初始在左半区（padding = 48dp），搜索时移动到右半区（padding = 0）
+            // ===== 用户按钮（不参与擦除动画，始终显示） =====
+            Box {
                 IconButton(
-                    onClick = { viewModel.isSortMenuExpanded.value = true },
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .padding(end = sortButtonEndPadding)
+                    onClick = {
+                        viewModel.loadUsers()
+                        viewModel.isUserMenuExpanded.value = true
+                    }
                 ) {
-                    Icon(Icons.Default.Sort, contentDescription = "排序")
+                    Icon(Icons.Default.Person, contentDescription = "用户")
+                }
+                DropdownMenu(
+                    expanded = isUserMenuExpanded,
+                    onDismissRequest = { viewModel.isUserMenuExpanded.value = false },
+                    shape = RoundedCornerShape(16.dp),
+                    containerColor = menuColor
+                ) {
+                    if (users.isEmpty()) {
+                        DropdownMenuItem(
+                            text = { Text("暂无用户") },
+                            onClick = { }
+                        )
+                    } else {
+                        users.forEach { user ->
+                            DropdownMenuItem(
+                                text = { Text(user.name ?: "用户 ${user.id}") },
+                                onClick = {
+                                    viewModel.currentUserId.value = user.id
+                                    viewModel.isUserMenuExpanded.value = false
+                                    viewModel.loadApps()
+                                },
+                                leadingIcon = {
+                                    RadioButton(
+                                        selected = currentUserId == user.id,
+                                        onClick = null
+                                    )
+                                }
+                            )
+                        }
+                    }
                 }
             }
 
-            SortMenu(viewModel)
-            MoreMenu(viewModel)
+            // ===== 中间按钮 + 更多按钮复合区域 =====
+            Box(
+                modifier = Modifier
+                    .width(actionGroupWidth)
+                    .height(48.dp)
+                    .clipToBounds()
+            ) {
+                // 更多按钮：使用独立擦除动画
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .eraseToRight(moreButtonErase)
+                ) {
+                    IconButton(
+                        onClick = { viewModel.isMoreMenuExpanded.value = true },
+                        modifier = Modifier.requiredWidth(IconSlotWidth)
+                    ) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "更多")
+                    }
+                    DropdownMenu(
+                        expanded = isMoreMenuExpanded,
+                        onDismissRequest = { viewModel.isMoreMenuExpanded.value = false },
+                        shape = RoundedCornerShape(16.dp),
+                        containerColor = menuColor
+                    ) {
+                        moreMenuContent { viewModel.isMoreMenuExpanded.value = false }
+                    }
+                }
+
+                // 中间按钮：位置随搜索状态变化
+                IconButton(
+                    onClick = onMiddleClick,
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = middleButtonEndPadding)
+                ) {
+                    Icon(middleIcon, contentDescription = null)
+                }
+            }
+
+            if (showSortMenu) SortMenu(viewModel)
+
         }
     )
 }
@@ -256,13 +382,17 @@ fun SortMenu(viewModel: MainViewModel) {
     ) {
         DropdownMenuItem(
             text = { Text("应用名称") },
-            onClick = { viewModel.sortType.value = SortType.NAME; viewModel.applyFiltersAndSort() },
+            onClick = {
+                viewModel.sortType.value = SortType.NAME
+                viewModel.applyFiltersAndSort()  // 只本地重排，不请求
+            },
             leadingIcon = { RadioButton(selected = sortType == SortType.NAME, onClick = null) }
         )
         DropdownMenuItem(
             text = { Text("安装时间") },
             onClick = {
-                viewModel.sortType.value = SortType.INSTALL_TIME; viewModel.applyFiltersAndSort()
+                viewModel.sortType.value = SortType.INSTALL_TIME
+                viewModel.applyFiltersAndSort()
             },
             leadingIcon = {
                 RadioButton(selected = sortType == SortType.INSTALL_TIME, onClick = null)
@@ -271,10 +401,22 @@ fun SortMenu(viewModel: MainViewModel) {
         DropdownMenuItem(
             text = { Text("更新时间") },
             onClick = {
-                viewModel.sortType.value = SortType.UPDATE_TIME; viewModel.applyFiltersAndSort()
+                viewModel.sortType.value = SortType.UPDATE_TIME
+                viewModel.applyFiltersAndSort()
             },
             leadingIcon = {
                 RadioButton(selected = sortType == SortType.UPDATE_TIME, onClick = null)
+            }
+        )
+
+        DropdownMenuItem(
+            text = { Text("备份时间") },
+            onClick = {
+                viewModel.sortType.value = SortType.BACKUP_TIME
+                viewModel.applyFiltersAndSort()
+            },
+            leadingIcon = {
+                RadioButton(selected = sortType == SortType.BACKUP_TIME, onClick = null)
             }
         )
 
@@ -286,36 +428,19 @@ fun SortMenu(viewModel: MainViewModel) {
 
         DropdownMenuItem(
             text = { Text("倒序") },
-            onClick = { viewModel.isReverse.value = !isReverse; viewModel.applyFiltersAndSort() },
+            onClick = {
+                viewModel.isReverse.value = !isReverse
+                viewModel.applyFiltersAndSort()
+            },
             leadingIcon = { Checkbox(checked = isReverse, onCheckedChange = null) }
         )
         DropdownMenuItem(
             text = { Text("显示系统应用") },
-            onClick = { viewModel.showSystemApps.value = !showSystem; viewModel.loadApps() },
-            leadingIcon = { Checkbox(checked = showSystem, onCheckedChange = null) }
-        )
-    }
-}
-
-@Composable
-fun MoreMenu(viewModel: MainViewModel) {
-    val expanded by viewModel.isMoreMenuExpanded.collectAsState()
-
-    val isDark = isSystemInDarkTheme()
-    val menuColor = if (isDark) Color(0xFF2B2D31) else Color(0xFFF2F3F7)
-
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = { viewModel.isMoreMenuExpanded.value = false },
-        shape = RoundedCornerShape(16.dp),
-        containerColor = menuColor
-    ) {
-        DropdownMenuItem(
-            text = { Text("重新加载") },
             onClick = {
-                viewModel.isMoreMenuExpanded.value = false
-                viewModel.loadApps()
-            }
+                viewModel.showSystemApps.value = !showSystem
+                viewModel.applyFiltersAndSort()  // 只本地过滤，不请求
+            },
+            leadingIcon = { Checkbox(checked = showSystem, onCheckedChange = null) }
         )
     }
 }
