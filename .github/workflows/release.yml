@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "发布正式版"
+        description: "输入版本号(不带V)"
         required: true
         default: "1.0.0"
 
