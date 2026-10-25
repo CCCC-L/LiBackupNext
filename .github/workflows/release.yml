@@ -43,11 +43,21 @@ jobs:
 
       - name: 安装 Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # 这个 action 默认会装已经下线的 `tools` 包，会直接失败：
+          #   Warning: Failed to find package 'tools'
+          # 改成只装 platform-tools，其余组件下一步自己装
+          packages: "platform-tools"
+          accept-android-sdk-licenses: true
+
+      - name: 接受 SDK 许可
+        # setup-android 有时只接受一部分许可，剩下的会卡在交互式 (y/N) 提示上
+        run: yes | sdkmanager --licenses > /dev/null || true
 
       - name: 安装 NDK 与平台
         run: |
           set -e
-          sdkmanager --install "ndk;$NDK_VERSION" "platform-tools" > /dev/null
+          sdkmanager --install "ndk;$NDK_VERSION" > /dev/null
 
           # compileSdk 37 的平台包在不同 SDK 版本里叫 android-37 或 android-37.0，
           # 两个都试一遍，装不上就让 AGP 自己下载
