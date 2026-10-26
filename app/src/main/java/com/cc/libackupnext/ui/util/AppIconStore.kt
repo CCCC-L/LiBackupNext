@@ -103,6 +103,10 @@ object AppIconStore {
         }
     }
 
+    /** 是否已经确认「本机取不到」（加载跑完但失败）。 */
+    fun isMissing(packageName: String, userId: Int): Boolean =
+        missing.contains(keyOf(packageName, userId))
+
     /** 清空负缓存，重新加载列表时调用。 */
     fun invalidateMissing() {
         missing.clear()
@@ -229,6 +233,31 @@ fun rememberBackupIcon(packageName: String): ImageBitmap? {
     }
 
     return remember(bitmap) { bitmap?.asImageBitmap() }
+}
+
+/**
+ * 应用图标；本机本用户取不到时回落到仓库里存的图标。
+ */
+@Composable
+fun rememberAppIconWithBackup(packageName: String, userId: Int): ImageBitmap? {
+    var appIcon by remember(packageName, userId) {
+        mutableStateOf(AppIconStore.cached(packageName, userId))
+    }
+    // 已经跑完一次加载（成功或失败），失败的结果也记在 AppIconStore 里
+    var resolved by remember(packageName, userId) {
+        mutableStateOf(appIcon != null || AppIconStore.isMissing(packageName, userId))
+    }
+
+    LaunchedEffect(packageName, userId) {
+        if (!resolved) {
+            appIcon = AppIconStore.load(packageName, userId)
+            resolved = true
+        }
+    }
+
+    val icon = remember(appIcon) { appIcon?.asImageBitmap() }
+    val fallback = if (icon == null && resolved) rememberBackupIcon(packageName) else null
+    return icon ?: fallback
 }
 
 @Composable

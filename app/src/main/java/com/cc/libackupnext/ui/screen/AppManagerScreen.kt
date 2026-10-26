@@ -19,8 +19,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -70,35 +70,33 @@ import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.service.AppManagerService
 import com.cc.libackupnext.service.BackupProgress
 import com.cc.libackupnext.service.RusticService
-import com.cc.libackupnext.util.BackupNotifier
-import com.cc.libackupnext.util.ErrorLog
-import com.cc.libackupnext.util.KeepAwake
+import com.cc.libackupnext.ui.AppTopBar
+import com.cc.libackupnext.ui.MainViewModel
+import com.cc.libackupnext.ui.UserBadge
 import com.cc.libackupnext.ui.dialog.AppAction
+import com.cc.libackupnext.ui.dialog.AppOptionsMenu
+import com.cc.libackupnext.ui.dialog.BackupHelpDialog
+import com.cc.libackupnext.ui.dialog.BackupProgressDialog
+import com.cc.libackupnext.ui.dialog.ProgressSection
+import com.cc.libackupnext.ui.dialog.rememberDoubleClickGuard
+import com.cc.libackupnext.ui.isNonPrimaryUser
+import com.cc.libackupnext.ui.theme.LocalAppColors
 import com.cc.libackupnext.ui.util.AppIcon
 import com.cc.libackupnext.ui.util.AppIconStore
 import com.cc.libackupnext.ui.util.AppItemCard
 import com.cc.libackupnext.ui.util.AppListContainer
-import com.cc.libackupnext.ui.dialog.AppOptionsMenu
-import com.cc.libackupnext.ui.AppTopBar
-import com.cc.libackupnext.ui.dialog.BackupHelpDialog
-import com.cc.libackupnext.ui.dialog.BackupProgressDialog
 import com.cc.libackupnext.ui.util.FrozenSnowflake
-import com.cc.libackupnext.ui.MainViewModel
-import com.cc.libackupnext.ui.dialog.ProgressSection
-import com.cc.libackupnext.ui.UserBadge
 import com.cc.libackupnext.ui.util.formatDateTime
 import com.cc.libackupnext.ui.util.formatSize
-import com.cc.libackupnext.ui.isNonPrimaryUser
-import com.cc.libackupnext.ui.util.rememberAppIcon
-import com.cc.libackupnext.ui.util.rememberBackupIcon
-import com.cc.libackupnext.ui.dialog.rememberDoubleClickGuard
-import com.cc.libackupnext.ui.theme.LocalAppColors
+import com.cc.libackupnext.ui.util.rememberAppIconWithBackup
+import com.cc.libackupnext.util.BackupNotifier
+import com.cc.libackupnext.util.ErrorLog
+import com.cc.libackupnext.util.KeepAwake
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -604,13 +602,11 @@ fun AppBackupScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Box(modifier = Modifier.size(48.dp)) {
-                                // 应用没装（只在备份里）时用仓库里存的图标，和列表保持一致
-                                val appIcon = rememberAppIcon(
-                                    displayApp.packageName,
-                                    displayApp.userId
-                                )
                                 AppIcon(
-                                    icon = appIcon ?: rememberBackupIcon(displayApp.packageName),
+                                    icon = rememberAppIconWithBackup(
+                                        displayApp.packageName,
+                                        displayApp.userId
+                                    ),
                                     name = displayApp.name,
                                     modifier = Modifier.fillMaxSize(),
                                     shape = RoundedCornerShape(12.dp)

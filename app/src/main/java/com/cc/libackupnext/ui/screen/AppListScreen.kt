@@ -33,7 +33,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import com.cc.libackupnext.util.ErrorLog
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -48,16 +47,15 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.cc.libackupnext.entity.AppInfo
-import com.cc.libackupnext.ui.util.AppItemCard
-import com.cc.libackupnext.ui.util.formatShortDateTime
-import com.cc.libackupnext.ui.util.AppListContainer
 import com.cc.libackupnext.ui.AppTopBar
 import com.cc.libackupnext.ui.MainViewModel
 import com.cc.libackupnext.ui.SortType
 import com.cc.libackupnext.ui.UserBadge
 import com.cc.libackupnext.ui.isNonPrimaryUser
-import com.cc.libackupnext.ui.util.rememberAppIcon
-import com.cc.libackupnext.ui.util.rememberBackupIcon
+import com.cc.libackupnext.ui.util.AppItemCard
+import com.cc.libackupnext.ui.util.AppListContainer
+import com.cc.libackupnext.ui.util.formatShortDateTime
+import com.cc.libackupnext.ui.util.rememberAppIconWithBackup
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -349,11 +347,8 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                                 }
 
                             AppItemCard(
-                                icon = if (app.onlyInBackup) {
-                                    rememberBackupIcon(app.packageName)
-                                } else {
-                                    rememberAppIcon(app.packageName, app.userId)
-                                },
+                                // 本机取不到图标（其他用户的应用 / 只在备份里）就回落到仓库图标
+                                icon = rememberAppIconWithBackup(app.packageName, app.userId),
                                 iconPlaceholder = app.name,
                                 frozen = app.isFrozen,
                                 dimmed = app.onlyInBackup,
