@@ -783,7 +783,6 @@ object RusticService {
                 put("password", options.getString("repoPassword"))
                 put("items", items)
                 put("excludes", JSONArray(BACKUP_EXCLUDES))
-                put("delete_ids", options.optJSONArray("deleteIds") ?: JSONArray())
                 options.optString("batch").takeIf { it.isNotBlank() }?.let { put("batch", it) }
             }.toString()
         }
