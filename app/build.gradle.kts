@@ -38,7 +38,7 @@ android {
 
     defaultConfig {
         applicationId = "com.cc.libackupnext"
-        minSdk = 35
+        minSdk = 30
         targetSdk = 37
         // CI 用 -PversionName / -PversionCode 覆盖；本地不传就是 1 / 1.0
         versionCode = providers.gradleProperty("versionCode").orNull?.toIntOrNull() ?: 1
@@ -189,7 +189,7 @@ val buildRust = tasks.register<Exec>("buildRust") {
                 add(it)
             }
             add("-P")
-            add("35")
+            add("30")
             add("-o")
             add(jniLibsDir.asFile.absolutePath)
             add("build")
