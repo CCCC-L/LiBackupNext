@@ -13,6 +13,8 @@ data class AppColors(
 
     val pageBackground: Color,
     val cardBackground: Color,
+    /** 批量页多选时，被选中的那一行的底色。 */
+    val rowSelectedBackground: Color,
     val rootCardGrantedBackground: Color,
     val rootCardGrantedTextColor: Color,
     val rootCardGrantedTextVariant: Color,
@@ -38,6 +40,7 @@ val LightAppColors = AppColors(
 
     pageBackground = Color(0xFFE8E8F0),
     cardBackground = Color(0xFFE0E2EC),
+    rowSelectedBackground = Color(0xFFD3E3FD),
     rootCardGrantedBackground = Color(0xFFA1CDFF),
     rootCardGrantedTextColor = Color(0xFF1A2A3A),
     rootCardGrantedTextVariant = Color(0xFF2C4055),
@@ -64,6 +67,7 @@ val DarkAppColors = AppColors(
 
     pageBackground = Color(0xFF121318),
     cardBackground = Color(0xFF1E1F24),
+    rowSelectedBackground = Color(0xFF24344D),
     rootCardGrantedBackground = Color(0xFF255581),
     rootCardGrantedTextColor = Color(0xFFDCE8F5),
     rootCardGrantedTextVariant = Color(0xFFB8CADD),

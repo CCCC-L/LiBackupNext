@@ -2,13 +2,6 @@ package com.cc.libackupnext.ui.screen
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -52,6 +45,7 @@ import com.cc.libackupnext.ui.MainViewModel
 import com.cc.libackupnext.ui.SortType
 import com.cc.libackupnext.ui.UserBadge
 import com.cc.libackupnext.ui.isNonPrimaryUser
+import com.cc.libackupnext.ui.theme.pageTransitionSpec
 import com.cc.libackupnext.ui.util.AppItemCard
 import com.cc.libackupnext.ui.util.AppListContainer
 import com.cc.libackupnext.ui.util.formatShortDateTime
@@ -178,28 +172,8 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
 
     AnimatedContent(
         targetState = route,
-        transitionSpec = {
-            // 层级越深越靠右：进入时从右滑入，返回时反向
-            if (targetState.ordinal > initialState.ordinal) {
-                (slideInHorizontally(
-                    initialOffsetX = { it },
-                    animationSpec = tween(300)
-                ) + fadeIn(animationSpec = tween(300))) togetherWith
-                        (slideOutHorizontally(
-                            targetOffsetX = { -it / 3 },
-                            animationSpec = tween(300)
-                        ) + fadeOut(animationSpec = tween(300)))
-            } else {
-                (slideInHorizontally(
-                    initialOffsetX = { -it / 3 },
-                    animationSpec = tween(300)
-                ) + fadeIn(animationSpec = tween(300))) togetherWith
-                        (slideOutHorizontally(
-                            targetOffsetX = { it },
-                            animationSpec = tween(300)
-                        ) + fadeOut(animationSpec = tween(300)))
-            }.using(SizeTransform(clip = false))
-        },
+        // 层级越深越靠右：进入时从右滑入，返回时反向
+        transitionSpec = pageTransitionSpec { it.ordinal },
         label = "PageTransition"
     ) { target ->
         when (target) {

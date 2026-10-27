@@ -3,6 +3,9 @@ package com.cc.libackupnext.ui.screen
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -52,6 +56,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.cc.libackupnext.data.AppBackupSummary
@@ -74,7 +79,11 @@ import com.cc.libackupnext.ui.dialog.ProgressSection
 import com.cc.libackupnext.ui.util.formatShortDateTime
 import com.cc.libackupnext.ui.util.rememberAppIcon
 import com.cc.libackupnext.ui.dialog.rememberDoubleClickGuard
+import com.cc.libackupnext.ui.theme.LocalAppColors
+import com.cc.libackupnext.ui.theme.rememberRowSelectionColor
+import com.cc.libackupnext.ui.theme.rememberRowSwipeState
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import kotlin.collections.plus
 import java.util.UUID
 
@@ -183,6 +192,22 @@ private fun BackupBatchScreen(
      */
     var deletedKinds by remember { mutableStateOf<Map<String, Set<String>>>(emptyMap()) }
 
+    // ==================== 多选模式 ====================
+    /** 多选模式：右滑动某一行进入。 */
+    var multiSelect by remember { mutableStateOf(false) }
+
+    /** 多选里的行（包名）。 */
+    var multiSelected by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    /** 多选锚点：最开始滑动的那一行。 */
+    var anchorPackage by remember { mutableStateOf<String?>(null) }
+
+    fun exitMultiSelect() {
+        multiSelect = false
+        multiSelected = emptySet()
+        anchorPackage = null
+    }
+
     // 管理页只显示仓库里有备份的应用
     val apps = remember(displayApps, overview, mode) {
         val installed = displayApps.filterNot { mode == BackupBatchMode.CREATE && it.onlyInBackup }
@@ -288,27 +313,75 @@ private fun BackupBatchScreen(
         )
     }
 
-    /** 列头勾选：整列全选 / 全不选（只影响确实有这一列的应用）。 */
-    fun toggleColumn(kind: String) {
-        val targets = apps.filter { kind in availableKindsOf(it.packageName) }
-        val allChecked = targets.isNotEmpty() && targets.all { kind in kindsOf(it.packageName) }
-        targets.forEach { app ->
+    /** 多选模式下点一行：在 / 不在多选里切换。右边的三个勾选框保持原样。 */
+    fun toggleInMultiSelect(app: AppInfo) {
+        val packageName = app.packageName
+        multiSelected = if (packageName in multiSelected) {
+            multiSelected - packageName
+        } else {
+            multiSelected + packageName
+        }
+    }
+
+    /**
+     * 右滑某一行（只认右滑）。
+     */
+    fun onRowSwiped(app: AppInfo) {
+        val anchorIndex = visibleApps.indexOfFirst { it.packageName == anchorPackage }
+        val index = visibleApps.indexOfFirst { it.packageName == app.packageName }
+
+        // 还没进多选，或者锚点已经不在当前列表里（换了搜索词等）：这一行当新锚点
+        if (!multiSelect || anchorIndex < 0 || index < 0) {
+            multiSelect = true
+            multiSelected = multiSelected + app.packageName
+            anchorPackage = app.packageName
+            return
+        }
+
+        // 区间内（含两端）全部加入多选
+        var next = multiSelected
+        for (i in minOf(anchorIndex, index)..maxOf(anchorIndex, index)) {
+            next = next + visibleApps[i].packageName
+        }
+        multiSelected = next
+    }
+
+    /** 列头勾选：整列全选 / 全不选（只影响 [targets] 里确实有这一列的应用）。 */
+    fun toggleColumn(targets: List<AppInfo>, kind: String) {
+        val rows = targets.filter { kind in availableKindsOf(it.packageName) }
+        val allChecked = rows.isNotEmpty() && rows.all { kind in kindsOf(it.packageName) }
+        rows.forEach { app ->
             val current = kindsOf(app.packageName)
             setKinds(app.packageName, if (allChecked) current - kind else current + kind)
         }
     }
 
-    fun toggleAll() {
-        // 搜索时只作用于当前可见的应用
-        val allChecked = visibleApps.isNotEmpty() &&
-                visibleApps.all { kindsOf(it.packageName).containsAll(availableKindsOf(it.packageName)) }
-        visibleApps.forEach { app ->
+    /** 整行勾选：[targets] 全勾 / 全不勾。 */
+    fun toggleAll(targets: List<AppInfo>) {
+        val allChecked = targets.isNotEmpty() &&
+                targets.all { kindsOf(it.packageName).containsAll(availableKindsOf(it.packageName)) }
+        targets.forEach { app ->
             setKinds(app.packageName, if (allChecked) emptySet() else availableKindsOf(app.packageName))
         }
     }
 
-    /** 当前勾选的应用 + 类型。 */
+    /** 多选：当前可见的应用全选；已经是全选就取消全选。 */
+    fun selectAllVisible() {
+        val visible = visibleApps.mapTo(HashSet()) { it.packageName }
+        val allSelected = visible.isNotEmpty() && multiSelected.containsAll(visible)
+        multiSelected = if (allSelected) multiSelected - visible else multiSelected + visible
+    }
+
+    /** 多选：当前可见的应用取反。 */
+    fun invertSelection() {
+        val visible = visibleApps.mapTo(HashSet()) { it.packageName }
+        val inverted = visible.filterNot { it in multiSelected }
+        multiSelected = (multiSelected - visible) + inverted
+    }
+
+    /** 这次操作的目标应用 + 类型：多选模式下只取选中的应用。 */
     fun targets(): List<Pair<AppInfo, Set<String>>> = apps.mapNotNull { app ->
+        if (multiSelect && app.packageName !in multiSelected) return@mapNotNull null
         val kinds = kindsOf(app.packageName)
         if (kinds.isEmpty()) null else app to kinds
     }
@@ -513,6 +586,9 @@ private fun BackupBatchScreen(
     val searchBarBackground =
         if (isDark) MaterialTheme.colorScheme.surfaceContainerHighest else Color(0xFFE2E7F1)
 
+    // 多选模式优先响应返回：先退出多选，再退页面
+    BackHandler(enabled = multiSelect && !running) { exitMultiSelect() }
+
     // 备份进行中不允许离开，避免请求被打断
     BackHandler(enabled = running) { }
 
@@ -527,6 +603,21 @@ private fun BackupBatchScreen(
         apps.count { kind in kindsOf(it.packageName) }
     }
     val selectedApps = selected.size
+
+    // 底部按钮能不能点：多选模式下只看选中的应用里有没有可操作的
+    val actionableCount = if (multiSelect) {
+        apps.count { it.packageName in multiSelected && kindsOf(it.packageName).isNotEmpty() }
+    } else {
+        selectedApps
+    }
+
+    // 顶部四个列头勾选框的作用范围：多选模式下只作用于多选里的行，否则是当前可见的全部行
+    val controlledApps = if (multiSelect) {
+        visibleApps.filter { it.packageName in multiSelected }
+    } else {
+        visibleApps
+    }
+
 
     Scaffold(
         containerColor = pageBackground,
@@ -543,11 +634,22 @@ private fun BackupBatchScreen(
                 onSearchQueryChange = { searchQuery = it },
                 pageBackground = pageBackground,
                 searchBarBackground = searchBarBackground,
+                // 多选时顶栏变成「已选择 N 项 + 全选 / 反选」
+                selectionMode = multiSelect,
+                selectionCount = multiSelected.size,
+                allSelected = visibleApps.isNotEmpty() &&
+                        visibleApps.all { it.packageName in multiSelected },
+                onSelectAll = { selectAllVisible() },
+                onInvert = { invertSelection() },
                 navigationIcon = {
-                    IconButton(onClick = onBack, enabled = !running) {
+                    // 多选中点返回先退出多选，再退页面
+                    IconButton(
+                        onClick = { if (multiSelect) exitMultiSelect() else onBack() },
+                        enabled = !running
+                    ) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "返回"
+                            contentDescription = if (multiSelect) "退出多选" else "返回"
                         )
                     }
                 },
@@ -602,16 +704,17 @@ private fun BackupBatchScreen(
                         selectedApps = selectedApps,
                         counts = selectedCounts,
                         currentUser = currentUserName,
-                        allChecked = visibleApps.isNotEmpty() &&
-                                visibleApps.all {
+                        enabled = !multiSelect || controlledApps.isNotEmpty(),
+                        allChecked = controlledApps.isNotEmpty() &&
+                                controlledApps.all {
                                     kindsOf(it.packageName).containsAll(availableKindsOf(it.packageName))
                                 },
                         columnChecked = { kind ->
-                            val targets = visibleApps.filter { kind in availableKindsOf(it.packageName) }
-                            targets.isNotEmpty() && targets.all { kind in kindsOf(it.packageName) }
+                            val rows = controlledApps.filter { kind in availableKindsOf(it.packageName) }
+                            rows.isNotEmpty() && rows.all { kind in kindsOf(it.packageName) }
                         },
-                        onToggleAll = { toggleAll() },
-                        onToggleColumn = { toggleColumn(it) }
+                        onToggleAll = { toggleAll(controlledApps) },
+                        onToggleColumn = { kind -> toggleColumn(controlledApps, kind) }
                     )
                 },
                 key = { _, app -> app.packageName }
@@ -624,9 +727,14 @@ private fun BackupBatchScreen(
                     kinds = kindsOf(app.packageName),
                     availableKinds = availableKindsOf(app.packageName),
                     shape = shape,
+                    multiSelect = multiSelect,
+                    selected = app.packageName in multiSelected,
+                    swipeEnabled = !running,
                     onToggleKind = { toggleKind(app, it) },
-                    onToggleApp = { toggleApp(app) },
-                    onOpenDetail = { onOpenAppDetail(app) }
+                    onToggleApp = { if (multiSelect) toggleInMultiSelect(app) else toggleApp(app) },
+                    // 多选模式下这一列不再可点，点击交给整行（只切换选中）
+                    onOpenDetail = { onOpenAppDetail(app) },
+                    onSwipeSelect = { onRowSwiped(app) }
                 )
             }
 
@@ -635,7 +743,7 @@ private fun BackupBatchScreen(
                     onClick = {
                         if (doubleClickGuard.consume("create")) startCreate()
                     },
-                    enabled = selectedApps > 0 && !running,
+                    enabled = actionableCount > 0 && !running,
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -655,7 +763,7 @@ private fun BackupBatchScreen(
                         onClick = {
                             if (doubleClickGuard.consume("delete")) startDelete()
                         },
-                        enabled = selectedApps > 0 && !running,
+                        enabled = actionableCount > 0 && !running,
                         shape = RoundedCornerShape(14.dp),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                         modifier = Modifier
@@ -672,7 +780,7 @@ private fun BackupBatchScreen(
                         onClick = {
                             if (doubleClickGuard.consume("overwrite")) startOverwrite()
                         },
-                        enabled = selectedApps > 0 && !running,
+                        enabled = actionableCount > 0 && !running,
                         shape = RoundedCornerShape(14.dp),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                         modifier = Modifier
@@ -685,7 +793,7 @@ private fun BackupBatchScreen(
                         onClick = {
                             if (doubleClickGuard.consume("restore")) startRestore()
                         },
-                        enabled = selectedApps > 0 && !running,
+                        enabled = actionableCount > 0 && !running,
                         shape = RoundedCornerShape(14.dp),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                         modifier = Modifier
@@ -716,13 +824,15 @@ private fun BackupBatchScreen(
         BackupHelpDialog(
             extraLines = listOf(
                 "选项：点击图标反选整行",
+                "多选：右滑某个应用进入多选，再右滑另一个应用会选中两者之间的全部应用",
+                "多选模式下点应用只切换选中、不进详情，顶部的 all / apk / user / data、底部的按钮 也只作用于选中的应用",
             ),
             onDismiss = { showHelp = false }
         )
     }
 }
 
-/** 列表上方的统计 + 列头勾选框。 */
+/** 列表上方的统计 + 列头勾选框。多选模式下这四个勾选框只作用于已选中的行。 */
 @Composable
 private fun SelectionHeader(
     appCount: Int,
@@ -730,6 +840,8 @@ private fun SelectionHeader(
     selectedApps: Int,
     counts: Map<String, Int>,
     currentUser: String,
+    /** 多选里一个都没选时，这四个勾选框没有作用对象，置灰。 */
+    enabled: Boolean,
     allChecked: Boolean,
     columnChecked: (String) -> Boolean,
     onToggleAll: () -> Unit,
@@ -777,6 +889,7 @@ private fun SelectionHeader(
             Checkbox(
                 checked = allChecked,
                 onCheckedChange = { onToggleAll() },
+                enabled = enabled,
                 modifier = Modifier.size(KindCheckboxSize)
             )
             Text(
@@ -793,6 +906,7 @@ private fun SelectionHeader(
                 Checkbox(
                     checked = columnChecked(kind),
                     onCheckedChange = { onToggleColumn(kind) },
+                    enabled = enabled,
                     modifier = Modifier.size(KindCheckboxSize)
                 )
                 Text(
@@ -805,7 +919,7 @@ private fun SelectionHeader(
     }
 }
 
-/** 一行：图标 + 名称/版本 + 备份数/包名（+ 备份时间）+ 三个勾选框。 */
+/** 一行：图标 + 名称/版本 + 备份数/包名 + 三个勾选框。多选选中时整行变蓝底。 */
 @Composable
 private fun BackupSelectRow(
     app: AppInfo,
@@ -816,19 +930,57 @@ private fun BackupSelectRow(
     kinds: Set<String>,
     availableKinds: Set<String>,
     shape: Shape,
+    /** 多选模式：点击只切换选中、不显示水波纹。 */
+    multiSelect: Boolean,
+    /** 在多选集合里：整行蓝底。 */
+    selected: Boolean,
+    /** 备份进行中时不允许滑动改选中。 */
+    swipeEnabled: Boolean,
     onToggleKind: (String) -> Unit,
     onToggleApp: () -> Unit,
-    onOpenDetail: () -> Unit
+    onOpenDetail: () -> Unit,
+    onSwipeSelect: () -> Unit
 ) {
+    val appColors = LocalAppColors.current
+
+    // 右滑选中：跟手位移 + 松手弹回（动画参数在 theme/Animation.kt）
+    val swipe = rememberRowSwipeState(onSwipe = onSwipeSelect)
+
+    // 多选选中时整行蓝底
+    val rowColor by rememberRowSelectionColor(
+        selected = multiSelect && selected,
+        selectedColor = appColors.rowSelectedBackground,
+        normalColor = MaterialTheme.colorScheme.surface
+    )
+
+    // 多选里点击直接选中，不要水波纹
+    val rowClick = if (multiSelect) {
+        Modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+            onClick = onToggleApp
+        )
+    } else {
+        Modifier.clickable(onClick = onToggleApp)
+    }
+
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .offset { IntOffset(swipe.offsetPx.roundToInt(), 0) }
+            .draggable(
+                state = swipe.draggableState,
+                orientation = Orientation.Horizontal,
+                enabled = swipeEnabled,
+                onDragStopped = { swipe.release() }
+            ),
         shape = shape,
-        color = MaterialTheme.colorScheme.surface
+        color = rowColor
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onToggleApp)
+                .then(rowClick)
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -839,11 +991,11 @@ private fun BackupSelectRow(
             )
             Spacer(modifier = Modifier.width(12.dp))
 
-            // 点这一块进应用详情页；点行的其他地方是勾选
+            // 点这一块进应用详情页；点行的其他地方是勾选。多选模式下整行都只切换选中
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .clickable(onClick = onOpenDetail)
+                    .then(if (multiSelect) Modifier else Modifier.clickable(onClick = onOpenDetail))
             ) {
                 // 应用名加粗、版本号正常字重且更小；显示不下就省略
                 Text(
@@ -916,4 +1068,3 @@ private fun BackupSelectRow(
         }
     }
 }
-

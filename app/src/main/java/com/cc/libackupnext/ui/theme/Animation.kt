@@ -1,19 +1,35 @@
 package com.cc.libackupnext.ui.theme
 
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.gestures.DraggableState
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableFloatState
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
@@ -22,9 +38,23 @@ private const val ERASE_DURATION_MS = 120L
 private const val POSITION_DURATION_MS = 200L
 private const val SEARCH_BAR_DURATION_MS = 200
 private const val SEARCH_BAR_EXIT_DELAY_MS = 100
+private const val PAGE_TRANSITION_DURATION_MS = 300
+private const val ROW_COLOR_DURATION_MS = 180
 
 /** 每个图标槽位的宽度 */
 val IconSlotWidth: Dp = 48.dp
+
+/** 右滑超过这个距离才算一次选中。 */
+val SwipeTrigger: Dp = 24.dp
+
+/** 右滑时卡片最多跟手多远。 */
+val SwipeMaxOffset: Dp = 56.dp
+
+/** 松手回弹的弹簧参数。 */
+private val SwipeSpring = spring<Float>(
+    dampingRatio = 0.7f,
+    stiffness = Spring.StiffnessMediumLow
+)
 
 // ================================================================
 //  图标擦除动画（搜索 / 更多 / 将来任何需要"擦除消失"的图标都可用）
@@ -103,3 +133,107 @@ fun searchBarExitTransition(): ExitTransition =
         targetOffsetX = { -it / 3 },
         animationSpec = tween(SEARCH_BAR_DURATION_MS, delayMillis = SEARCH_BAR_EXIT_DELAY_MS)
     )
+// ================================================================
+//  右滑选中（批量页）
+// ================================================================
+
+/**
+ * 右滑选中的状态：卡片跟手右移、松手弹回。
+ *
+ * 只认右滑（位移下限卡在 0）
+ */
+@Stable
+class RowSwipeState internal constructor(
+    private val triggerPx: Float,
+    private val maxPx: Float,
+    private val offset: MutableFloatState,
+    private val onSwipe: () -> Unit
+) {
+    val offsetPx: Float get() = offset.floatValue
+
+    val draggableState: DraggableState = DraggableState { delta ->
+        offset.floatValue = (offset.floatValue + delta).coerceIn(0f, maxPx)
+    }
+
+    /** 松手：越过阈值就回调一次，然后弹回原位。 */
+    suspend fun release() {
+        if (offset.floatValue >= triggerPx) onSwipe()
+        animate(
+            initialValue = offset.floatValue,
+            targetValue = 0f,
+            animationSpec = SwipeSpring
+        ) { value, _ -> offset.floatValue = value }
+    }
+}
+
+/** 记住一份右滑选中状态；[onSwipe] 每次松手越过阈值时调用。 */
+@Composable
+fun rememberRowSwipeState(
+    onSwipe: () -> Unit,
+    trigger: Dp = SwipeTrigger,
+    maxOffset: Dp = SwipeMaxOffset
+): RowSwipeState {
+    val density = LocalDensity.current
+    val triggerPx = with(density) { trigger.toPx() }
+    val maxPx = with(density) { maxOffset.toPx() }
+    val offset = remember { mutableFloatStateOf(0f) }
+    val latestOnSwipe = rememberUpdatedState(onSwipe)
+
+    return remember(triggerPx, maxPx) {
+        RowSwipeState(
+            triggerPx = triggerPx,
+            maxPx = maxPx,
+            offset = offset,
+            onSwipe = { latestOnSwipe.value() }
+        )
+    }
+}
+
+// ================================================================
+//  多选选中行的底色
+// ================================================================
+
+/** 选中时整行过渡到 [selectedColor]，取消选中回到 [normalColor]。 */
+@Composable
+fun rememberRowSelectionColor(
+    selected: Boolean,
+    selectedColor: Color,
+    normalColor: Color
+): State<Color> = animateColorAsState(
+    targetValue = if (selected) selectedColor else normalColor,
+    animationSpec = tween(ROW_COLOR_DURATION_MS),
+    label = "rowSelectionColor"
+)
+
+// ================================================================
+//  页面层级切换（列表 ↔ 详情 ↔ 批量页 …）
+// ================================================================
+
+/**
+ * 层级越深越靠右：进入时从右滑入，返回时反向。
+ *
+ * @param depthOf 给每个页面一个层级值，越大表示越靠里（例如枚举的 ordinal）。
+ */
+fun <S> pageTransitionSpec(
+    depthOf: (S) -> Int
+): AnimatedContentTransitionScope<S>.() -> ContentTransform = {
+    if (depthOf(targetState) > depthOf(initialState)) {
+        (slideInHorizontally(
+            initialOffsetX = { it },
+            animationSpec = tween(PAGE_TRANSITION_DURATION_MS)
+        ) + fadeIn(animationSpec = tween(PAGE_TRANSITION_DURATION_MS))) togetherWith
+                (slideOutHorizontally(
+                    targetOffsetX = { -it / 3 },
+                    animationSpec = tween(PAGE_TRANSITION_DURATION_MS)
+                ) + fadeOut(animationSpec = tween(PAGE_TRANSITION_DURATION_MS)))
+    } else {
+        (slideInHorizontally(
+            initialOffsetX = { -it / 3 },
+            animationSpec = tween(PAGE_TRANSITION_DURATION_MS)
+        ) + fadeIn(animationSpec = tween(PAGE_TRANSITION_DURATION_MS))) togetherWith
+                (slideOutHorizontally(
+                    targetOffsetX = { it },
+                    animationSpec = tween(PAGE_TRANSITION_DURATION_MS)
+                ) + fadeOut(animationSpec = tween(PAGE_TRANSITION_DURATION_MS)))
+    }.using(SizeTransform(clip = false))
+}

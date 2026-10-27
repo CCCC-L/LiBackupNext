@@ -15,10 +15,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Deselect
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -79,6 +82,14 @@ fun AppTopBar(
     onSearchQueryChange: ((String) -> Unit)? = null,
     /** 标题字号，子页面可以传小一点的样式。 */
     titleStyle: TextStyle = MaterialTheme.typography.titleLarge,
+    /** 多选模式：标题换成「已选择 N 项」，右侧按钮换成全选 / 反选。 */
+    selectionMode: Boolean = false,
+    /** 多选里选了多少项。 */
+    selectionCount: Int = 0,
+    /** 当前可见的应用是不是已经全选。 */
+    allSelected: Boolean = false,
+    onSelectAll: (() -> Unit)? = null,
+    onInvert: (() -> Unit)? = null,
     /** 非空时在「更多」菜单里多一项「新建应用备份」。 */
     onCreateBackup: (() -> Unit)? = null,
     /** 非空时在「更多」菜单里多一项「管理应用备份」。 */
@@ -137,7 +148,8 @@ fun AppTopBar(
     val vmSearchQuery by viewModel.searchQuery.collectAsState()
 
     // 传了 searchOpen 就用外部的状态（例如应用信息页自己管搜索）
-    val isSearching = searchOpen ?: vmIsSearching
+    // 多选模式下不显示搜索框（标题要让位给「已选择 N 项」）
+    val isSearching = (searchOpen ?: vmIsSearching) && !selectionMode
     val searchQuery = searchQueryText ?: vmSearchQuery
     val toggleSearch: () -> Unit = { onToggleSearch?.invoke() ?: viewModel.toggleSearch() }
     val updateQuery: (String) -> Unit = { onSearchQueryChange?.invoke(it) ?: viewModel.updateSearchQuery(it) }
@@ -190,7 +202,7 @@ fun AppTopBar(
                         .height(64.dp)
                 ) {
                     Text(
-                        text = title,
+                        text = if (selectionMode) "已选择 $selectionCount 项" else title,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -266,6 +278,22 @@ fun AppTopBar(
             }
         },
         actions = {
+            if (selectionMode) {
+                // 全选 / 取消全选
+                IconButton(onClick = { onSelectAll?.invoke() }) {
+                    Icon(
+                        imageVector = if (allSelected) Icons.Default.Deselect else Icons.Default.SelectAll,
+                        contentDescription = if (allSelected) "取消全选" else "全选"
+                    )
+                }
+                // 反选
+                IconButton(onClick = { onInvert?.invoke() }) {
+                    Icon(
+                        imageVector = Icons.Default.SwapVert,
+                        contentDescription = "反选"
+                    )
+                }
+            } else {
             // ===== 搜索按钮：使用独立擦除动画 =====
             Box(modifier = Modifier.eraseToRight(searchButtonErase)) {
                 IconButton(
@@ -359,10 +387,11 @@ fun AppTopBar(
             }
 
             if (showSortMenu) SortMenu(viewModel)
-
+            }
         }
     )
 }
+
 
 @Composable
 fun SortMenu(viewModel: MainViewModel) {
