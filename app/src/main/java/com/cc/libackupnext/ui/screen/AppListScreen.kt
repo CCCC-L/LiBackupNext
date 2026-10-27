@@ -98,14 +98,12 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
         selectedApp = found ?: selectedApp?.takeIf { it.packageName == pkg }?.copy(userId = currentUserId)
     }
 
-    // 进程被回收 / root 服务被杀后回到前台，列表可能是空的，这里自动补一次
+    // 每次回到前台都静默重读一次应用列表：这期间可能装了新应用、卸了旧应用。
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                if (viewModel.allApps.value.isEmpty() || viewModel.loadError.value != null) {
-                    viewModel.loadApps(scrollToTop = false)
-                }
+                viewModel.refreshOnForeground()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)

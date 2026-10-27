@@ -2,6 +2,7 @@ package com.cc.libackupnext.ui
 
 import android.app.Application
 import android.content.pm.UserInfo
+import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -52,6 +53,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private var loadJob: Job? = null
     private var sortJob: Job? = null
+
+    /** 上次列表加载完成的时间（elapsedRealtime），前台刷新用来判断是否刚拉过。 */
+    private var lastLoadAt = 0L
 
     // ==================== UI 状态 ====================
     var isSearching = MutableStateFlow(false)
@@ -124,14 +128,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val selectedEntries = androidx.compose.runtime.mutableStateMapOf<String, com.cc.libackupnext.data.BackupEntry>()
 
     // ==================== 应用 ====================
-    fun loadApps(scrollToTop: Boolean = true, fromPullRefresh: Boolean = false) {
+    /**
+     * 读取应用列表。
+     *
+     * @param scrollToTop 读完后回到列表顶部
+     * @param fromPullRefresh 下拉刷新：只用顶部指示器，不盖全屏 loading
+     * @param silent 静默刷新：不碰 loading / 错误状态，数据没变时连列表都不重组（回前台用）
+     */
+    fun loadApps(
+        scrollToTop: Boolean = true,
+        fromPullRefresh: Boolean = false,
+        silent: Boolean = false
+    ) {
         val userId = currentUserId.value
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
-            _loadError.value = null
-            // 下拉刷新只用顶部指示器，不要盖住列表的全屏 loading
-            _isLoading.value = !fromPullRefresh
-            _isRefreshing.value = fromPullRefresh
+            if (!silent) {
+                _loadError.value = null
+                // 下拉刷新只用顶部指示器，不要盖住列表的全屏 loading
+                _isLoading.value = !fromPullRefresh
+                _isRefreshing.value = fromPullRefresh
+            }
             // 下拉刷新是用户主动要最新数据：清掉图标失败记录（快照本来就是实时读的）
             if (fromPullRefresh) {
                 AppIconStore.invalidateMissing()
@@ -147,21 +164,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     RusticService.repoOverview()
                 }
 
-                // 先渲染已安装应用，备份里独有的应用到了再追加
+                // 先渲染已安装应用，备份里独有的应用到了再追加。
+                // 静默刷新不走这一步：分两次写列表会闪，等最终结果一次写进去。
                 val installed = installedDeferred.await()
-                Log.i(TAG, "loadApps: userId=$userId, count=${installed.size}")
+                Log.i(TAG, "loadApps: userId=$userId, count=${installed.size}, silent=$silent")
                 if (userId != currentUserId.value) return@launch
 
-                _allApps.value = installed
-                _displayApps.value = withContext(Dispatchers.Default) { computeDisplay(installed) }
-                _loadedUserId.value = userId
-                if (scrollToTop) requestScrollToTop()
+                if (!silent) {
+                    _allApps.value = installed
+                    _displayApps.value = withContext(Dispatchers.Default) { computeDisplay(installed) }
+                    _loadedUserId.value = userId
+                    if (scrollToTop) requestScrollToTop()
+                }
 
                 val overview = overviewDeferred.await()
                 val installedNames = installed.mapTo(HashSet()) { it.packageName }
                 val merged = installed + RusticService.backupApps(userId, overview)
                     .filter { it.packageName !in installedNames }
                 if (userId != currentUserId.value) return@launch
+
+                if (silent) {
+                    _loadedUserId.value = userId
+                    // 只有当列表不一样的情况下才更新
+                    if (merged != _allApps.value) {
+                        _allApps.value = merged
+                        _displayApps.value = withContext(Dispatchers.Default) { computeDisplay(merged) }
+                    }
+                    // 列表里要显示「x个备份」，顺便给「备份时间」排序准备数据
+                    loadBackupSummaries(merged, overview)
+                    return@launch
+                }
 
                 _allApps.value = merged
                 _displayApps.value = withContext(Dispatchers.Default) { computeDisplay(merged) }
@@ -173,12 +205,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 throw t
             } catch (t: Throwable) {
                 ErrorLog.e(TAG, "loadApps failed", t)
-                if (isActive) _loadError.value = t.message ?: "读取应用列表失败"
+                // 静默刷新失败就保持原样，不弹错误页
+                if (isActive && !silent) _loadError.value = t.message ?: "读取应用列表失败"
             } finally {
                 // 被新的加载任务取代时不要覆盖它刚设置的 loading 状态
                 if (isActive) {
-                    _isLoading.value = false
-                    _isRefreshing.value = false
+                    lastLoadAt = SystemClock.elapsedRealtime()
+                    if (!silent) {
+                        _isLoading.value = false
+                        _isRefreshing.value = false
+                    }
                 }
             }
         }
@@ -186,6 +222,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 下拉刷新：保留滚动位置，只用顶部指示器。 */
     fun refresh() = loadApps(scrollToTop = false, fromPullRefresh = true)
+
+    /**
+     * 回到前台，静默刷新应用列表，获取这期间的新装 / 卸载。
+     */
+    fun refreshOnForeground() {
+        // 已经有一次加载在跑（冷启动那次），别重复发一轮 IPC
+        if (loadJob?.isActive == true) return
+
+        val needsLoad = _allApps.value.isEmpty() || _loadError.value != null
+        // 刚加载完的一小段时间内跳过：进主页面那一帧也会收到 ON_RESUME
+        if (!needsLoad &&
+            SystemClock.elapsedRealtime() - lastLoadAt < FOREGROUND_SKIP_INTERVAL_MS
+        ) {
+            return
+        }
+        loadApps(scrollToTop = false, silent = !needsLoad)
+    }
 
     // ==================== 备份概况 ====================
 
@@ -288,6 +341,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         private const val TAG = "MainViewModel"
+
+        /** 距上次加载不足这个时间就不再做前台刷新（进页面那一下的 ON_RESUME）。 */
+        private const val FOREGROUND_SKIP_INTERVAL_MS = 1_000L
 
         private fun loadSortType(): SortType =
             runCatching { SortType.valueOf(AppPrefs.sortType) }.getOrDefault(SortType.NAME)
