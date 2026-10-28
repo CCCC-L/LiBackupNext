@@ -155,30 +155,69 @@ jobs:
           VERSION="${{ steps.ver.outputs.version }}"
           APK="LiBackupNext-${VERSION}.apk"
 
-          # 上一个 tag 到 HEAD 的提交；没有上一个 tag 就取最近 30 条
+          # 上一次发版打的 tag（不含本次）。HEAD 就是本次 tag 的提交，
+          # 从 HEAD^ 往前找最近的 tag，拿到的就是「上回打包」那个点。
           PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+          if [ -n "$PREV" ]; then
+            # 只取「上次发版 → 这次发版」之间的提交
+            LOG=$(git log "$PREV..HEAD" --no-merges --pretty=format:'%h%x09%s')
+          else
+            # 首次发版，没有可对比的区间，就把全部提交都列出来
+            LOG=$(git log --no-merges --pretty=format:'%h%x09%s')
+          fi
+
+          # 按 Conventional Commits 的类型分组：feat / fix / chore …
+          # TYPES 的顺序就是输出顺序，没写类型前缀的落到最后的「其他」
+          TYPES=(feat fix perf refactor style docs test build ci chore revert)
+          declare -A TITLE=(
+            [feat]="新功能" [fix]="修复" [perf]="性能" [refactor]="重构"
+            [style]="样式" [docs]="文档" [test]="测试" [build]="构建"
+            [ci]="CI" [chore]="杂项" [revert]="回滚"
+          )
+          declare -A BUCKET=()
+
+          while IFS=$'\t' read -r HASH SUBJECT; do
+            if [ -z "${HASH:-}" ]; then continue; fi
+
+            TYPE="other"
+            BODY="$SUBJECT"
+            # 解析 "type(scope)!: subject"
+            if [[ "$SUBJECT" =~ ^([A-Za-z]+)(\([^\)]*\))?!?:[[:space:]]*(.+)$ ]]; then
+              CAND=$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
+              case "$CAND" in
+                feat|fix|perf|refactor|style|docs|test|build|ci|chore|revert)
+                  TYPE="$CAND"
+                  BODY="${BASH_REMATCH[3]}"
+                  ;;
+              esac
+            fi
+            BUCKET[$TYPE]+="- ${BODY}（\`${HASH}\`）"$'\n'
+          done <<< "$LOG"
 
           {
             echo "## 变更"
             echo
-            if [ -n "$PREV" ]; then
-              git log "$PREV..HEAD" --no-merges --pretty=format:"- %s（\`%h\`）"
-            else
-              git log --no-merges --pretty=format:"- %s（\`%h\`）" -n 30
+            COUNT=0
+            for t in "${TYPES[@]}"; do
+              if [ -n "${BUCKET[$t]:-}" ]; then
+                echo "### ${TITLE[$t]}"
+                echo
+                printf '%s' "${BUCKET[$t]}"
+                echo
+                COUNT=$((COUNT + 1))
+              fi
+            done
+            if [ -n "${BUCKET[other]:-}" ]; then
+              echo "### 其他"
+              echo
+              printf '%s' "${BUCKET[other]}"
+              echo
+              COUNT=$((COUNT + 1))
             fi
-            echo
-            echo
-            echo "## 包信息"
-            echo
-            echo "| 项 | 值 |"
-            echo "| --- | --- |"
-            echo "| 版本 | ${VERSION}（versionCode ${{ steps.ver.outputs.code }}） |"
-            echo "| 架构 | arm64-v8a |"
-            echo "| 大小 | $(du -h "$APK" | cut -f1) |"
-            echo "| SHA-256 | \`$(cut -d' ' -f1 "$APK.sha256")\` |"
-            echo "| 签名 | ${{ steps.sign.outputs.signed == 'true' && '已签名' || '未签名（未配置 secrets）' }} |"
-            echo
-            echo "构建提交：\`${{ github.sha }}\`"
+            if [ "$COUNT" -eq 0 ]; then
+              echo "- 无"
+              echo
+            fi
           } > release-body.md
 
           cat release-body.md
