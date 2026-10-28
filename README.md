@@ -28,18 +28,19 @@ librustic_bridge.so（rustic_core / rustic_backend）
 - **应用图标**：备份时顺带存一份图标快照，应用卸载后列表里仍能显示
 - **进度通知**：前台服务 + 流体云（Live Update），后台也能看到进度
 - **仓库整理**：回收已删除备份占用的空间，顺带清理没有备份的应用残留的图标
+  - 所有的删除按钮都只是删去引用，只有这个是真删除
 
 ## 环境要求
 
-| 项 | 版本 |
-|---|---|
-| Android | 15（API 35）及以上 |
-| root | Magisk / KernelSU 等 |
-| JDK | 21 |
+| 项 | 版本                                       |
+|---|--------------------------------------------|
+| Android | 11（API 30）及以上                         |
+| root | Magisk、KernelSU、Apacath                  |
+| JDK | 21                                         |
 | Android SDK | compileSdk 37（缺失的组件 AGP 会自动下载） |
-| NDK | 30.0.16248370 |
-| Rust | stable + `aarch64-linux-android` target |
-| cargo-ndk | 任意近期版本 |
+| NDK | 30.0.16248370                              |
+| Rust | stable + `aarch64-linux-android` target    |
+| cargo-ndk | 任意近期版本                               |
 
 ## 构建
 
@@ -51,7 +52,7 @@ cargo install cargo-ndk
 # debug 包（arm64 + x86_64，模拟器也能跑）
 ./gradlew :app:assembleDebug
 
-# 正式包（默认两个 ABI）
+# 正式包（只有arm64）
 ./gradlew :app:assembleRelease
 
 # 只要 arm64，编译时间减半
