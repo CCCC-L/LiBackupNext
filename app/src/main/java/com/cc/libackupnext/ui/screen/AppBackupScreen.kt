@@ -686,37 +686,38 @@ private fun BackupBatchScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
+            // 统计 + 列头勾选框固定在列表上方，不跟着滚动
+            SelectionHeader(
+                appCount = visibleApps.size,
+                hasBackupOnly = mode == BackupBatchMode.MANAGE,
+                selectedApps = selectedApps,
+                counts = selectedCounts,
+                currentUser = currentUserName,
+                enabled = !multiSelect || controlledApps.isNotEmpty(),
+                allChecked = controlledApps.isNotEmpty() &&
+                        controlledApps.all {
+                            kindsOf(it.packageName).containsAll(availableKindsOf(it.packageName))
+                        },
+                columnChecked = { kind ->
+                    val rows = controlledApps.filter { kind in availableKindsOf(it.packageName) }
+                    rows.isNotEmpty() && rows.all { kind in kindsOf(it.packageName) }
+                },
+                onToggleAll = { toggleAll(controlledApps) },
+                onToggleColumn = { kind -> toggleColumn(controlledApps, kind) },
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+
             AppListContainer(
                 items = visibleApps,
                 modifier = Modifier.weight(1f),
                 state = listState,
-                // 顶部不留白，紧贴 topbar
+                // 顶部不留白，紧贴 header
                 contentPadding = PaddingValues(
                     start = 16.dp,
                     end = 16.dp,
                     top = 0.dp,
                     bottom = 8.dp
                 ),
-                header = {
-                    SelectionHeader(
-                        appCount = visibleApps.size,
-                        hasBackupOnly = mode == BackupBatchMode.MANAGE,
-                        selectedApps = selectedApps,
-                        counts = selectedCounts,
-                        currentUser = currentUserName,
-                        enabled = !multiSelect || controlledApps.isNotEmpty(),
-                        allChecked = controlledApps.isNotEmpty() &&
-                                controlledApps.all {
-                                    kindsOf(it.packageName).containsAll(availableKindsOf(it.packageName))
-                                },
-                        columnChecked = { kind ->
-                            val rows = controlledApps.filter { kind in availableKindsOf(it.packageName) }
-                            rows.isNotEmpty() && rows.all { kind in kindsOf(it.packageName) }
-                        },
-                        onToggleAll = { toggleAll(controlledApps) },
-                        onToggleColumn = { kind -> toggleColumn(controlledApps, kind) }
-                    )
-                },
                 key = { _, app -> app.packageName }
             ) { _, app, shape ->
                 BackupSelectRow(
@@ -845,10 +846,11 @@ private fun SelectionHeader(
     allChecked: Boolean,
     columnChecked: (String) -> Boolean,
     onToggleAll: () -> Unit,
-    onToggleColumn: (String) -> Unit
+    onToggleColumn: (String) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically
