@@ -1,10 +1,13 @@
 name: Build & Release
 
-# 打 tag（v1.2.3）自动出包并发版；也可以手动指定版本号
+# 打 tag 自动发包：v1.2.3 和 1.2.3，也可以手动指定版本号
 on:
   push:
     tags:
-      - "v*"
+      # v 开头的（v1.2.3）
+      - "v[0-9]*"
+      # 纯版本号（1.2.3）
+      - "[0-9]*"
   workflow_dispatch:
     inputs:
       version:
@@ -44,14 +47,10 @@ jobs:
       - name: 安装 Android SDK
         uses: android-actions/setup-android@v3
         with:
-          # 这个 action 默认会装已经下线的 `tools` 包，会直接失败：
-          #   Warning: Failed to find package 'tools'
-          # 改成只装 platform-tools，其余组件下一步自己装
           packages: "platform-tools"
           accept-android-sdk-licenses: true
 
       - name: 接受 SDK 许可
-        # setup-android 有时只接受一部分许可，剩下的会卡在交互式 (y/N) 提示上
         run: yes | sdkmanager --licenses > /dev/null || true
 
       - name: 安装 NDK 与平台
@@ -90,7 +89,14 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION="${{ github.event.inputs.version }}"
           else
+            # tag 触发：v1.2.3 和 1.2.3 都支持，去掉可能的前缀 v
             VERSION="${GITHUB_REF_NAME#v}"
+          fi
+
+          # 匹配 1.2.3 这样的版本号
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::版本号「$VERSION」不合法，应为 1.2.3 或 v1.2.3"
+            exit 1
           fi
 
           # versionCode 用 major*10000 + minor*100 + patch，保证单调递增
