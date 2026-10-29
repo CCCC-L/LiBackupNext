@@ -9,8 +9,8 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.drawable.Icon
 import android.os.Build
-import android.os.Looper
 import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
@@ -299,8 +299,6 @@ object BackupNotifier {
         promoted: Boolean = ongoing
     ): Notification {
         // 目标应用图标优先（备份谁就显示谁的图标）；
-        // 取不到时退回**本应用**的图标 —— 以前退回的是系统「正在下载」图标，
-        // 在 One UI 的通知栏 / 流体云里很容易被当成「有东西在下」。
         val appIcon = iconFor(context, packageName, userId) ?: ownIcon(context)
 
         val smallIcon = if (appIcon != null) {
@@ -317,7 +315,7 @@ object BackupNotifier {
             .setOnlyAlertOnce(true)
             .setOngoing(ongoing)
 
-        if (promoted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+        if (promoted && Build.VERSION.SDK_INT_FULL >= Build.VERSION_CODES_FULL.BAKLAVA_1) {
             builder.setRequestPromotedOngoing(true)
 
             // 流体云右侧的短文本：当前备份 / 恢复的是哪一部分
