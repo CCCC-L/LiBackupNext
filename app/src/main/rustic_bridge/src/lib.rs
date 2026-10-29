@@ -1571,7 +1571,23 @@ fn restore_file<S: rustic_core::IndexedFull + Sync>(
         set_mode(target, mode);
     }
 
+    // 还原修改时间：不写回去的话恢复出来的文件全是「刚刚」
+    if let Some(mtime) = node.meta.mtime {
+        restore_mtime(target, mtime.as_second(), mtime.subsec_nanosecond().max(0) as u32);
+    }
+
     Ok(())
+}
+
+/// 把时间写回文件 / 目录。
+fn restore_mtime(path: &std::path::Path, secs: i64, nanos: u32) {
+    let Ok(secs) = u64::try_from(secs) else { return };
+    let time = std::time::UNIX_EPOCH + std::time::Duration::new(secs, nanos);
+    let Ok(handle) = std::fs::File::open(path) else { return };
+    let times = std::fs::FileTimes::new()
+        .set_modified(time)
+        .set_accessed(time);
+    let _ = handle.set_times(times);
 }
 
 /// 把快照内容展开到 dest（快照里的路径都是相对路径）。
@@ -1596,10 +1612,16 @@ fn restore_snapshot<S: rustic_core::IndexedFull + Sync>(
         std::collections::HashSet::new();
     // 目录权限最后再设：先设成只读的话，后面的文件就写不进去了
     let mut dir_modes: Vec<(std::path::PathBuf, u32)> = Vec::new();
+    // 目录的修改时间要等所有文件写完再设（写文件会改动父目录的 mtime）
+    let mut dir_times: Vec<(std::path::PathBuf, i64, u32)> = Vec::new();
     // 先把目录建好，文件收集起来并行写
     let mut files: Vec<(std::path::PathBuf, rustic_core::repofile::Node)> = Vec::new();
     // 符号链接必须建成真正的链接（以前当空文件写，Termux 这类应用直接废掉）
     let mut symlinks: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
+    // 硬链接
+    let mut hardlink_primary: std::collections::HashMap<(u64, u64), std::path::PathBuf> =
+        std::collections::HashMap::new();
+    let mut hardlink_followers: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
 
     for entry in streamer {
         let (path, node) = entry.map_err(|e| format!("读取快照条目失败：{}", describe_error(&e)))?;
@@ -1614,7 +1636,14 @@ fn restore_snapshot<S: rustic_core::IndexedFull + Sync>(
         if node.subtree.is_some() {
             std::fs::create_dir_all(&target).map_err(|e| format!("{}: {e}", target.display()))?;
             if let Some(mode) = node.meta.mode {
-                dir_modes.push((target, mode));
+                dir_modes.push((target.clone(), mode));
+            }
+            if let Some(mtime) = node.meta.mtime {
+                dir_times.push((
+                    target.clone(),
+                    mtime.as_second(),
+                    mtime.subsec_nanosecond().max(0) as u32,
+                ));
             }
             continue;
         }
@@ -1635,6 +1664,17 @@ fn restore_snapshot<S: rustic_core::IndexedFull + Sync>(
             continue;
         }
 
+        // 硬链接：同一 (device, inode) 只写第一份，后面的建成链接。
+        // 不依赖 meta.links —— 有些快照里它并不准，靠「inode 重复出现」判断更可靠。
+        if node.meta.inode != 0 {
+            let key = (node.meta.device_id, node.meta.inode);
+            if let Some(primary) = hardlink_primary.get(&key) {
+                hardlink_followers.push((target, primary.clone()));
+                continue;
+            }
+            hardlink_primary.insert(key, target.clone());
+        }
+
         files.push((target, node));
     }
 
@@ -1653,6 +1693,13 @@ fn restore_snapshot<S: rustic_core::IndexedFull + Sync>(
         })?;
     }
 
+    // 建硬链接：等 primary 的内容全部落盘之后再连
+    for (target, primary) in hardlink_followers {
+        remove_existing(&target);
+        std::fs::hard_link(&primary, &target)
+            .map_err(|e| format!("{}: {e}", target.display()))?;
+    }
+
     // 建符号链接：放在设目录权限之前，否则只读目录里建不了
     for (target, link) in symlinks {
         remove_existing(&target);
@@ -1664,6 +1711,12 @@ fn restore_snapshot<S: rustic_core::IndexedFull + Sync>(
     dir_modes.sort_by_key(|(path, _)| std::cmp::Reverse(path.components().count()));
     for (path, mode) in dir_modes {
         set_mode(&path, mode);
+    }
+
+    // 目录时间也由深到浅写回，避免被父目录的写入覆盖
+    dir_times.sort_by_key(|(path, _, _)| std::cmp::Reverse(path.components().count()));
+    for (path, secs, nanos) in dir_times {
+        restore_mtime(&path, secs, nanos);
     }
 
     // delete：把目标目录里快照没有的文件删掉（等价 rustic 的 --delete）
@@ -1738,7 +1791,7 @@ fn remove_extras(
         let mut extras: Vec<std::path::PathBuf> = Vec::new();
         collect_extras(dest, &root, written, &mut extras)?;
 
-        // 由深到浅删，保证目录空了才能删掉
+        // 由深到浅删，保证父目录在子项之后处理
         extras.sort_by_key(|p| std::cmp::Reverse(p.components().count()));
         for extra in extras {
             // 用 symlink_metadata：符号链接要当文件删，不能跟进去
@@ -1747,7 +1800,7 @@ fn remove_extras(
                 .unwrap_or(false);
 
             if is_dir {
-                let _ = std::fs::remove_dir(&extra);
+                let _ = std::fs::remove_dir_all(&extra);
             } else {
                 let _ = std::fs::remove_file(&extra);
             }
