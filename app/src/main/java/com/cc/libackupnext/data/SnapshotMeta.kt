@@ -17,7 +17,17 @@ object SnapshotMeta {
 
     fun packageName(label: String): String = label.substringBeforeLast(':', label)
 
-    fun kind(label: String): String = label.substringAfterLast(':')
+    /** 目录快照的 label 前缀：`dir:<绝对路径>`。 */
+    const val DIR_LABEL_PREFIX = "dir:"
+
+    /**
+     * 从 label 解析内容类型。
+     *
+     * 应用是 `<包名>:<类型>`；目录是 `dir:<绝对路径>`，路径里本身带 `:` 和 `/`，
+     * 不能按最后一个 `:` 切，否则类型会变成路径。
+     */
+    fun kind(label: String): String =
+        if (label.startsWith(DIR_LABEL_PREFIX)) "dir" else label.substringAfterLast(':')
 
     /** 把 `应用名|版本|用户名|时间戳` 拆开。 */
     fun fields(rawTags: String): List<String> =

@@ -20,8 +20,13 @@ data class BackupEntry(
 
     val ids: List<String> get() = snapshots.map { it.id }
 
-    /** 管理弹窗里真正可勾选的类型（user 包含 user_de）。 */
-    val availableKinds: List<String> get() = KINDS.filter { snapshotsOf(it).isNotEmpty() }
+    /**
+     * 管理弹窗里真正可勾选的类型（user 包含 user_de）。
+     */
+    val availableKinds: List<String> by lazy(LazyThreadSafetyMode.NONE) {
+        // dir 也作为候选：应用条目里没有 dir 快照，自然不会出现
+        (KINDS + "dir").filter { snapshotsOf(it).isNotEmpty() }
+    }
 
     /** 某个类型对应的快照；`apk` 带上 `obb`，`user` 带上 `user_de`。 */
     fun snapshotsOf(kind: String): List<BackupSnapshot> = when (kind) {

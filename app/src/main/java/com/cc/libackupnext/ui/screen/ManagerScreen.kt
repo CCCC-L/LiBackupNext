@@ -5,43 +5,23 @@ import android.content.Intent
 import android.content.pm.LauncherApps
 import android.net.Uri
 import android.os.UserHandle
+import android.provider.DocumentsContract
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -53,45 +33,40 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.cc.libackupnext.data.BackupEntry
 import com.cc.libackupnext.data.BackupStep
+import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.service.AppManagerService
 import com.cc.libackupnext.service.BackupProgress
 import com.cc.libackupnext.service.RusticService
 import com.cc.libackupnext.ui.AppTopBar
 import com.cc.libackupnext.ui.MainViewModel
-import com.cc.libackupnext.ui.UserBadge
 import com.cc.libackupnext.ui.dialog.AppAction
-import com.cc.libackupnext.ui.dialog.AppOptionsMenu
 import com.cc.libackupnext.ui.dialog.BackupHelpDialog
 import com.cc.libackupnext.ui.dialog.BackupProgressDialog
 import com.cc.libackupnext.ui.dialog.ProgressSection
 import com.cc.libackupnext.ui.dialog.rememberDoubleClickGuard
-import com.cc.libackupnext.ui.isNonPrimaryUser
+import com.cc.libackupnext.ui.screen.detail.BackupEntryRow
+import com.cc.libackupnext.ui.screen.detail.BackupManageDialog
+import com.cc.libackupnext.ui.screen.detail.BackupOptionsDialog
+import com.cc.libackupnext.ui.screen.detail.ConfirmActionDialog
+import com.cc.libackupnext.ui.screen.detail.ConfirmDeleteAllDialog
+import com.cc.libackupnext.ui.screen.detail.DetailHeader
+import com.cc.libackupnext.ui.screen.detail.NoteEditDialog
 import com.cc.libackupnext.ui.theme.LocalAppColors
-import com.cc.libackupnext.ui.util.AppIcon
 import com.cc.libackupnext.ui.util.AppIconStore
-import com.cc.libackupnext.ui.util.AppItemCard
 import com.cc.libackupnext.ui.util.AppListContainer
-import com.cc.libackupnext.ui.util.FrozenSnowflake
-import com.cc.libackupnext.ui.util.formatDateTime
-import com.cc.libackupnext.ui.util.formatSize
-import com.cc.libackupnext.ui.util.rememberAppIconWithBackup
 import com.cc.libackupnext.util.BackupNotifier
 import com.cc.libackupnext.util.ErrorLog
 import com.cc.libackupnext.util.KeepAwake
+import com.topjohnwu.superuser.Shell
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
@@ -108,7 +83,15 @@ fun AppBackupScreen(
      * 从管理备份页进来时传：点某条备份就选中它并返回管理页。
      * 传 null（从应用列表进来）则点卡片仍是修改备注。
      */
-    onSelectBackup: ((BackupEntry) -> Unit)? = null
+    onSelectBackup: ((BackupEntry) -> Unit)? = null,
+    /** 备份目标类型：应用 / 目录……，标题、备份选项、安装状态都按它来。 */
+    target: BackupTarget = BackupTarget.APP,
+    /** 顶栏标题，默认取 target 的标题。 */
+    title: String = target.detailTitle,
+    /** 文件夹详情页的图标由列表页传下来，两边样式才能一致。 */
+    iconContent: (@Composable () -> Unit)? = null,
+    /** 传了才在右上角菜单里出现「移除该文件夹」。 */
+    onRemoveDir: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -161,10 +144,32 @@ fun AppBackupScreen(
     // 已卸载的两种情形：
     // 1. 当前用户下根本没有这个应用（例如切换到了未安装该应用的用户）；
     // 2. 只在仓库里有备份（列表里那条 onlyInBackup 记录）—— 列表按它置灰，这里必须一致。
-    val isUninstalled = !restoredInstalled &&
-            (forceUninstalled ||
-                    displayApp.onlyInBackup ||
-                    (loadedUserId == currentUserId && appForCurrentUser == null))
+    // 目录备份没有「安装 / 卸载」这回事
+    val isDirTarget = !target.isApp
+
+    // 回到前台时重算目录还在不在 —— 用户可能刚在别的应用里把它删了或重建了
+    val dirLifecycleOwner = LocalLifecycleOwner.current
+    var dirExistsTick by remember { mutableStateOf(0) }
+    DisposableEffect(dirLifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) dirExistsTick++
+        }
+        dirLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { dirLifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val dirExists = remember(dirExistsTick, displayApp.packageName) {
+        java.io.File(displayApp.packageName).isDirectory
+    }
+
+    // 目录的「已不存在」直接看磁盘；应用还是看安装状态
+    val isUninstalled = if (isDirTarget) {
+        !dirExists
+    } else {
+        !restoredInstalled &&
+                (forceUninstalled ||
+                        displayApp.onlyInBackup ||
+                        (loadedUserId == currentUserId && appForCurrentUser == null))
+    }
 
     var isBusy by remember { mutableStateOf(false) }
     var showOptions by remember { mutableStateOf(false) }
@@ -208,6 +213,8 @@ fun AppBackupScreen(
     var managingEntry by remember { mutableStateOf<BackupEntry?>(null) }
     var managingKinds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var confirmDeleteAll by remember { mutableStateOf(false) }
+    // 移除文件夹前的确认（会连它的备份一起删）
+    var confirmRemoveDir by remember { mutableStateOf(false) }
 
     // 覆盖备份 / 删除需要双击确认
     val doubleClickGuard = rememberDoubleClickGuard()
@@ -216,7 +223,8 @@ fun AppBackupScreen(
     val currentSteps by backupSteps.collectAsState()
 
     val isInstalled = !isUninstalled
-    val canInteract = isInstalled && !isBusy
+    // 目录就算已经从硬盘上删了也要能恢复回来，所以交互不看 isInstalled
+    val canInteract = (isDirTarget || isInstalled) && !isBusy
 
     // 执行 root 侧操作，完成后刷新应用状态
     fun runAction(action: AppAction) {
@@ -241,6 +249,8 @@ fun AppBackupScreen(
                         AppAction.UNINSTALL ->
                             AppManagerService.unInstall(displayApp.packageName, displayApp.userId)
 
+                        AppAction.DELETE_DIR -> deleteDirectory(displayApp.packageName)
+
                         else -> Unit
                     }
                 }
@@ -262,6 +272,9 @@ fun AppBackupScreen(
                         restoredInstalled = false
                         viewModel.loadApps(scrollToTop = false)
                     }
+
+                    // 目录已经从磁盘删掉，退回列表
+                    AppAction.DELETE_DIR -> onBack()
 
                     else -> Unit
                 }
@@ -340,11 +353,15 @@ fun AppBackupScreen(
 
     /** 开始备份：先关选项弹窗，再打开不可关闭的进度弹窗。 */
     fun startBackup(
-        kinds: Set<String> = setOfNotNull(
-            "apk".takeIf { backupApk },
-            "user".takeIf { backupUser },
-            "data".takeIf { backupData }
-        )
+        kinds: Set<String> = if (!target.isApp) {
+            target.backupKinds
+        } else {
+            setOfNotNull(
+                "apk".takeIf { backupApk },
+                "user".takeIf { backupUser },
+                "data".takeIf { backupData }
+            )
+        }
     ) {
         runBackup(kinds)
     }
@@ -481,6 +498,9 @@ fun AppBackupScreen(
                 backupSteps.update { RusticService.markFailed(it) }
             } else {
                 reloadKey++
+                // 恢复可能把已经删掉的目录重新建出来，重算一次「还在不在」，
+                // 否则 header 会一直停在划线置灰的状态
+                dirExistsTick++
                 // 勾了 apk 就一定装上了：本地先翻成已安装（名称/版本/包名本来就在备份快照里），
                 // 列表刷新回来后自然以列表数据为准。
                 if (kinds.contains("apk")) restoredInstalled = true
@@ -532,8 +552,9 @@ fun AppBackupScreen(
         when (action) {
             AppAction.LAUNCH -> launchApp(context, displayApp)
             AppAction.APP_SETTINGS -> openAppSettings(context, displayApp)
+            AppAction.OPEN_DIR -> openDirectory(context, displayApp.packageName)
             // 破坏性操作先确认
-            AppAction.CLEAR_DATA, AppAction.UNINSTALL -> confirmAction = action
+            AppAction.CLEAR_DATA, AppAction.UNINSTALL, AppAction.DELETE_DIR -> confirmAction = action
             else -> runAction(action)
         }
     }
@@ -543,7 +564,7 @@ fun AppBackupScreen(
         topBar = {
             AppTopBar(
                 viewModel = viewModel,
-                title = "应用信息",
+                title = title,
                 pageBackground = pageBackground,
                 searchBarBackground = searchBarBackground,
                 navigationIcon = {
@@ -558,6 +579,8 @@ fun AppBackupScreen(
                 middleIcon = Icons.AutoMirrored.Filled.HelpOutline,
                 onMiddleClick = { showHelpDialog = true },
                 showSortMenu = false,
+                // 用户切换只跟应用有关，文件详情页不显示
+                showUserButton = !isDirTarget,
                 searchPlaceholder = "搜索备注",
                 searchOpen = detailSearchOpen,
                 searchQueryText = detailQuery,
@@ -567,6 +590,20 @@ fun AppBackupScreen(
                 },
                 onSearchQueryChange = { detailQuery = it },
                 moreMenuContent = { onDismiss ->
+                    if (onRemoveDir != null) {
+                        DropdownMenuItem(
+                            text = { Text("移除该文件夹") },
+                            onClick = {
+                                onDismiss()
+                                // 有备份就得先确认：移除会把它们一起删掉
+                                if (entries.isNotEmpty()) {
+                                    confirmRemoveDir = true
+                                } else {
+                                    onRemoveDir?.invoke()
+                                }
+                            }
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text("删除全部备份") },
                         onClick = {
@@ -584,123 +621,29 @@ fun AppBackupScreen(
                 .fillMaxSize()
                 .padding(paddingValues),
             header = {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 4.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // 图标 + 文字区域：点击弹出应用操作菜单
-                    Box(modifier = Modifier.weight(1f)) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .clickable(enabled = canInteract) { showOptions = true }
-                                .alpha(if (isUninstalled) 0.45f else 1f)
-                                .padding(horizontal = 6.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(modifier = Modifier.size(48.dp)) {
-                                AppIcon(
-                                    icon = rememberAppIconWithBackup(
-                                        displayApp.packageName,
-                                        displayApp.userId
-                                    ),
-                                    name = displayApp.name,
-                                    modifier = Modifier.fillMaxSize(),
-                                    shape = RoundedCornerShape(12.dp)
-                                )
-                                if (isNonPrimaryUser(displayApp.userId)) {
-                                    UserBadge(
-                                        userId = displayApp.userId,
-                                        compact = true,
-                                        modifier = Modifier
-                                            .align(Alignment.BottomCenter)
-                                            .padding(2.dp)
-                                    )
-                                }
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
-
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    if (isFrozen) {
-                                        FrozenSnowflake()
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                    }
-                                    Text(
-                                        text = displayApp.name,
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        textDecoration = if (isUninstalled) {
-                                            TextDecoration.LineThrough
-                                        } else {
-                                            null
-                                        }
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = displayApp.packageName,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                // 应用没装时用最新备份里记录的版本
-                                val headerVersion = displayApp.version
-                                    .ifBlank { entries.firstOrNull()?.version.orEmpty() }
-                                if (headerVersion.isNotBlank()) {
-                                    Text(
-                                        text = headerVersion,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
-
-                        AppOptionsMenu(
-                            expanded = showOptions,
-                            frozen = isFrozen,
-                            onDismiss = { showOptions = false },
-                            onAction = { perform(it) }
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    if (isBusy) {
-                        Box(
-                            modifier = Modifier.size(44.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(22.dp),
-                                strokeWidth = 2.dp
-                            )
-                        }
-                    } else {
-                        FilledTonalButton(
-                            onClick = { showBackupOptions = true },
-                            enabled = canInteract,
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
-                        ) {
-                            Text("备份")
-                        }
-                    }
-                }
+                DetailHeader(
+                    app = displayApp,
+                    iconContent = iconContent,
+                    isFrozen = isFrozen,
+                    isUninstalled = isUninstalled,
+                    canInteract = canInteract,
+                    isBusy = isBusy,
+                    isDirectory = isDirTarget,
+                    showOptions = showOptions,
+                    latestVersion = entries.firstOrNull()?.version,
+                    onOpenOptions = { showOptions = true },
+                    onDismissOptions = { showOptions = false },
+                    onAction = { perform(it) },
+                    onBackup = { showBackupOptions = true }
+                )
             }
         ) { index, entry, shape ->
-            AppItemCard(
-                icon = null,
-                title = entry.title,
-                subtitle = listOfNotNull(entry.userName, formatDateTime(entry.time))
-                    .joinToString(" · "),
-                bottomText = entry.description ?: "无备注",
+            BackupEntryRow(
+                entry = entry,
+                isLatest = index == 0,
+                shape = shape,
+                latestSubtitleColor = subtitleColor,
+                bottomTextColor = bottomTextColor,
                 onClick = {
                     val select = onSelectBackup
                     if (select != null) {
@@ -710,97 +653,59 @@ fun AppBackupScreen(
                         editingEntry = entry
                     }
                 },
-                shape = shape,
-                titleStyle = MaterialTheme.typography.labelLarge,
-                titleFontWeight = FontWeight.Normal,
-                // 只有最新一条（第一行）用强调色，其余走默认颜色
-                subtitleColor = if (index == 0) {
-                    subtitleColor
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                bottomTextColor = bottomTextColor,
-                // 右侧不留卡片内边距，交给下面的可点区域撑到卡片边缘
-                endPadding = 0.dp,
-                trailingContent = {
-                    // 按钮四周再留一圈「也算点了管理」的区域：
-                    val manageInteraction = remember { MutableInteractionSource() }
-                    Box(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .clickable(
-                                interactionSource = manageInteraction,
-                                indication = null
-                            ) {
-                                managingKinds = entry.availableKinds.toSet()
-                                managingEntry = entry
-                            }
-                            .padding(start = 8.dp, end = 16.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        FilledTonalButton(
-                            onClick = {
-                                managingKinds = entry.availableKinds.toSet()
-                                managingEntry = entry
-                            },
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
-                        ) {
-                            Text("管理")
-                        }
-                    }
+                onManage = {
+                    managingKinds = entry.availableKinds.toSet()
+                    managingEntry = entry
                 }
             )
         }
     }
 
-    // 破坏性操作二次确认
     confirmAction?.let { action ->
-        val uninstall = action == AppAction.UNINSTALL
+        val (title, message) = confirmDialogText(action, displayApp.name, displayApp.packageName)
+        ConfirmActionDialog(
+            title = title,
+            message = message,
+            onDismiss = { confirmAction = null },
+            onConfirm = {
+                confirmAction = null
+                runAction(action)
+            }
+        )
+    }
+
+    if (confirmDeleteAll) {
+        ConfirmDeleteAllDialog(
+            appName = displayApp.name,
+            onDismiss = { confirmDeleteAll = false },
+            onConfirm = { deleteAllBackups() }
+        )
+    }
+
+    // 移除文件夹确认：有备份时说明会一起删掉
+    if (confirmRemoveDir) {
         AlertDialog(
-            onDismissRequest = { confirmAction = null },
-            title = { Text(if (uninstall) "卸载应用" else "清空数据") },
+            onDismissRequest = { confirmRemoveDir = false },
+            title = { Text("移除该文件夹") },
             text = {
                 Text(
-                    if (uninstall) {
-                        "确定要卸载「${displayApp.name}」吗？此操作不可撤销。"
-                    } else {
-                        "确定要清空「${displayApp.name}」的全部数据吗？此操作不可撤销。"
-                    }
+                    "「${displayApp.packageName}」有 ${entries.size} 个备份，" +
+                            "移除后这些备份会被一起删除，此操作不可撤销。"
                 )
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        confirmAction = null
-                        runAction(action)
+                        confirmRemoveDir = false
+                        deleteAllBackups()
+                        onRemoveDir?.invoke()
                     }
                 ) {
-                    Text("确定", color = MaterialTheme.colorScheme.error)
+                    Text("移除", color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { confirmAction = null }) {
-                    Text("取消")
-                }
-            }
-        )
-    }
-
-    // 删除全部备份二次确认
-    if (confirmDeleteAll) {
-        AlertDialog(
-            onDismissRequest = { confirmDeleteAll = false },
-            title = { Text("删除全部备份") },
-            text = {
-                Text("确定要删除「${displayApp.name}」的全部备份吗？此操作不可撤销。")
-            },
-            confirmButton = {
-                TextButton(onClick = { deleteAllBackups() }) {
-                    Text("确定", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmDeleteAll = false }) {
+                TextButton(onClick = { confirmRemoveDir = false }) {
                     Text("取消")
                 }
             }
@@ -812,165 +717,52 @@ fun AppBackupScreen(
         BackupHelpDialog(onDismiss = { showHelpDialog = false })
     }
 
-    // 管理弹窗：用自定义 Dialog，按钮直接放在内容里，点一下就响应
     managingEntry?.let { entry ->
-        Dialog(onDismissRequest = {
-            managingEntry = null
-            doubleClickGuard.reset()
-        }) {
-            Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                tonalElevation = 6.dp
-            ) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Text(
-                        text = entry.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    BackupEntry.KINDS.forEach { kind ->
-                        val snaps = entry.snapshotsOf(kind)
-                        val exists = snaps.isNotEmpty()
-                        ManageOptionRow(
-                            label = kind,
-                            checked = kind in managingKinds,
-                            enabled = exists,
-                            size = if (exists) formatSize(snaps.sumOf { it.size }) else "-",
-                            id = if (exists) {
-                                snaps.joinToString(" ") { it.id.take(8) }
-                            } else {
-                                ""
-                            },
-                            onCheckedChange = { checked ->
-                                managingKinds = if (checked) {
-                                    managingKinds + kind
-                                } else {
-                                    managingKinds - kind
-                                }
-                            }
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End
-                    ) {
-                        // 应用没装就没有可覆盖的内容，按钮不显示
-                        if (RusticService.canOverwrite(isInstalled)) {
-                            TextButton(
-                                onClick = {
-                                    if (doubleClickGuard.consume("overwrite")) {
-                                        overwriteSelected(entry)
-                                    }
-                                }
-                            ) {
-                                Text("覆盖备份")
-                            }
-                        }
-                        Spacer(Modifier.weight(1f))
-                        TextButton(
-                            onClick = {
-                                if (doubleClickGuard.consume("delete")) {
-                                    deleteSelected(entry)
-                                }
-                            }
-                        ) {
-                            Text("删除", color = MaterialTheme.colorScheme.error)
-                        }
-                        TextButton(onClick = { restoreSelected(entry) }) {
-                            Text("恢复")
-                        }
-                    }
-                }
-            }
-        }
+        BackupManageDialog(
+            entry = entry,
+            isDirectory = isDirTarget,
+            dirPath = displayApp.packageName,
+            canOverwrite = RusticService.canOverwrite(isInstalled),
+            checkedKinds = managingKinds,
+            onCheckedChange = { kind, checked ->
+                managingKinds = if (checked) managingKinds + kind else managingKinds - kind
+            },
+            onDismiss = {
+                managingEntry = null
+                doubleClickGuard.reset()
+            },
+            onOverwrite = {
+                if (doubleClickGuard.consume("overwrite")) overwriteSelected(entry)
+            },
+            onDelete = {
+                if (doubleClickGuard.consume("delete")) deleteSelected(entry)
+            },
+            onRestore = { restoreSelected(entry) }
+        )
     }
 
-    // 备注编辑：用自定义 Dialog，好把「移除备注」放到最左边
     editingEntry?.let { entry ->
-        Dialog(onDismissRequest = { editingEntry = null }) {
-            Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                tonalElevation = 6.dp
-            ) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Text(
-                        text = "备注",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    OutlinedTextField(
-                        value = noteInput,
-                        onValueChange = { noteInput = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("备注内容") },
-                        maxLines = 4
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // 移除备注放最左边，其余靠右
-                        TextButton(onClick = { applyDescription(entry, null) }) {
-                            Text("移除备注", color = MaterialTheme.colorScheme.error)
-                        }
-
-                        Spacer(modifier = Modifier.weight(1f))
-
-                        TextButton(onClick = { editingEntry = null }) {
-                            Text("取消")
-                        }
-                        TextButton(
-                            onClick = {
-                                applyDescription(entry, noteInput.trim().ifBlank { null })
-                            }
-                        ) {
-                            Text("确定")
-                        }
-                    }
-                }
-            }
-        }
+        NoteEditDialog(
+            note = noteInput,
+            onNoteChange = { noteInput = it },
+            onDismiss = { editingEntry = null },
+            onRemove = { applyDescription(entry, null) },
+            onConfirm = { applyDescription(entry, noteInput.trim().ifBlank { null }) }
+        )
     }
 
-    // 备份选项
     if (showBackupOptions) {
-        AlertDialog(
-            onDismissRequest = { showBackupOptions = false },
-            title = { Text(text = "备份", style = MaterialTheme.typography.titleMedium) },
-            text = {
-                Column {
-                    BackupOptionRow("apk(含 obb)", backupApk) { backupApk = it }
-                    BackupOptionRow("user", backupUser) { backupUser = it }
-                    BackupOptionRow("data", backupData) { backupData = it }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = { startBackup() },
-                    enabled = backupApk || backupUser || backupData
-                ) {
-                    Text("备份")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showBackupOptions = false }) {
-                    Text("取消")
-                }
-            }
+        BackupOptionsDialog(
+            isDirectory = isDirTarget,
+            dirPath = displayApp.packageName,
+            backupApk = backupApk,
+            backupUser = backupUser,
+            backupData = backupData,
+            onApkChange = { backupApk = it },
+            onUserChange = { backupUser = it },
+            onDataChange = { backupData = it },
+            onDismiss = { showBackupOptions = false },
+            onConfirm = { startBackup() }
         )
     }
 
@@ -989,116 +781,81 @@ fun AppBackupScreen(
     }
 }
 
-
-/** 管理弹窗里的选项行：勾选框 + 名称 + 大小和快照 id。 */
-@Composable
-private fun ManageOptionRow(
-    label: String,
-    checked: Boolean,
-    enabled: Boolean,
-    size: String,
-    id: String,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(enabled = enabled) { onCheckedChange(!checked) }
-            .padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        val accent = MaterialTheme.colorScheme.primary
-        val active = checked && enabled
-        Box(
-            modifier = Modifier
-                .size(18.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(if (active) accent else Color.Transparent)
-                .border(
-                    width = 1.5.dp,
-                    color = when {
-                        active -> accent
-                        enabled -> MaterialTheme.colorScheme.outline
-                        else -> MaterialTheme.colorScheme.outlineVariant
-                    },
-                    shape = RoundedCornerShape(4.dp)
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            if (active) {
-                Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.size(13.dp)
-                )
-            }
-        }
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (enabled) {
-                MaterialTheme.colorScheme.onSurface
-            } else {
-                MaterialTheme.colorScheme.outline
-            }
-        )
-        Spacer(modifier = Modifier.width(10.dp))
-        Text(
-            text = size,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(modifier = Modifier.weight(1f))
-        Text(
-            text = id,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.outline
-        )
-    }
-}
-
-/** 紧凑的复选行，四个选项之间靠得比较近。 */
-@Composable
-private fun BackupOptionRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .clickable { onCheckedChange(!checked) }
-            .padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        val accent = MaterialTheme.colorScheme.primary
-        Box(
-            modifier = Modifier
-                .size(18.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(if (checked) accent else Color.Transparent)
-                .border(
-                    width = 1.5.dp,
-                    color = if (checked) accent else MaterialTheme.colorScheme.outline,
-                    shape = RoundedCornerShape(4.dp)
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            if (checked) {
-                Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.size(13.dp)
-                )
-            }
-        }
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(text = label, style = MaterialTheme.typography.bodyMedium)
-    }
-}
-
 // ==================== 应用操作实现 ====================
+
+/**
+ * 按操作类型生成确认弹窗的标题和正文。
+ */
+private fun confirmDialogText(
+    action: AppAction,
+    appName: String,
+    appPath: String
+): Pair<String, String> =
+    when (action) {
+        AppAction.DELETE_DIR ->
+            "删除文件夹" to "确定要删除「$appPath」吗？此操作不可撤销。"
+
+        AppAction.UNINSTALL ->
+            "卸载应用" to "确定要卸载「$appName」吗？此操作不可撤销。"
+
+        else ->
+            "清空数据" to "确定要清空「$appName」的全部数据吗？此操作不可撤销。"
+    }
+
+/**
+ * 用系统的「文件」应用打开目录。
+ */
+private fun openDirectory(context: Context, path: String) {
+    val docId = when {
+        // 内部存储：/storage/emulated/0/DCIM → primary:DCIM
+        path.startsWith("/storage/emulated/0/") -> {
+            val inner = path.removePrefix("/storage/emulated/0/")
+            if (inner.isNotEmpty()) "primary:$inner" else null
+        }
+
+        // 外置 SD 卡：/storage/1A2B-3C4D/Music → 1A2B-3C4D:Music
+        path.startsWith("/storage/") -> {
+            val rest = path.removePrefix("/storage/")
+            val volume = rest.substringBefore('/')
+            val inner = rest.substringAfter('/', "")
+            if (inner.isEmpty()) null else "$volume:$inner"
+        }
+
+        else -> null
+    }
+
+    if (docId == null) {
+        Toast.makeText(context, "这个位置打不开", Toast.LENGTH_SHORT).show()
+        return
+    }
+
+    // 先试 tree URI（文件管理器「打开目录」的标准形式，兼容性最好），
+    // 再退回 document URI —— 不同 ROM 的文件管理器认的形式不一样。
+    val candidates = listOf(
+        DocumentsContract.buildTreeDocumentUri("com.android.externalstorage.documents", docId),
+        DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", docId)
+    )
+
+    for (uri in candidates) {
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, DocumentsContract.Document.MIME_TYPE_DIR)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        if (intent.resolveActivity(context.packageManager) == null) continue
+        if (runCatching { context.startActivity(intent) }.isSuccess) return
+    }
+
+    Toast.makeText(context, "没有能打开文件夹的应用", Toast.LENGTH_SHORT).show()
+}
+
+/** 删除整个目录（root）。路径里可能有空格，用单引号包起来并转义。 */
+private fun deleteDirectory(path: String) {
+    val quoted = "'" + path.replace("'", "'\\''") + "'"
+    val result = Shell.cmd("rm -rf $quoted").exec()
+    if (!result.isSuccess) {
+        throw IllegalStateException(result.err.joinToString().ifBlank { "删除失败" })
+    }
+}
 
 private fun launchApp(context: Context, app: AppInfo) {
     if (app.userId == 0) {

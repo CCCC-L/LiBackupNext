@@ -18,7 +18,13 @@ enum class AppAction {
     UNFREEZE,
     APP_SETTINGS,
     CLEAR_DATA,
-    UNINSTALL;
+    UNINSTALL,
+
+    /** 目录专用：用系统文件管理器打开 */
+    OPEN_DIR,
+
+    /** 目录专用：把目录从硬盘上删掉 */
+    DELETE_DIR;
 
     fun title(): String = when (this) {
         LAUNCH -> "启动应用"
@@ -28,6 +34,8 @@ enum class AppAction {
         APP_SETTINGS -> "系统设置"
         CLEAR_DATA -> "清空数据"
         UNINSTALL -> "卸载应用"
+        OPEN_DIR -> "打开文件夹"
+        DELETE_DIR -> "删除文件夹"
     }
 }
 
@@ -41,7 +49,9 @@ fun AppOptionsMenu(
     expanded: Boolean,
     frozen: Boolean,
     onDismiss: () -> Unit,
-    onAction: (AppAction) -> Unit
+    onAction: (AppAction) -> Unit,
+    /** 目标是文件夹时只给「打开 / 删除」两项 —— 冻结、清空数据这些对目录没意义。 */
+    isDirectory: Boolean = false
 ) {
     val isDark = isSystemInDarkTheme()
     val menuColor = if (isDark) Color(0xFF2B2D31) else Color(0xFFF2F3F7)
@@ -53,6 +63,18 @@ fun AppOptionsMenu(
         shape = RoundedCornerShape(16.dp),
         containerColor = menuColor
     ) {
+        if (isDirectory) {
+            DropdownMenuItem(
+                text = { Text(AppAction.OPEN_DIR.title()) },
+                onClick = { onAction(AppAction.OPEN_DIR) }
+            )
+            DropdownMenuItem(
+                text = { Text(AppAction.DELETE_DIR.title(), color = dangerColor) },
+                onClick = { onAction(AppAction.DELETE_DIR) }
+            )
+            return@DropdownMenu
+        }
+
         DropdownMenuItem(
             text = { Text(AppAction.LAUNCH.title()) },
             onClick = { onAction(AppAction.LAUNCH) }

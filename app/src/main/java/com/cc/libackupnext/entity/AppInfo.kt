@@ -24,3 +24,30 @@ data class AppInfo(
     val onlyInBackup: Boolean = false
 
 )
+
+/** 文件备份的伪应用：packageName 就是目录的绝对路径。 */
+val AppInfo.isDirectory: Boolean get() = packageName.startsWith('/')
+
+/** 把一个目录包装成 [AppInfo]，好复用应用详情页 / 批量页。 */
+fun dirAppInfo(path: String): AppInfo {
+    val normalized = path.trimEnd('/').ifBlank { path }
+    return AppInfo(
+        name = normalized.substringAfterLast('/').ifBlank { normalized },
+        packageName = normalized,
+        version = "",
+        versionCode = 0,
+        installTime = 0,
+        updateTime = 0,
+        userId = 0,
+        isSystem = false,
+        isFrozen = false
+    )
+}
+
+/** 文件页默认列出的目录。 */
+val DefaultBackupDirs = listOf(
+    "/storage/emulated/0/DCIM",
+    "/storage/emulated/0/Download",
+    "/storage/emulated/0/Music",
+    "/storage/emulated/0/Pictures"
+)

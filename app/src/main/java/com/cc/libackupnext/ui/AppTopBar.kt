@@ -75,6 +75,8 @@ fun AppTopBar(
     showSortMenu: Boolean = true,
     /** 搜索框占位文案，子页面可以改成「搜索备注」。 */
     searchPlaceholder: String = "搜索应用名称或包名",
+    /** 是否显示右上角的用户切换按钮（只有应用相关的需要显示）。 */
+    showUserButton: Boolean = true,
     /** 外部接管搜索状态：传了就用自己的，不再读写 ViewModel 里的全局搜索状态。 */
     searchOpen: Boolean? = null,
     searchQueryText: String? = null,
@@ -94,21 +96,26 @@ fun AppTopBar(
     onCreateBackup: (() -> Unit)? = null,
     /** 非空时在「更多」菜单里多一项「管理应用备份」。 */
     onManageBackup: (() -> Unit)? = null,
+    /** 这两个菜单项的文案，文件页会换成「新建/管理文件备份」。 */
+    createBackupLabel: String = "新建应用备份",
+    manageBackupLabel: String = "管理应用备份",
     /** 非空时在「更多」菜单里多一项「设置」。 */
     onOpenSettings: (() -> Unit)? = null,
     /** 非空时在「更多」菜单里多一项「错误日志」。 */
     onOpenErrorLog: (() -> Unit)? = null,
+    /** 「重新加载」。默认重拉应用列表；文件页传自己的刷新逻辑。 */
+    onReload: (() -> Unit)? = null,
     moreMenuContent: @Composable (onDismiss: () -> Unit) -> Unit = { onDismiss ->
         DropdownMenuItem(
             text = { Text("重新加载") },
             onClick = {
                 onDismiss()
-                viewModel.loadApps()
+                onReload?.invoke() ?: viewModel.loadApps()
             }
         )
         if (onCreateBackup != null) {
             DropdownMenuItem(
-                text = { Text("新建应用备份") },
+                text = { Text(createBackupLabel) },
                 onClick = {
                     onDismiss()
                     onCreateBackup()
@@ -117,7 +124,7 @@ fun AppTopBar(
         }
         if (onManageBackup != null) {
             DropdownMenuItem(
-                text = { Text("管理应用备份") },
+                text = { Text(manageBackupLabel) },
                 onClick = {
                     onDismiss()
                     onManageBackup()
@@ -176,6 +183,8 @@ fun AppTopBar(
 
     // 每个图标独立使用擦除动画
     val searchButtonErase by rememberEraseProgress(visible = !isSearching)
+    // 用户按钮的擦除进度：和搜索按钮用同一套动画，只是开关条件不同
+    val userButtonErase by rememberEraseProgress(visible = showUserButton)
     val moreButtonErase by rememberEraseProgress(visible = !isSearching)
 
     // 中间按钮的位置动画 & 复合容器宽度动画
@@ -304,13 +313,14 @@ fun AppTopBar(
                 }
             }
 
-            // ===== 用户按钮（不参与擦除动画，始终显示） =====
-            Box {
+            // ===== 用户按钮：和搜索按钮同一套擦除动画 =====
+            Box(modifier = Modifier.eraseToRight(userButtonErase)) {
                 IconButton(
                     onClick = {
                         viewModel.loadUsers()
                         viewModel.isUserMenuExpanded.value = true
-                    }
+                    },
+                    modifier = Modifier.requiredWidth(IconSlotWidth)
                 ) {
                     Icon(Icons.Default.Person, contentDescription = "用户")
                 }

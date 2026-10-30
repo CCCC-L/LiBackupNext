@@ -102,8 +102,10 @@ object RusticService {
      * rustic 用 gitignore 语义，`!` 开头表示「排除」。
      * 缓存、原生库、OTA 临时文件占空间大又没有恢复价值。
      */
-    private val BACKUP_EXCLUDES: List<String> = BACKUP_ROOTS.flatMap { root ->
-        BACKUP_EXCLUDED_NAMES.map { name -> "!$root/$name" }
+    private val BACKUP_EXCLUDES: List<String> = buildList {
+        BACKUP_ROOTS.forEach { root ->
+            BACKUP_EXCLUDED_NAMES.forEach { name -> add("!$root/$name") }
+        }
     }
 
     /** 请求 / 响应区 512KB + 进度区 64KB：快照列表要一次塞进响应里。 */
@@ -116,6 +118,9 @@ object RusticService {
 
     /** Android 上外部存储（/data/media）的 gid */
     private const val MEDIA_RW_GID = 1078
+
+    /** 外部存储（/data/media）的 uid。外部存储的目录属于它，不是当前应用 uid。 */
+    private const val MEDIA_RW_UID = 1023
 
     /**
      * 初始化 / 校验 rustic 仓库。
@@ -286,6 +291,35 @@ object RusticService {
                 for (index in 0 until items.length()) {
                     val item = items.getJSONObject(index)
                     byKind[item.getString("kind")] = item.getString("id")
+                }
+
+                // 目录恢复：把快照写回原路径的父目录，顶层目录名就是文件夹名。
+                byKind["dir"]?.let { id ->
+                    emit("dir", "running")
+
+                    // 和备份对称：写到 /data/media/0，而不是 FUSE 的 /sdcard
+                    val parent = File(mediaPath(packageName)).parent
+                    if (parent == null) {
+                        emit("dir", "failed")
+                        return "路径不合法：$packageName"
+                    }
+
+                    val error = restoreTo(repoPath, repoPassword, id, parent, delete = false)
+                    if (error.isNotBlank()) {
+                        emit("dir", "failed")
+                        return error
+                    }
+
+                    // 外部存储的目录归 media_rw 所有，上下文取父目录的（不带 MLS 类别）
+                    val restoredDir = File(mediaPath(packageName))
+                    fixupTree(
+                        restoredDir,
+                        MEDIA_RW_UID,
+                        MEDIA_RW_GID,
+                        parentContext = true
+                    )
+
+                    emit("dir", "done")
                 }
 
                 byKind["apk"]?.let { id ->
@@ -483,25 +517,32 @@ object RusticService {
         }
 
         /**
-         * 恢复后的收尾：改归属 + 按目标目录重新打 SELinux 标签。
+         * 恢复后修正归属和 SELinux 上下文。
          *
-         * 为什么必须打标签：我们的进程是 root（SELinux level 只有 `s0`），写出来的文件是
-         * `app_data_file:s0`；而应用自己的进程跑在 `s0:c211,c257,...` 里，**访问这种文件会被拒**。
-         * Termux 恢复后 `exec login` 报 Permission denied 就是这个原因 —— 它的 `login` 是脚本，
-         * 解释器 `sh` 是 `app_data_file:s0`，应用执行时被 SELinux 挡下。
-         *
+         * @param parentContext 用**父目录**的上下文而不是自己的。
+         *   外部存储（/data/media/0/...）必须传 true —— 那里的文件不该带 MLS 类别，
+         *   带上了就只有「类别相同」的那个应用能访问，别的应用连删除都做不到。
+         *   应用数据（/data/user/0/<pkg>）要保持 false，它的类别是按 uid 算的，必须有。
          */
-        private fun fixupTree(file: File, uid: Int, gid: Int) {
+        private fun fixupTree(file: File, uid: Int, gid: Int, parentContext: Boolean = false) {
             if (!file.exists()) return
 
             val path = file.absolutePath
+            val ctxSource = if (parentContext) {
+                file.parentFile?.absolutePath ?: path
+            } else {
+                path
+            }
 
-            // 一条 shell 里做完：取上下文 → 改归属 → 只在「上下文带 MLS 类别」时重打标签。
-            // 外部存储（/data/media/.../Android/data|obb）的上下文是 media_rw_data_file:s0，
-            // 本来就没有类别，root 建出来的文件也是这个，跳过可以省一次整树遍历。
-            val script = "ctx=\$(ls -Zd \"$path\" | grep -o 'u:object_r:[^ ]*'); " +
+            // 外部存储强制刷成父目录的 ctx（无类别）；应用数据只在上下文带类别时才刷，
+            val chcon = if (parentContext) {
+                "chcon -Rh \"\$ctx\" \"$path\""
+            } else {
+                "case \"\$ctx\" in *:c*) chcon -Rh \"\$ctx\" \"$path\";; esac"
+            }
+            val script = "ctx=\$(ls -Zd \"$ctxSource\" | grep -o 'u:object_r:[^ ]*'); " +
                     "chown -R $uid:$gid \"$path\"; " +
-                    "case \"\$ctx\" in *:c*) chcon -Rh \"\$ctx\" \"$path\";; esac"
+                    chcon
 
             val result = runCatching { Shell.cmd(script).exec() }.getOrNull()
             if (result == null || !result.isSuccess) {
@@ -628,6 +669,22 @@ object RusticService {
         }
 
         /** 把请求翻译成 Rust 侧要的备份项列表。 */
+        /**
+         * 外部存储的显示路径 → 真实路径。
+         *
+         * `/sdcard` 是 FUSE 挂载，root 读写会被权限和 SELinux 限制；`/data/media/0`
+         * 是同一块存储的真实路径。界面上仍然显示 `/sdcard/...`，用户看得懂。
+         *
+         * 文件夹备份只做**主用户**，所以这里固定用 0。
+         */
+        private fun mediaPath(path: String): String = when {
+            path == "/storage/emulated/0" -> "/data/media/0"
+            path.startsWith("/storage/emulated/0/") ->
+                "/data/media/0/" + path.removePrefix("/storage/emulated/0/")
+
+            else -> path
+        }
+
         private fun buildRustRequest(options: JSONObject): String? {
             val packageName = options.getString("packageName")
             val userId = options.optInt("userId", 0)
@@ -661,6 +718,35 @@ object RusticService {
 
             fun descriptionOf(kind: String): String? =
                 overrides?.optJSONObject(kind)?.optString("description")?.takeIf { it.isNotBlank() }
+            // 目录备份：一个目录就是一个快照，label 固定为 `dir:<绝对路径>`。
+            // 快照里顶层目录名用文件夹名（as_path），恢复时落到父目录即可还原。
+            if (packageName.startsWith('/')) {
+                val dir = File(packageName)
+                val dirItems = JSONArray().put(
+                    item(
+                        "dir",
+                        "$packageName:dir",
+                        tags,
+                        // 备份走真实路径：/sdcard 是 FUSE 视图，root 读写会被权限限制
+                        listOf(mediaPath(packageName)),
+                        dir.name,
+                        if (dir.isDirectory) null else "目录不存在",
+                        descriptionOf("dir")
+                    )
+                )
+                return JSONObject().apply {
+                    put("path", options.getString("repoPath"))
+                    put("password", options.getString("repoPassword"))
+                    put("items", dirItems)
+                    // 不备份.thumbnails 文件夹和 .trashed开头的文件
+                    put(
+                        "excludes",
+                        JSONArray().put("!.thumbnails").put("!.trashed*")
+                    )
+                    options.optString("batch").takeIf { it.isNotBlank() }?.let { put("batch", it) }
+                }.toString()
+            }
+
             val items = JSONArray()
 
             // 图标：仓库里已经有同 label 的快照就不再备份（策略在 service 层判断）
@@ -1232,9 +1318,12 @@ object RusticService {
                 }
             }
 
+            // 目录没有图标，跳过这一步
+            val isDir = request.packageName.startsWith('/')
+
             // 图标只保留一份：仓库里已有 pkg:icon 就不再备份。
             // 批量备份时调用方已经知道答案（来自备份概况），不用再查一遍。
-            val hasIcon = iconAlreadyBackedUp ?: listSnapshots(
+            val hasIcon = isDir || iconAlreadyBackedUp ?: listSnapshots(
                 repoPath = request.repoPath,
                 repoPassword = request.repoPassword,
                 packageName = request.packageName
@@ -1253,7 +1342,7 @@ object RusticService {
                 put("data", request.backupData)
                 put("permissions", request.backupPermissions)
                 put("timestamp", System.currentTimeMillis())
-                put("includeIcon", !hasIcon)
+                put("includeIcon", !hasIcon && !isDir)
                 if (!parentIds.isNullOrEmpty()) put("parents", JSONObject(parentIds))
                 // 同批次的多个应用共用一次「打开仓库 + 读索引」
                 if (!batchId.isNullOrBlank()) put("batch", batchId)
@@ -1736,6 +1825,9 @@ object RusticService {
         val selected = entry.selectedSnapshots(kinds)
         if (selected.isEmpty()) return "请先勾选要恢复的内容"
 
+        // 目录备份不依赖应用是否安装
+        if (selected.all { it.kind() == "dir" }) return null
+
         val hasApk = selected.any { it.kind() == "apk" }
         val needsApp = selected.any { it.kind() != "apk" }
         return if (needsApp && !hasApk && !installed) "应用未安装，无法恢复数据" else null
@@ -1759,7 +1851,10 @@ object RusticService {
         }
 
         // 恢复前先停掉应用：一边写一边被覆盖会拿到半新半旧的数据
-        AppManagerService.stopQuietly(app.packageName, app.userId)
+        // （目录不是应用，没有进程可停）
+        if (!app.packageName.startsWith('/')) {
+            AppManagerService.stopQuietly(app.packageName, app.userId)
+        }
 
         return withContext(Dispatchers.IO) {
             try {
@@ -1825,6 +1920,7 @@ object RusticService {
     fun restoreSteps(entry: BackupEntry, kinds: Set<String>): List<BackupStep> {
         val selected = entry.selectedSnapshots(kinds)
         return buildList {
+            if (selected.any { it.kind() == "dir" }) add("dir")
             if (selected.any { it.kind() == "apk" }) add("apk")
             if (selected.any { it.kind() == "obb" }) add("obb")
             if (selected.any { it.kind() == "user" }) add("user")

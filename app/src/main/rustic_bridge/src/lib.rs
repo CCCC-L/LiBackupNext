@@ -390,13 +390,22 @@ fn handle_list(ptr: *mut u8, capacity: usize) -> jint {
 fn list_snapshots(request: &ListRequest) -> Result<Vec<SnapshotInfo>, String> {
     let repository = open_repo_cached(&request.path, &request.password)?;
 
-    // label 形如 `<包名>:<类型>`；包名非空时按前缀过滤（纯查找，不做语义处理）
+    // 应用：label 形如 `<包名>:<类型>`，按前缀过滤（纯查找，不做语义处理）
+    // 目录：label 形如 `<绝对路径>:dir`，整条精确匹配（避免 /a/DCIM 命中 /a/DCIM2）
     let prefix = format!("{}:", request.package_name);
+    let dir_label = if request.package_name.starts_with('/') {
+        Some(format!("{}:dir", request.package_name))
+    } else {
+        None
+    };
     let filter_by_package = !request.package_name.is_empty();
 
     // 带条件的查询：rustic 会在读取时就用 predicate 过滤，不用先全量拿到内存里
     let mut snapshots: Vec<SnapshotInfo> = repository
-        .get_matching_snapshots(|snap| !filter_by_package || snap.label.starts_with(&prefix))
+        .get_matching_snapshots(|snap| match &dir_label {
+            Some(label) => snap.label == *label,
+            None => !filter_by_package || snap.label.starts_with(&prefix),
+        })
         .map_err(|e| format!("读取快照失败：{}", describe_error(&e)))?
         .into_iter()
         .map(|snap| SnapshotInfo {
@@ -770,20 +779,19 @@ fn build_overview(request: &OverviewRequest) -> Result<Vec<PackageOverview>, Str
     let mut icon_packages: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
     for snapshot in &snapshots {
+        // label 一律是 `<键>:<类型>`：应用是 `<包名>:<类型>`，目录是 `<绝对路径>:dir`
         let Some((package, kind)) = snapshot.label.rsplit_once(':') else {
             continue;
         };
         if package.is_empty() {
             continue;
         }
+        let package = package.to_string();
         if kind == "icon" {
-            icon_packages.insert(package.to_string());
+            icon_packages.insert(package.clone());
             continue;
         }
-        by_package
-            .entry(package.to_string())
-            .or_default()
-            .push(snapshot);
+        by_package.entry(package).or_default().push(snapshot);
     }
 
     let mut result = Vec::with_capacity(by_package.len());

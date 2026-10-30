@@ -1,6 +1,7 @@
 package com.cc.libackupnext.ui.util
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
@@ -36,6 +37,8 @@ fun AppItemCard(
     onClick: (() -> Unit)? = null,
     /** 非空时即使 [icon] 还没加载完也保留图标位，并显示首字母占位。 */
     iconPlaceholder: String? = null,
+    /** 自定义图标（例如文件夹）：传了就不画 [icon]，直接画这个。 */
+    iconContent: (@Composable () -> Unit)? = null,
     /** 已冻结的应用在标题前显示小雪花。 */
     frozen: Boolean = false,
     /** 只在备份里存在（未安装）：标题划线、图标置灰。 */
@@ -68,7 +71,18 @@ fun AppItemCard(
                 .padding(start = 16.dp, end = endPadding),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (icon != null || iconPlaceholder != null) {
+            if (iconContent != null) {
+                Box(
+                    modifier = Modifier
+                        .padding(vertical = 12.dp)
+                        .size(48.dp)
+                        .alpha(if (dimmed) 0.45f else 1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    iconContent()
+                }
+                Spacer(modifier = Modifier.width(14.dp))
+            } else if (icon != null || iconPlaceholder != null) {
                 AppIcon(
                     icon = icon,
                     name = iconPlaceholder ?: title,
