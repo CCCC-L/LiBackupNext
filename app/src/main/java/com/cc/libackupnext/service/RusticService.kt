@@ -1715,16 +1715,7 @@ object RusticService {
         runCatching {
             val app = App.application
             val source = app.applicationInfo.sourceDir
-            val version = app.packageManager
-                .getPackageInfo(app.packageName, 0)
-                .versionName
-                .orEmpty()
-                .ifBlank { "unknown" }
-            val dest = "$dir/LiBackupNext-$version.apk"
-
-            // 仓库一般在 /storage 下，应用进程没有写权限，交给 root 复制
-            if (Shell.cmd("test -f \"$dest\"").exec().isSuccess) return@runCatching
-
+            val dest = "$dir/app.apk"
             val result = Shell.cmd("cp -f \"$source\" \"$dest\"").exec()
             if (result.isSuccess) {
                 Log.i(TAG, "copySelfApk: $dest")
