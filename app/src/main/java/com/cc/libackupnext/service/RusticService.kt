@@ -1,5 +1,8 @@
 package com.cc.libackupnext.service
 
+import android.app.AppOpsManager
+import android.app.AppOpsManagerHidden
+import android.app.usage.UsageStatsManagerHidden
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -7,24 +10,24 @@ import android.content.pm.PackageManagerHidden
 import android.content.pm.PermissionInfo
 import android.graphics.Bitmap
 import android.os.IBinder
+import android.os.IDeviceIdleController
+import android.os.ServiceManager
 import android.os.SharedMemory
-import android.os.SystemClock
+import android.os.UserHandle
 import android.os.UserManagerHidden
-import android.system.Os
-import android.util.Xml
-import org.xmlpull.v1.XmlPullParser
 import android.util.Log
 import androidx.core.graphics.drawable.toBitmap
+import com.android.internal.app.IAppOpsService
 import com.cc.libackupnext.App
 import com.cc.libackupnext.data.AppBackupSummary
 import com.cc.libackupnext.data.AppPrefs
 import com.cc.libackupnext.data.BackupEntry
-import com.cc.libackupnext.data.BackupStep
-import com.cc.libackupnext.data.BackupStepStatus
-import com.cc.libackupnext.data.SnapshotMeta
 import com.cc.libackupnext.data.BackupRequest
 import com.cc.libackupnext.data.BackupSnapshot
+import com.cc.libackupnext.data.BackupStep
+import com.cc.libackupnext.data.BackupStepStatus
 import com.cc.libackupnext.data.RepoOverview
+import com.cc.libackupnext.data.SnapshotMeta
 import com.cc.libackupnext.data.SnapshotOverride
 import com.cc.libackupnext.data.kind
 import com.cc.libackupnext.entity.AppInfo
@@ -38,8 +41,10 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.StringReader
 import java.nio.ByteBuffer
+
+/** 待机分组：完全允许后台行为。只有系统（电池白名单）能给，应用自己 set 会抛异常。 */
+private const val STANDBY_BUCKET_EXEMPTED = 5
 
 /** 备份进度事件，state: running / done / skipped / finished */
 data class BackupProgress(
@@ -387,70 +392,45 @@ object RusticService {
                     emit(kind, "done")
                 }
 
-                // 权限：把快照里的 permissions.json 解出来，逐个 pm grant
+                // 权限 / appops / 电池白名单：解出 permissions.json，全量写回
                 byKind["permissions"]?.let { id ->
-                    if (appUid == null && packageUid(packageName, userId) == null) {
+                    emit("permissions", "running")
+
+                    val uid = appUid ?: packageUid(packageName, userId)
+                    if (uid == null) {
                         emit("permissions", "skipped")
                         return@let
                     }
 
-                    emit("permissions", "running")
                     val dir = File(context.cacheDir, "restore_permissions").apply {
                         deleteRecursively()
                         mkdirs()
                     }
-
-                    val error = restoreTo(
-                        repoPath,
-                        repoPassword,
-                        id,
-                        dir.absolutePath,
-                        delete = false
-                    )
-                    if (error.isNotBlank()) {
-                        dir.deleteRecursively()
-                        emit("permissions", "failed")
-                        return error
+                    val error =
+                        restoreTo(repoPath, repoPassword, id, dir.absolutePath, delete = false)
+                    val json = if (error.isBlank()) {
+                        runCatching {
+                            JSONObject(File(dir, "permissions.json").readText())
+                        }.getOrNull()
+                    } else {
+                        null
                     }
-
-                    val granted = runCatching {
-                        JSONObject(File(dir, "permissions.json").readText()).optJSONArray("granted")
-                    }.getOrNull()
                     dir.deleteRecursively()
 
-                    if (granted == null) {
+                    if (json == null) {
+                        if (error.isNotBlank()) {
+                            emit("permissions", "failed")
+                            return error
+                        }
                         emit("permissions", "skipped")
                         return@let
                     }
 
-                    // 一次 shell 里把所有 pm grant 跑完，避免每条权限都起一次 su
-                    val commands = (0 until granted.length())
-                        .map { granted.optString(it) }
-                        .filter { it.isNotBlank() }
-                        .map { "pm grant --user $userId $packageName $it" }
-
-                    val total = commands.size
-                    val failed = if (total == 0) {
-                        0
-                    } else {
-                        val result = runCatching {
-                            Shell.cmd(*commands.toTypedArray()).exec()
-                        }.getOrNull()
-                        if (result == null || !result.isSuccess) total else 0
+                    val failed = applyPermissions(json, packageName, uid)
+                    if (failed > 0) {
+                        Log.w(TAG, "恢复权限有 $failed 项失败：$packageName")
                     }
-
-                    when {
-                        total == 0 -> emit("permissions", "skipped")
-                        failed == 0 -> emit("permissions", "done")
-                        failed == total -> {
-                            Log.w(TAG, "grant permissions failed: $packageName")
-                            emit("permissions", "failed")
-                        }
-                        else -> {
-                            Log.w(TAG, "grant permissions partly failed: $packageName ($failed/$total)")
-                            emit("permissions", "done")
-                        }
-                    }
+                    emit("permissions", "done")
                 }
 
                 ""
@@ -909,12 +889,23 @@ object RusticService {
         }
 
         /**
-         * 把应用已授予的运行时权限写成 JSON，作为 permissions 快照的源文件。
-         * 拿不到或一个都没授予时返回 null（Rust 侧会标记为跳过）。
+         * 把运行时权限、appops、电池优化白名单、应用待机分组写成 JSON，作为 permissions 快照的源文件。
          */
         private fun writePermissions(packageName: String, userId: Int): String? = runCatching {
-            val granted = grantedRuntimePermissions(packageName, userId)
-            if (granted.isEmpty()) return@runCatching null
+            val info = Refine.unsafeCast<PackageManagerHidden>(context.packageManager)
+                .getPackageInfoAsUser(packageName, PackageManager.GET_PERMISSIONS, userId)
+
+            val requested = (info.requestedPermissions ?: emptyArray())
+                .filter { isRuntimePermission(it) }
+            val granted = requested.filter {
+                context.packageManager.checkPermission(it, packageName) ==
+                        PackageManager.PERMISSION_GRANTED
+            }
+            val appops = collectAppOps(packageName, userId)
+            val whitelisted = isBatteryWhitelisted(packageName)
+            val bucket = standbyBucket(packageName)
+
+            if (granted.isEmpty() && appops == null && !whitelisted) return@runCatching null
 
             val file = File(context.cacheDir, "permissions.json")
             file.writeText(
@@ -922,98 +913,195 @@ object RusticService {
                     put("packageName", packageName)
                     put("userId", userId)
                     put("granted", JSONArray(granted))
+                    put("requested", JSONArray(requested))
+                    if (appops != null) put("appops", appops)
+                    put("batteryWhitelist", whitelisted)
+                    put("standbyBucket", bucket)
                 }.toString()
             )
             file.setLastModified(0L)
             file.absolutePath
         }.getOrNull()
 
-        /** 权限表缓存：一次批量备份里几十个应用只读一次文件。 */
-        private var permissionCacheUserId = -1
-        private var permissionCacheAt = 0L
-        private var permissionCache: Map<String, List<String>> = emptyMap()
+        // ==================== 权限 / appops / 电池白名单 ====================
 
-        /**
-         * 获取应用在用户下已赋予的运行权限
-         * 文件读不到才退回 PackageManager。
-         */
-        private fun grantedRuntimePermissions(packageName: String, userId: Int): List<String> {
-            val now = SystemClock.elapsedRealtime()
-            if (userId != permissionCacheUserId || now - permissionCacheAt > PERMISSION_CACHE_TTL_MS) {
-                permissionCache = runCatching {
-                    parseRuntimePermissions(
-                        File("/data/system/users/$userId/runtime-permissions.xml").readText()
-                    )
-                }.getOrDefault(emptyMap())
-                permissionCacheUserId = userId
-                permissionCacheAt = now
-            }
-
-            if (permissionCache.isNotEmpty()) {
-                return permissionCache[packageName].orEmpty()
-            }
-
-            return runCatching {
-                val hidden = Refine.unsafeCast<PackageManagerHidden>(context.packageManager)
-                val info = hidden.getPackageInfoAsUser(
-                    packageName,
-                    PackageManager.GET_PERMISSIONS,
-                    userId
-                )
-                (info.requestedPermissions ?: emptyArray()).filter { permission ->
-                    isRuntimePermission(permission) &&
-                            context.packageManager.checkPermission(permission, packageName) ==
-                            PackageManager.PERMISSION_GRANTED
-                }
-            }.getOrDefault(emptyList())
+        private val appOpsManager by lazy {
+            Refine.unsafeCast<AppOpsManagerHidden>(context.getSystemService(Context.APP_OPS_SERVICE))
         }
 
-        /**
-         * 解析 runtime-permissions.xml，返回「包名 -> 可恢复的运行时权限」。
-         *
-         * 只取 `granted="true"` 的条目；「仅本次允许」这种一次性授权（带
-         * [TRANSIENT_PERMISSION_FLAGS]）会被跳过——它本来就是临时状态，
-         * 恢复成永久授权反而改了用户的意思。
-         * 「每次询问」的权限在文件里是 granted="false"，这里自然不收录，
-         * 恢复后保持系统默认的询问行为。
-         */
-        private fun parseRuntimePermissions(xml: String): Map<String, List<String>> {
-            val parser = Xml.newPullParser()
-            parser.setInput(StringReader(xml))
+        private val appOpsService by lazy {
+            IAppOpsService.Stub.asInterface(ServiceManager.getService("appops"))
+        }
 
-            val result = mutableMapOf<String, MutableList<String>>()
-            var currentPackage: String? = null
-            var event = parser.eventType
-            while (event != XmlPullParser.END_DOCUMENT) {
-                when (event) {
-                    XmlPullParser.START_TAG -> when (parser.name) {
-                        "pkg" -> currentPackage = parser.getAttributeValue(null, "name")
+        private val idleController by lazy {
+            IDeviceIdleController.Stub.asInterface(ServiceManager.getService("deviceidle"))
+        }
 
-                        "item" -> {
-                            val pkg = currentPackage
-                            if (pkg != null &&
-                                parser.getAttributeValue(null, "granted") == "true"
-                            ) {
-                                val flags = parser.getAttributeValue(null, "flags")
-                                    ?.toLongOrNull() ?: 0L
-                                // 临时授权恢复不了，也不该恢复成永久授权
-                                if (flags and TRANSIENT_PERMISSION_FLAGS == 0L) {
-                                    parser.getAttributeValue(null, "name")?.let { permission ->
-                                        result.getOrPut(pkg) { mutableListOf() } += permission
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    XmlPullParser.END_TAG -> if (parser.name == "pkg") currentPackage = null
+        /** 把一份 PackageOps 列表摊平成「op -> 模式」。 */
+        private fun readOps(entries: List<AppOpsManagerHidden.PackageOps>?): Map<Int, Int> {
+            val result = HashMap<Int, Int>()
+            for (packageOps in entries.orEmpty()) {
+                for (entry in packageOps.ops) {
+                    result[entry.op] = entry.mode
                 }
-                event = parser.next()
             }
             return result
         }
 
-        /** 只关心 dangerous 级别的运行时权限，其余 `pm grant` 也授不了。 */
+        /** 应用显式设置过的 appops，包级和 uid 级分开存；都没有就返回 null。 */
+        private fun collectAppOps(packageName: String, userId: Int): JSONObject? = runCatching {
+            val uid = packageUid(packageName, userId) ?: return@runCatching null
+            // 传 null 表示全部 op —— 用 getOpStrs() 的下标当 op code 会漏掉高位 op
+            val packageOps = readOps(appOpsManager.getOpsForPackage(uid, packageName, null))
+            val uidOps = readOps(appOpsService.getUidOps(uid, null))
+
+            fun dump(source: Map<Int, Int>): JSONObject = JSONObject().apply {
+                for ((op, mode) in source) {
+                    if (mode == AppOpsManager.MODE_DEFAULT) continue
+                    put(op.toString(), mode)
+                }
+            }
+
+            val packageJson = dump(packageOps)
+            val uidJson = dump(uidOps)
+            if (packageJson.length() == 0 && uidJson.length() == 0) {
+                null
+            } else {
+                JSONObject().put("package", packageJson).put("uid", uidJson)
+            }
+        }.onFailure { Log.w(TAG, "collectAppOps 失败", it) }.getOrNull()
+
+        private val usageStats by lazy {
+            Refine.unsafeCast<UsageStatsManagerHidden>(
+                context.getSystemService(Context.USAGE_STATS_SERVICE)
+            )
+        }
+
+        /** 应用待机分组 */
+        private fun standbyBucket(packageName: String): Int =
+            runCatching { usageStats.getAppStandbyBucket(packageName) }.getOrDefault(-1)
+
+        private fun isBatteryWhitelisted(packageName: String): Boolean =
+            runCatching { idleController.isPowerSaveWhitelistApp(packageName) }
+                .onFailure { Log.w(TAG, "读白名单失败", it) }.getOrDefault(false)
+
+        /**
+         * 全量写回权限 / appops / 白名单，返回失败的权限条数。
+         *
+         * 备份里有的恢复成备份的样子，备份里没有的（现在多出来的）权限撤掉、appops 设回默认、白名单移除。
+         */
+        private fun applyPermissions(json: JSONObject, packageName: String, uid: Int): Int {
+            val user = UserHandle.getUserHandleForUid(uid)
+            val manager = Refine.unsafeCast<PackageManagerHidden>(context.packageManager)
+
+            val granted = json.optJSONArray("granted").toStringSet()
+            // 旧快照没有 requested，只按 granted 授权，不做撤销
+            val requested = json.optJSONArray("requested").toStringSet().ifEmpty { granted }
+
+            var failed = 0
+            for (permission in requested) {
+                val result = runCatching {
+                    if (permission in granted) {
+                        manager.grantRuntimePermission(packageName, permission, user)
+                    } else {
+                        manager.revokeRuntimePermission(packageName, permission, user, "restore")
+                    }
+                }
+                if (result.isFailure) failed++
+            }
+
+            applyAppOps(json.optJSONObject("appops"), packageName, uid)
+
+            // 旧快照没有这个字段，不能当成 false —— 那会把白名单删掉
+            if (json.has("batteryWhitelist")) {
+                val wantWhitelist = json.getBoolean("batteryWhitelist")
+                runCatching {
+                    if (wantWhitelist) {
+                        idleController.addPowerSaveWhitelistApp(packageName)
+                    } else {
+                        idleController.removePowerSaveWhitelistApp(packageName)
+                    }
+                }.onFailure { Log.w(TAG, "白名单写入失败（备份=$wantWhitelist）", it) }
+            }
+
+            // 待机分组
+            val bucket = json.optInt("standbyBucket", -1)
+            if (bucket >= 0 && bucket != STANDBY_BUCKET_EXEMPTED) {
+                runCatching { usageStats.setAppStandbyBucket(packageName, bucket) }
+                    .onFailure { Log.w(TAG, "setAppStandbyBucket=$bucket 失败", it) }
+            }
+
+            return failed
+        }
+
+        /** appops 全量写回：逐条比对，不一样的才写，备份里没有的设回默认。 */
+        private fun applyAppOps(json: JSONObject?, packageName: String, uid: Int) {
+            if (json == null) return
+
+            fun modes(section: JSONObject?): Map<Int, Int> {
+                if (section == null) return emptyMap()
+                val result = HashMap<Int, Int>()
+                for (key in section.keys()) {
+                    val op = key.toIntOrNull() ?: continue
+                    result[op] = section.optInt(key, AppOpsManager.MODE_DEFAULT)
+                }
+                return result
+            }
+
+            val wantPackage = modes(json.optJSONObject("package"))
+            val wantUid = modes(json.optJSONObject("uid"))
+            val currentPackage = readOps(appOpsManager.getOpsForPackage(uid, packageName, null))
+            val currentUid = readOps(appOpsService.getUidOps(uid, null))
+
+            // 备份里有的 + 当前有的，并集就是要处理的全部 op（含 10000+ 的高位 op）
+            val opCodes = sortedSetOf<Int>().apply {
+                addAll(wantPackage.keys)
+                addAll(wantUid.keys)
+                addAll(currentPackage.keys)
+                addAll(currentUid.keys)
+            }
+
+            var written = 0
+            for (op in opCodes) {
+                val name = op.toString()
+
+                val packageTarget = wantPackage[op] ?: AppOpsManager.MODE_DEFAULT
+                if ((currentPackage[op] ?: AppOpsManager.MODE_DEFAULT) != packageTarget) {
+                    runCatching { appOpsManager.setMode(op, uid, packageName, packageTarget) }
+                        .onFailure { Log.w(TAG, "setMode $name=$packageTarget 失败", it) }
+                        .onSuccess { written++ }
+                }
+
+                val uidTarget = wantUid[op] ?: AppOpsManager.MODE_DEFAULT
+                // uid 段的 ignore 基本都是「权限没授予」的镜像，设回默认系统会立刻同步回来，
+                if (uidTarget == AppOpsManager.MODE_DEFAULT &&
+                    currentUid[op] == AppOpsManager.MODE_IGNORED
+                ) {
+                    continue
+                }
+                if ((currentUid[op] ?: AppOpsManager.MODE_DEFAULT) != uidTarget) {
+                    runCatching { appOpsManager.setUidMode(op, uid, uidTarget) }
+                        .onFailure { Log.w(TAG, "setUidMode $name=$uidTarget 失败", it) }
+                        .onSuccess { written++ }
+                }
+            }
+            Log.d(
+                TAG,
+                "appops $packageName uid=$uid 写入 $written 条 | " +
+                        "目标 pkg=${wantPackage.size} uid=${wantUid.size} | " +
+                        "当前 pkg=${currentPackage.size} uid=${currentUid.size}"
+            )
+        }
+
+        private fun JSONArray?.toStringSet(): Set<String> {
+            if (this == null) return emptySet()
+            return (0 until length())
+                .map { optString(it) }
+                .filter { it.isNotBlank() }
+                .toSet()
+        }
+
+        /** 只关心 dangerous 级别的运行时权限 */
         private fun isRuntimePermission(permission: String): Boolean = runCatching {
             val info = context.packageManager.getPermissionInfo(permission, 0)
             info.protection and PermissionInfo.PROTECTION_DANGEROUS != 0

@@ -2,6 +2,7 @@ package android.content.pm;
 
 import android.content.IntentSender;
 import android.graphics.drawable.Drawable;
+import android.os.UserHandle;
 import dev.rikka.tools.refine.RefineAs;
 import java.util.List;
 
@@ -41,6 +42,17 @@ public class PackageManagerHidden {
   /** 卸载指定用户下的应用。 */
   public void deletePackageAsUser(String packageName, IPackageDeleteObserver observer, int flags,
       int userId) {
+    throw new RuntimeException("Stub!");
+  }
+
+  /** 授予运行时权限。需要 GRANT_RUNTIME_PERMISSIONS。 */
+  public void grantRuntimePermission(String packageName, String permissionName, UserHandle user) {
+    throw new RuntimeException("Stub!");
+  }
+
+  /** 撤销运行时权限。需要 REVOKE_RUNTIME_PERMISSIONS。 */
+  public void revokeRuntimePermission(String packageName, String permissionName, UserHandle user,
+      String reason) {
     throw new RuntimeException("Stub!");
   }
 }
