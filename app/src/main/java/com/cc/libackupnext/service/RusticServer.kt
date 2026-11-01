@@ -55,8 +55,8 @@ object RusticServer {
     private const val PROGRESS_SLOT_COUNT = (64 * 1024 - PROGRESS_COUNTER_SIZE) / PROGRESS_SLOT_SIZE
     private const val SHARED_MEMORY_NAME = "libackup-rustic"
 
-    /** Android 上外部存储（/data/media）的 gid */
-    private const val MEDIA_RW_GID = 1078
+    /** /data/media/0/Android/data 的 gid（ext_data_rw），应用专属的外部数据目录用 */
+    private const val EXT_DATA_RW_GID = 1078
 
     /** 外部存储（/data/media）的 uid。外部存储的目录属于它，不是当前应用 uid。 */
     private const val MEDIA_RW_UID = 1023
@@ -252,13 +252,14 @@ object RusticServer {
                         return error
                     }
 
-                    // 外部存储的目录归 media_rw 所有，上下文取父目录的（不带 MLS 类别）
+                    // 用户目录归 media_rw、权限 2770 —— 和系统自己建的一致。
                     val restoredDir = File(mediaPath(packageName))
                     fixupTree(
                         restoredDir,
                         MEDIA_RW_UID,
-                        MEDIA_RW_GID,
-                        parentContext = true
+                        MEDIA_RW_UID,
+                        parentContext = true,
+                        dirMode = "2770"
                     )
 
                     emit("dir", "done")
@@ -323,7 +324,7 @@ object RusticServer {
                         return error
                     }
 
-                    val gid = if (kind == "data" || kind == "obb") MEDIA_RW_GID else appUid
+                    val gid = if (kind == "data" || kind == "obb") EXT_DATA_RW_GID else appUid
                     fixupTree(File(dest, packageName), appUid, gid)
 
                     emit(kind, "done")
