@@ -410,6 +410,9 @@ object RusticServer {
             val error = restoreTo(repoPath, repoPassword, snapshotId, dest.absolutePath, delete)
             if (error.isNotBlank()) return error
 
+            // 备份文件夹为空时Rustic不会写入快照中，所以补建一下，如果补建失败直接返回
+            if (!target.exists() && !target.mkdirs()) return null
+
             fixupTree(target, uid, gid, parentContext, dirMode)
             return null
         }
