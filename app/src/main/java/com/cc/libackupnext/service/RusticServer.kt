@@ -55,8 +55,11 @@ object RusticServer {
     private const val PROGRESS_SLOT_COUNT = (64 * 1024 - PROGRESS_COUNTER_SIZE) / PROGRESS_SLOT_SIZE
     private const val SHARED_MEMORY_NAME = "libackup-rustic"
 
-    /** /data/media/0/Android/data 的 gid（ext_data_rw），应用专属的外部数据目录用 */
+    /** /data/media/0/Android/data 的 gid（ext_data_rw）。 */
     private const val EXT_DATA_RW_GID = 1078
+
+    /** /data/media/0/Android/obb 的 gid（ext_obb_rw）。*/
+    private const val EXT_OBB_RW_GID = 1079
 
     /** 外部存储（/data/media）的 uid。外部存储的目录属于它，不是当前应用 uid。 */
     private const val MEDIA_RW_UID = 1023
@@ -324,7 +327,11 @@ object RusticServer {
                         return error
                     }
 
-                    val gid = if (kind == "data" || kind == "obb") EXT_DATA_RW_GID else appUid
+                    val gid = when (kind) {
+                        "data" -> EXT_DATA_RW_GID
+                        "obb" -> EXT_OBB_RW_GID
+                        else -> appUid
+                    }
                     fixupTree(File(dest, packageName), appUid, gid)
 
                     emit(kind, "done")
