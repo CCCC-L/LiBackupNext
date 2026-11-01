@@ -18,7 +18,6 @@ import dev.rikka.tools.refine.Refine
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import kotlin.collections.iterator
 
 /** 本文件统一的日志 tag。 */
 private const val TAG = "AppState"
@@ -288,8 +287,16 @@ internal fun installApk(apk: File, userId: Int): Result<Int> {
  *   外部存储（/data/media/0/...）必须传 true —— 那里的文件不该带 MLS 类别，
  *   带上了就只有「类别相同」的那个应用能访问，别的应用连删除都做不到。
  *   应用数据（/data/user/0/<pkg>）要保持 false，它的类别是按 uid 算的，必须有。
+ * @param dirMode 递归设置所有**目录**的权限，例如外部存储用户目录要 `2770`。
+ *   文件不动 —— 删文件只要求父目录可写，文件本身保持 rustic 恢复出来的权限。
  */
-internal fun fixupTree(file: File, uid: Int, gid: Int, parentContext: Boolean = false) {
+internal fun fixupTree(
+    file: File,
+    uid: Int,
+    gid: Int,
+    parentContext: Boolean,
+    dirMode: String?
+) {
     if (!file.exists()) return
 
     val path = file.absolutePath
@@ -305,9 +312,14 @@ internal fun fixupTree(file: File, uid: Int, gid: Int, parentContext: Boolean = 
     } else {
         "case \"\$ctx\" in *:c*) chcon -Rh \"\$ctx\" \"$path\";; esac"
     }
-    val script = "ctx=\$(ls -Zd \"$ctxSource\" | grep -o 'u:object_r:[^ ]*'); " +
-            "chown -R $uid:$gid \"$path\"; " +
-            chcon
+    val script = buildString {
+        append("ctx=\$(ls -Zd \"$ctxSource\" | grep -o 'u:object_r:[^ ]*'); ")
+        append("chown -R $uid:$gid \"$path\"; ")
+        append(chcon)
+        if (dirMode != null) {
+            append("; find \"$path\" -type d -exec chmod $dirMode {} +")
+        }
+    }
 
     val result = runCatching { Shell.cmd(script).exec() }.getOrNull()
     if (result == null || !result.isSuccess) {

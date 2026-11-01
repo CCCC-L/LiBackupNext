@@ -10,8 +10,8 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -29,21 +29,21 @@ import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.cc.libackupnext.data.AppPrefs
 import com.cc.libackupnext.data.BackupTarget
@@ -60,7 +60,6 @@ import com.cc.libackupnext.ui.UserBadge
 import com.cc.libackupnext.ui.isNonPrimaryUser
 import com.cc.libackupnext.ui.theme.pageTransitionSpec
 import com.cc.libackupnext.ui.util.AppItemCard
-import com.cc.libackupnext.ui.util.FolderIconBox
 import com.cc.libackupnext.ui.util.AppListContainer
 import com.cc.libackupnext.ui.util.formatShortDateTime
 import com.cc.libackupnext.ui.util.rememberAppIconWithBackup
@@ -268,12 +267,6 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                     viewModel = viewModel,
                     app = current,
                     target = if (current.isDirectory) BackupTarget.DIR else BackupTarget.APP,
-                    // 文件夹图标由列表页统一提供，详情页不再自己画一套
-                    iconContent = if (current.isDirectory) {
-                        { FolderIconBox() }
-                    } else {
-                        null
-                    },
                     // 默认目录也在 extraDirs 里，所以移除逻辑只有一种：从集合里删掉
                     onRemoveDir = if (current.isDirectory) {
                         {

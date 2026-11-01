@@ -10,8 +10,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
-/** 应用操作菜单项。 */
-enum class AppAction {
+/** 详情页操作菜单的菜单项。不同目标（应用 / 文件夹 / 以后的 Wi-Fi 等）用不同的子集。 */
+enum class ItemAction {
     LAUNCH,
     FORCE_STOP,
     FREEZE,
@@ -39,19 +39,27 @@ enum class AppAction {
     }
 }
 
+/** 菜单里标红的危险动作。加新动作时想一下要不要放进来。 */
+private val DANGER_ACTIONS = setOf(
+    ItemAction.CLEAR_DATA,
+    ItemAction.UNINSTALL,
+    ItemAction.DELETE_DIR
+)
+
+/** 这个动作是不是危险动作（菜单里标红）。 */
+val ItemAction.isDanger: Boolean get() = this in DANGER_ACTIONS
+
 /**
- * 应用操作菜单，样式与顶部栏的用户 / 排序菜单保持一致。
+ * 操作菜单，样式与顶部栏的用户 / 排序菜单保持一致。
  *
- * @param frozen 应用是否已被冻结，决定显示「冻结应用」还是「解冻应用」。
+ * 只负责渲染 [actions] —— 哪些动作属于哪个目标由 [DetailTarget] 决定，这里不做判断。
  */
 @Composable
 fun AppOptionsMenu(
     expanded: Boolean,
-    frozen: Boolean,
+    actions: List<ItemAction>,
     onDismiss: () -> Unit,
-    onAction: (AppAction) -> Unit,
-    /** 目标是文件夹时只给「打开 / 删除」两项 —— 冻结、清空数据这些对目录没意义。 */
-    isDirectory: Boolean = false
+    onAction: (ItemAction) -> Unit,
 ) {
     val isDark = isSystemInDarkTheme()
     val menuColor = if (isDark) Color(0xFF2B2D31) else Color(0xFFF2F3F7)
@@ -63,49 +71,16 @@ fun AppOptionsMenu(
         shape = RoundedCornerShape(16.dp),
         containerColor = menuColor
     ) {
-        if (isDirectory) {
+        actions.forEach { action ->
             DropdownMenuItem(
-                text = { Text(AppAction.OPEN_DIR.title()) },
-                onClick = { onAction(AppAction.OPEN_DIR) }
-            )
-            DropdownMenuItem(
-                text = { Text(AppAction.DELETE_DIR.title(), color = dangerColor) },
-                onClick = { onAction(AppAction.DELETE_DIR) }
-            )
-            return@DropdownMenu
-        }
-
-        DropdownMenuItem(
-            text = { Text(AppAction.LAUNCH.title()) },
-            onClick = { onAction(AppAction.LAUNCH) }
-        )
-        DropdownMenuItem(
-            text = { Text(AppAction.FORCE_STOP.title()) },
-            onClick = { onAction(AppAction.FORCE_STOP) }
-        )
-        if (frozen) {
-            DropdownMenuItem(
-                text = { Text(AppAction.UNFREEZE.title()) },
-                onClick = { onAction(AppAction.UNFREEZE) }
-            )
-        } else {
-            DropdownMenuItem(
-                text = { Text(AppAction.FREEZE.title()) },
-                onClick = { onAction(AppAction.FREEZE) }
+                text = {
+                    Text(
+                        text = action.title(),
+                        color = if (action.isDanger) dangerColor else Color.Unspecified
+                    )
+                },
+                onClick = { onAction(action) }
             )
         }
-        DropdownMenuItem(
-            text = { Text(AppAction.APP_SETTINGS.title()) },
-            onClick = { onAction(AppAction.APP_SETTINGS) }
-        )
-
-        DropdownMenuItem(
-            text = { Text(AppAction.CLEAR_DATA.title(), color = dangerColor) },
-            onClick = { onAction(AppAction.CLEAR_DATA) }
-        )
-        DropdownMenuItem(
-            text = { Text(AppAction.UNINSTALL.title(), color = dangerColor) },
-            onClick = { onAction(AppAction.UNINSTALL) }
-        )
     }
 }

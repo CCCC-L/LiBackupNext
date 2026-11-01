@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -18,6 +17,10 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -26,40 +29,25 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.cc.libackupnext.entity.AppInfo
-import com.cc.libackupnext.ui.UserBadge
-import com.cc.libackupnext.ui.dialog.AppAction
 import com.cc.libackupnext.ui.dialog.AppOptionsMenu
-import com.cc.libackupnext.ui.isNonPrimaryUser
-import com.cc.libackupnext.ui.util.AppIcon
-import com.cc.libackupnext.ui.util.FrozenSnowflake
-import com.cc.libackupnext.ui.util.rememberAppIconWithBackup
 
 /**
- * 详情页头部：图标 + 名称 / 包名 / 版本 + 右侧「备份」按钮。
+ * 详情页头部：图标 + 名称 / 副标题 / 版本 + 右侧「备份」按钮。
  *
- * 纯展示组件 —— 点图标弹操作菜单、点备份按钮，都由调用方处理。
- *
- * @param iconContent 文件夹等自定义图标，传了就不画应用图标
- * @param latestVersion 应用没装时用最新备份里记录的版本兜底
+ * 目标是应用、文件夹还是以后的 Wi-Fi，全由 [DetailTarget] 描述，这里只负责排版。
  */
 @Composable
 fun DetailHeader(
-    app: AppInfo,
-    iconContent: (@Composable () -> Unit)?,
-    isFrozen: Boolean,
-    isUninstalled: Boolean,
-    canInteract: Boolean,
+    target: DetailTarget,
     isBusy: Boolean,
-    isDirectory: Boolean,
-    showOptions: Boolean,
-    latestVersion: String?,
-    onOpenOptions: () -> Unit,
-    onDismissOptions: () -> Unit,
-    onAction: (AppAction) -> Unit,
-    onBackup: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var showOptions by remember { mutableStateOf(false) }
+
+    // 目标已经不在了（应用没装 / 文件夹删了）：菜单和备份按钮一起置灰。
+    // 恢复入口在下面的备份列表里，不靠这个菜单。
+    val canInteract = !isBusy && !target.isUninstalled
+
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -72,48 +60,25 @@ fun DetailHeader(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
-                    .clickable(enabled = canInteract) { onOpenOptions() }
-                    .alpha(if (isUninstalled) 0.45f else 1f)
+                    .clickable(enabled = canInteract) { showOptions = true }
+                    .alpha(if (target.isUninstalled) 0.45f else 1f)
                     .padding(horizontal = 6.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(modifier = Modifier.size(48.dp)) {
-                    if (iconContent != null) {
-                        iconContent()
-                    } else {
-                        AppIcon(
-                            icon = rememberAppIconWithBackup(app.packageName, app.userId),
-                            name = app.name,
-                            modifier = Modifier.fillMaxSize(),
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                    }
-                    if (isNonPrimaryUser(app.userId)) {
-                        UserBadge(
-                            userId = app.userId,
-                            compact = true,
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(2.dp)
-                        )
-                    }
-                }
+                target.Icon(modifier = Modifier.size(48.dp))
                 Spacer(modifier = Modifier.width(12.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (isFrozen) {
-                            FrozenSnowflake()
-                            Spacer(modifier = Modifier.width(4.dp))
-                        }
+                        target.Badge()
                         Text(
-                            text = app.name,
+                            text = target.title,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            textDecoration = if (isUninstalled) {
+                            textDecoration = if (target.isUninstalled) {
                                 TextDecoration.LineThrough
                             } else {
                                 null
@@ -122,13 +87,12 @@ fun DetailHeader(
                     }
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = app.packageName,
+                        text = target.subtitle,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    val version = app.version.ifBlank { latestVersion.orEmpty() }
-                    if (version.isNotBlank()) {
+                    target.version?.let { version ->
+                        Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = version,
                             style = MaterialTheme.typography.bodySmall,
@@ -140,10 +104,12 @@ fun DetailHeader(
 
             AppOptionsMenu(
                 expanded = showOptions,
-                frozen = isFrozen,
-                onDismiss = onDismissOptions,
-                onAction = onAction,
-                isDirectory = isDirectory
+                actions = target.actions,
+                onDismiss = { showOptions = false },
+                onAction = {
+                    showOptions = false
+                    target.onAction(it)
+                }
             )
         }
 
@@ -161,7 +127,7 @@ fun DetailHeader(
             }
         } else {
             FilledTonalButton(
-                onClick = onBackup,
+                onClick = target.onBackup,
                 enabled = canInteract,
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
             ) {

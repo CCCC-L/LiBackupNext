@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -71,7 +72,8 @@ fun AppItemCard(
                 .padding(start = 16.dp, end = endPadding),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (iconContent != null) {
+            val hasAnyIcon = iconContent != null || icon != null || iconPlaceholder != null
+            if (hasAnyIcon) {
                 Box(
                     modifier = Modifier
                         .padding(vertical = 12.dp)
@@ -79,18 +81,16 @@ fun AppItemCard(
                         .alpha(if (dimmed) 0.45f else 1f),
                     contentAlignment = Alignment.Center
                 ) {
-                    iconContent()
+                    if (iconContent != null) {
+                        iconContent()
+                    } else {
+                        AppIcon(
+                            icon = icon,
+                            name = iconPlaceholder ?: title,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                 }
-                Spacer(modifier = Modifier.width(14.dp))
-            } else if (icon != null || iconPlaceholder != null) {
-                AppIcon(
-                    icon = icon,
-                    name = iconPlaceholder ?: title,
-                    modifier = Modifier
-                        .padding(vertical = 12.dp)
-                        .size(48.dp)
-                        .alpha(if (dimmed) 0.45f else 1f)
-                )
                 Spacer(modifier = Modifier.width(14.dp))
             }
 

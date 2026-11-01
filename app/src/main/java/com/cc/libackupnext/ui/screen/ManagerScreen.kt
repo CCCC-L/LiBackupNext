@@ -15,11 +15,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -36,21 +36,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.cc.libackupnext.data.BackupEntry
 import com.cc.libackupnext.data.BackupStep
 import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.entity.AppInfo
+import com.cc.libackupnext.entity.isDirectory
 import com.cc.libackupnext.service.AppManagerService
 import com.cc.libackupnext.service.BackupProgress
 import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.ui.AppTopBar
 import com.cc.libackupnext.ui.MainViewModel
-import com.cc.libackupnext.ui.dialog.AppAction
 import com.cc.libackupnext.ui.dialog.BackupHelpDialog
 import com.cc.libackupnext.ui.dialog.BackupProgressDialog
+import com.cc.libackupnext.ui.dialog.ItemAction
 import com.cc.libackupnext.ui.dialog.ProgressSection
 import com.cc.libackupnext.ui.dialog.rememberDoubleClickGuard
 import com.cc.libackupnext.ui.screen.detail.BackupEntryRow
@@ -59,6 +60,7 @@ import com.cc.libackupnext.ui.screen.detail.BackupOptionsDialog
 import com.cc.libackupnext.ui.screen.detail.ConfirmActionDialog
 import com.cc.libackupnext.ui.screen.detail.ConfirmDeleteAllDialog
 import com.cc.libackupnext.ui.screen.detail.DetailHeader
+import com.cc.libackupnext.ui.screen.detail.detailTargetOf
 import com.cc.libackupnext.ui.screen.detail.NoteEditDialog
 import com.cc.libackupnext.ui.theme.LocalAppColors
 import com.cc.libackupnext.ui.util.AppIconStore
@@ -88,8 +90,6 @@ fun AppBackupScreen(
     target: BackupTarget = BackupTarget.APP,
     /** 顶栏标题，默认取 target 的标题。 */
     title: String = target.detailTitle,
-    /** 文件夹详情页的图标由列表页传下来，两边样式才能一致。 */
-    iconContent: (@Composable () -> Unit)? = null,
     /** 传了才在右上角菜单里出现「移除该文件夹」。 */
     onRemoveDir: (() -> Unit)? = null
 ) {
@@ -141,12 +141,6 @@ fun AppBackupScreen(
         restoredInstalled = false
     }
 
-    // 已卸载的两种情形：
-    // 1. 当前用户下根本没有这个应用（例如切换到了未安装该应用的用户）；
-    // 2. 只在仓库里有备份（列表里那条 onlyInBackup 记录）—— 列表按它置灰，这里必须一致。
-    // 目录备份没有「安装 / 卸载」这回事
-    val isDirTarget = !target.isApp
-
     // 回到前台时重算目录还在不在 —— 用户可能刚在别的应用里把它删了或重建了
     val dirLifecycleOwner = LocalLifecycleOwner.current
     var dirExistsTick by remember { mutableStateOf(0) }
@@ -162,7 +156,7 @@ fun AppBackupScreen(
     }
 
     // 目录的「已不存在」直接看磁盘；应用还是看安装状态
-    val isUninstalled = if (isDirTarget) {
+    val isUninstalled = if (displayApp.isDirectory) {
         !dirExists
     } else {
         !restoredInstalled &&
@@ -172,8 +166,7 @@ fun AppBackupScreen(
     }
 
     var isBusy by remember { mutableStateOf(false) }
-    var showOptions by remember { mutableStateOf(false) }
-    var confirmAction by remember { mutableStateOf<AppAction?>(null) }
+    var confirmAction by remember { mutableStateOf<ItemAction?>(null) }
 
     // ==================== 备份 ====================
     var showBackupOptions by remember { mutableStateOf(false) }
@@ -223,33 +216,30 @@ fun AppBackupScreen(
     val currentSteps by backupSteps.collectAsState()
 
     val isInstalled = !isUninstalled
-    // 目录就算已经从硬盘上删了也要能恢复回来，所以交互不看 isInstalled
-    val canInteract = (isDirTarget || isInstalled) && !isBusy
-
     // 执行 root 侧操作，完成后刷新应用状态
-    fun runAction(action: AppAction) {
+    fun runAction(action: ItemAction) {
         if (isBusy) return
         scope.launch {
             isBusy = true
             try {
                 withContext(Dispatchers.IO) {
                     when (action) {
-                        AppAction.FORCE_STOP ->
+                        ItemAction.FORCE_STOP ->
                             AppManagerService.forceStop(displayApp.packageName, displayApp.userId)
 
-                        AppAction.FREEZE ->
+                        ItemAction.FREEZE ->
                             AppManagerService.freeze(displayApp.packageName, displayApp.userId)
 
-                        AppAction.UNFREEZE ->
+                        ItemAction.UNFREEZE ->
                             AppManagerService.unFreeze(displayApp.packageName, displayApp.userId)
 
-                        AppAction.CLEAR_DATA ->
+                        ItemAction.CLEAR_DATA ->
                             AppManagerService.clearAppData(displayApp.packageName, displayApp.userId)
 
-                        AppAction.UNINSTALL ->
+                        ItemAction.UNINSTALL ->
                             AppManagerService.unInstall(displayApp.packageName, displayApp.userId)
 
-                        AppAction.DELETE_DIR -> deleteDirectory(displayApp.packageName)
+                        ItemAction.DELETE_DIR -> deleteDirectory(displayApp.packageName)
 
                         else -> Unit
                     }
@@ -257,24 +247,24 @@ fun AppBackupScreen(
 
                 // 冻结 / 解冻 / 卸载后刷新应用状态（重拉列表，状态本来就在列表数据里）
                 when (action) {
-                    AppAction.FREEZE -> {
+                    ItemAction.FREEZE -> {
                         isFrozen = true
                         viewModel.loadApps(scrollToTop = false)
                     }
 
-                    AppAction.UNFREEZE -> {
+                    ItemAction.UNFREEZE -> {
                         isFrozen = false
                         viewModel.loadApps(scrollToTop = false)
                     }
 
-                    AppAction.UNINSTALL -> {
+                    ItemAction.UNINSTALL -> {
                         forceUninstalled = true
                         restoredInstalled = false
                         viewModel.loadApps(scrollToTop = false)
                     }
 
                     // 目录已经从磁盘删掉，退回列表
-                    AppAction.DELETE_DIR -> onBack()
+                    ItemAction.DELETE_DIR -> onBack()
 
                     else -> Unit
                 }
@@ -547,14 +537,14 @@ fun AppBackupScreen(
         }
     }
 
-    fun perform(action: AppAction) {
-        showOptions = false
+    fun perform(action: ItemAction) {
         when (action) {
-            AppAction.LAUNCH -> launchApp(context, displayApp)
-            AppAction.APP_SETTINGS -> openAppSettings(context, displayApp)
-            AppAction.OPEN_DIR -> openDirectory(context, displayApp.packageName)
+            ItemAction.LAUNCH -> launchApp(context, displayApp)
+            ItemAction.APP_SETTINGS -> openAppSettings(context, displayApp)
+            ItemAction.OPEN_DIR -> openDirectory(context, displayApp.packageName)
             // 破坏性操作先确认
-            AppAction.CLEAR_DATA, AppAction.UNINSTALL, AppAction.DELETE_DIR -> confirmAction = action
+            ItemAction.CLEAR_DATA, ItemAction.UNINSTALL, ItemAction.DELETE_DIR -> confirmAction =
+                action
             else -> runAction(action)
         }
     }
@@ -580,7 +570,7 @@ fun AppBackupScreen(
                 onMiddleClick = { showHelpDialog = true },
                 showSortMenu = false,
                 // 用户切换只跟应用有关，文件详情页不显示
-                showUserButton = !isDirTarget,
+                showUserButton = !displayApp.isDirectory,
                 searchPlaceholder = "搜索备注",
                 searchOpen = detailSearchOpen,
                 searchQueryText = detailQuery,
@@ -622,19 +612,15 @@ fun AppBackupScreen(
                 .padding(paddingValues),
             header = {
                 DetailHeader(
-                    app = displayApp,
-                    iconContent = iconContent,
-                    isFrozen = isFrozen,
-                    isUninstalled = isUninstalled,
-                    canInteract = canInteract,
-                    isBusy = isBusy,
-                    isDirectory = isDirTarget,
-                    showOptions = showOptions,
-                    latestVersion = entries.firstOrNull()?.version,
-                    onOpenOptions = { showOptions = true },
-                    onDismissOptions = { showOptions = false },
-                    onAction = { perform(it) },
-                    onBackup = { showBackupOptions = true }
+                    target = detailTargetOf(
+                        kind = target,
+                        app = displayApp.copy(isFrozen = isFrozen),
+                        isUninstalled = isUninstalled,
+                        latestVersion = entries.firstOrNull()?.version,
+                        onAction = { perform(it) },
+                        onBackup = { showBackupOptions = true }
+                    ),
+                    isBusy = isBusy
                 )
             }
         ) { index, entry, shape ->
@@ -720,7 +706,7 @@ fun AppBackupScreen(
     managingEntry?.let { entry ->
         BackupManageDialog(
             entry = entry,
-            isDirectory = isDirTarget,
+            isDirectory = displayApp.isDirectory,
             dirPath = displayApp.packageName,
             canOverwrite = RusticClient.canOverwrite(isInstalled),
             checkedKinds = managingKinds,
@@ -753,7 +739,7 @@ fun AppBackupScreen(
 
     if (showBackupOptions) {
         BackupOptionsDialog(
-            isDirectory = isDirTarget,
+            isDirectory = displayApp.isDirectory,
             dirPath = displayApp.packageName,
             backupApk = backupApk,
             backupUser = backupUser,
@@ -787,15 +773,15 @@ fun AppBackupScreen(
  * 按操作类型生成确认弹窗的标题和正文。
  */
 private fun confirmDialogText(
-    action: AppAction,
+    action: ItemAction,
     appName: String,
     appPath: String
 ): Pair<String, String> =
     when (action) {
-        AppAction.DELETE_DIR ->
+        ItemAction.DELETE_DIR ->
             "删除文件夹" to "确定要删除「$appPath」吗？此操作不可撤销。"
 
-        AppAction.UNINSTALL ->
+        ItemAction.UNINSTALL ->
             "卸载应用" to "确定要卸载「$appName」吗？此操作不可撤销。"
 
         else ->

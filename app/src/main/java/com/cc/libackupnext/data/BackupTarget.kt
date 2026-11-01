@@ -18,14 +18,17 @@ enum class BackupTarget(val unit: String, val kinds: List<String>) {
     /** 已安装的应用：apk / user / data 三列。 */
     APP("个应用", listOf("apk", "user", "data")),
 
-    /** 目录备份：只有一列 dir，快照 label 是 `dir:<绝对路径>`。 */
+    /** 目录备份：只有一列 dir，快照 label 是 `<绝对路径>:dir`。 */
     DIR("个文件夹", listOf("dir"));
 
     /** 是不是「应用」这种目标（决定详情页要不要走安装状态、备份选项长什么样）。 */
     val isApp: Boolean get() = this == APP
 
     /** 详情页顶栏标题。 */
-    val detailTitle: String get() = if (isApp) "应用信息" else "文件信息"
+    val detailTitle: String get() = when (this) {
+        APP -> "应用信息"
+        DIR -> "文件信息"
+    }
 
     /** 详情页点「备份」时默认勾上的内容。 */
     val backupKinds: Set<String> get() = kinds.toSet()
