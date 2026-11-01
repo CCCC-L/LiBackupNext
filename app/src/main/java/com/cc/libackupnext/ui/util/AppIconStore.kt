@@ -19,7 +19,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import com.cc.libackupnext.App
 import com.cc.libackupnext.data.AppPrefs
 import com.cc.libackupnext.service.AppManagerService
-import com.cc.libackupnext.service.RusticService
+import com.cc.libackupnext.service.RusticClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -153,7 +153,7 @@ object AppIconStore {
         val deferred = inflight.computeIfAbsent(key) {
             scope.async {
                 val bitmap = permits.withPermit {
-                    RusticService.loadIcon(packageName)
+                    RusticClient.loadIcon(packageName)
                         .getOrNull()?.let { bytes ->
                             BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                         }

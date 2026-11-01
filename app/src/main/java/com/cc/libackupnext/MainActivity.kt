@@ -28,7 +28,7 @@ import androidx.core.content.ContextCompat
 import com.cc.libackupnext.data.AppPrefs
 import com.cc.libackupnext.service.AppManagerService
 import com.cc.libackupnext.service.RootManager
-import com.cc.libackupnext.service.RusticService
+import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.ui.WelcomeScreen
 import com.cc.libackupnext.ui.screen.AppListScreen
 import com.cc.libackupnext.ui.theme.AppManagerTheme
@@ -108,10 +108,10 @@ private fun AppRoot() {
             scope.launch(Dispatchers.IO) {
                 // 升级后旧进程还在跑上一版代码，先断开、等它真正退出再绑定
                 AppManagerService.restart()
-                RusticService.restart()
+                RusticClient.restart()
                 delay(800.milliseconds)
                 AppManagerService.warmUp()
-                RusticService.warmUp()
+                RusticClient.warmUp()
                 // 上次备份如果被强杀，目标应用可能还停在 SIGSTOP 状态，这里恢复
                 runCatching { AppManagerService.resumeAllPaused() }
             }
@@ -186,7 +186,7 @@ private fun AppRoot() {
                     isInitializing = true
                     initError = null
                     scope.launch {
-                        val result = RusticService.initRepository(rusticPath, rusticPassword)
+                        val result = RusticClient.initRepository(rusticPath, rusticPassword)
                         isInitializing = false
 
                         result

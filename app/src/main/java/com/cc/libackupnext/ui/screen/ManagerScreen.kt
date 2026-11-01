@@ -45,7 +45,7 @@ import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.service.AppManagerService
 import com.cc.libackupnext.service.BackupProgress
-import com.cc.libackupnext.service.RusticService
+import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.ui.AppTopBar
 import com.cc.libackupnext.ui.MainViewModel
 import com.cc.libackupnext.ui.dialog.AppAction
@@ -300,7 +300,7 @@ fun AppBackupScreen(
         progressTitle = "正在备份"
         backupRunning = true
         showBackupProgress = true
-        backupSteps.value = RusticService.backupSteps(kinds)
+        backupSteps.value = RusticClient.backupSteps(kinds)
         val steps = backupSteps.value
         BackupNotifier.start(
             context = context,
@@ -314,7 +314,7 @@ fun AppBackupScreen(
 
         scope.launch {
             val onProgress: (BackupProgress) -> Unit = { progress ->
-                backupSteps.update { RusticService.applyProgress(it, progress) }
+                backupSteps.update { RusticClient.applyProgress(it, progress) }
 
                 val stepIndex = steps.indexOfFirst { it.key == progress.stage }
                 BackupNotifier.update(
@@ -332,9 +332,9 @@ fun AppBackupScreen(
             }
 
             val result = if (overwrite == null) {
-                RusticService.backup(displayApp, kinds, onProgress)
+                RusticClient.backup(displayApp, kinds, onProgress)
             } else {
-                RusticService.overwrite(displayApp, overwrite, kinds, onProgress)
+                RusticClient.overwrite(displayApp, overwrite, kinds, onProgress)
             }
 
             backupRunning = false
@@ -342,7 +342,7 @@ fun AppBackupScreen(
             if (result.isFailure) {
                 backupError = result.exceptionOrNull()?.message ?: "备份失败"
                 ErrorLog.add("备份", backupError.orEmpty(), result.exceptionOrNull())
-                backupSteps.update { RusticService.markFailed(it) }
+                backupSteps.update { RusticClient.markFailed(it) }
             } else {
                 reloadKey++
                 // 备份完只刷新备份数，不用重新拉整个应用列表
@@ -388,7 +388,7 @@ fun AppBackupScreen(
         scope.launch {
             KeepAwake.acquire(context)
             try {
-                RusticService.deleteSelected(entry, kinds)
+                RusticClient.deleteSelected(entry, kinds)
                     .onSuccess {
                         reloadKey++
                         // 删掉一条备份：只刷新列表里的备份数 / 备份时间
@@ -414,7 +414,7 @@ fun AppBackupScreen(
         scope.launch {
             KeepAwake.acquire(context)
             try {
-                RusticService.deleteAll(displayApp.packageName)
+                RusticClient.deleteAll(displayApp.packageName)
                     .onSuccess { count ->
                         Toast.makeText(
                             context,
@@ -442,13 +442,13 @@ fun AppBackupScreen(
     /** 恢复勾选的快照。 */
     fun restoreSelected(entry: BackupEntry) {
         val kinds = managingKinds
-        RusticService.restoreBlockedReason(entry, kinds, isInstalled)?.let { reason ->
+        RusticClient.restoreBlockedReason(entry, kinds, isInstalled)?.let { reason ->
             Toast.makeText(context, reason, Toast.LENGTH_SHORT).show()
             return
         }
 
         managingEntry = null
-        backupSteps.value = RusticService.restoreSteps(entry, kinds)
+        backupSteps.value = RusticClient.restoreSteps(entry, kinds)
         val steps = backupSteps.value
 
         progressTitle = "正在恢复"
@@ -467,13 +467,13 @@ fun AppBackupScreen(
         )
 
         scope.launch {
-            val result = RusticService.restore(
+            val result = RusticClient.restore(
                 app = displayApp,
                 entry = entry,
                 kinds = kinds,
                 installed = isInstalled
             ) { progress ->
-                backupSteps.update { RusticService.applyProgress(it, progress) }
+                backupSteps.update { RusticClient.applyProgress(it, progress) }
 
                 val stepIndex = steps.indexOfFirst { it.key == progress.stage }
                 BackupNotifier.update(
@@ -495,7 +495,7 @@ fun AppBackupScreen(
             if (result.isFailure) {
                 backupError = result.exceptionOrNull()?.message ?: "恢复失败"
                 ErrorLog.add("恢复", backupError.orEmpty(), result.exceptionOrNull())
-                backupSteps.update { RusticService.markFailed(it) }
+                backupSteps.update { RusticClient.markFailed(it) }
             } else {
                 reloadKey++
                 // 恢复可能把已经删掉的目录重新建出来，重算一次「还在不在」，
@@ -516,7 +516,7 @@ fun AppBackupScreen(
     LaunchedEffect(displayApp.packageName, backupRunning, reloadKey) {
         if (backupRunning) return@LaunchedEffect
         entries = withContext(Dispatchers.IO) {
-            RusticService.loadEntries(displayApp.packageName, displayApp.name)
+            RusticClient.loadEntries(displayApp.packageName, displayApp.name)
                 .getOrNull()
                 .orEmpty()
         }
@@ -533,7 +533,7 @@ fun AppBackupScreen(
         }
 
         scope.launch {
-            RusticService.updateEntryDescription(entry, description)
+            RusticClient.updateEntryDescription(entry, description)
                 .onSuccess {
                     reloadKey++
                 }.onFailure {
@@ -722,7 +722,7 @@ fun AppBackupScreen(
             entry = entry,
             isDirectory = isDirTarget,
             dirPath = displayApp.packageName,
-            canOverwrite = RusticService.canOverwrite(isInstalled),
+            canOverwrite = RusticClient.canOverwrite(isInstalled),
             checkedKinds = managingKinds,
             onCheckedChange = { kind, checked ->
                 managingKinds = if (checked) managingKinds + kind else managingKinds - kind

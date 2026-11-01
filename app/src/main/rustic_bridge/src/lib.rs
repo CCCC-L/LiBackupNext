@@ -183,11 +183,11 @@ impl BridgeResponse {
 
 // ==================== 初始化 ====================
 
-/// `RusticService.nativeInitRepo(buffer: ByteBuffer): Int`
+/// `RusticServer.nativeInitRepo(buffer: ByteBuffer): Int`
 ///
 /// 返回 0 成功，1 业务失败，2 共享内存不可用。
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticService_nativeInitRepo<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeInitRepo<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -281,11 +281,11 @@ fn init_repo(path: &str, password: &str) -> Result<(), String> {
 
 // ==================== 查询快照 ====================
 
-/// `RusticService.nativeSetCacheDir(path: String): Int`
+/// `RusticServer.nativeSetCacheDir(path: String): Int`
 ///
 /// 传空串表示关闭缓存。root 服务启动时调一次。
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticService_nativeSetCacheDir<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeSetCacheDir<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     path: JString<'local>,
@@ -307,12 +307,12 @@ pub extern "system" fn Java_com_cc_libackupnext_service_RusticService_nativeSetC
     outcome.resolve::<jni::errors::ThrowRuntimeExAndDefault>()
 }
 
-/// `RusticService.nativeListSnapshots(buffer: ByteBuffer): Int`
+/// `RusticServer.nativeListSnapshots(buffer: ByteBuffer): Int`
 ///
 /// 请求：`{"path":"...","password":"...","package_name":"包名"}`
 /// 响应：`{"ok":true,"snapshots":[{"id","label","tags","time","description"}]}`
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticService_nativeListSnapshots<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeListSnapshots<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -872,12 +872,12 @@ fn write_overview_response(ptr: *mut u8, capacity: usize, response: OverviewResp
     }
 }
 
-/// `RusticService.nativeOverview(buffer: ByteBuffer): Int`
+/// `RusticServer.nativeOverview(buffer: ByteBuffer): Int`
 ///
 /// 一次拿到所有包的备份概况：每个包一条，只带最近一次备份的快照。
 /// 相比「拉全量快照列表」，响应大小只跟应用数量有关，跟备份次数无关。
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticService_nativeOverview<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeOverview<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -930,11 +930,11 @@ pub extern "system" fn Java_com_cc_libackupnext_service_RusticService_nativeOver
     })
 }
 
-/// `RusticService.nativeUpdateDescription(buffer: ByteBuffer): Int`
+/// `RusticServer.nativeUpdateDescription(buffer: ByteBuffer): Int`
 ///
 /// 请求：`{"path","password","ids":["..."],"description":"..."|null}`
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticService_nativeUpdateDescription<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeUpdateDescription<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -1036,9 +1036,9 @@ fn run_simple<'local>(
     outcome.resolve::<jni::errors::ThrowRuntimeExAndDefault>()
 }
 
-/// `RusticService.nativeDeleteSnapshots(buffer: ByteBuffer): Int`
+/// `RusticServer.nativeDeleteSnapshots(buffer: ByteBuffer): Int`
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticService_nativeDeleteSnapshots<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeDeleteSnapshots<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -1168,9 +1168,9 @@ fn write_cleanup_response(ptr: *mut u8, capacity: usize, response: CleanupRespon
     }
 }
 
-/// `RusticService.nativeCleanOrphanIcons(buffer: ByteBuffer): Int`
+/// `RusticServer.nativeCleanOrphanIcons(buffer: ByteBuffer): Int`
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticService_nativeCleanOrphanIcons<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeCleanOrphanIcons<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -1223,11 +1223,11 @@ pub extern "system" fn Java_com_cc_libackupnext_service_RusticService_nativeClea
     })
 }
 
-/// `RusticService.nativePrune(buffer: ByteBuffer): Int`
+/// `RusticServer.nativePrune(buffer: ByteBuffer): Int`
 ///
 /// 删除快照后回收空间：rustic 删快照只是删引用，数据要 prune 才真正释放。
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticService_nativePrune<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativePrune<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -1342,11 +1342,11 @@ fn write_estimate(ptr: *mut u8, capacity: usize, result: Result<u64, String>) {
     }
 }
 
-/// `RusticService.nativePruneEstimate(buffer: ByteBuffer): Int`
+/// `RusticServer.nativePruneEstimate(buffer: ByteBuffer): Int`
 ///
 /// 只算不删，返回 `{"ok":true,"bytes":可回收字节数}`。
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticService_nativePruneEstimate<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativePruneEstimate<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -1375,9 +1375,9 @@ pub extern "system" fn Java_com_cc_libackupnext_service_RusticService_nativePrun
     })
 }
 
-/// `RusticService.nativeRestore(buffer: ByteBuffer): Int`
+/// `RusticServer.nativeRestore(buffer: ByteBuffer): Int`
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticService_nativeRestore<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeRestore<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -1857,11 +1857,11 @@ fn collect_extras(
 
 // ==================== 备份 ====================
 
-/// `RusticService.nativeBackup(buffer: ByteBuffer): Int`
+/// `RusticServer.nativeBackup(buffer: ByteBuffer): Int`
 ///
 /// 返回 0 成功，1 业务失败，2 共享内存不可用。
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticService_nativeBackup<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeBackup<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,

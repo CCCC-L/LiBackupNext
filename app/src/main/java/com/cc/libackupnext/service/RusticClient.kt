@@ -1,0 +1,913 @@
+package com.cc.libackupnext.service
+
+import android.util.Log
+import com.cc.libackupnext.App
+import com.cc.libackupnext.data.AppBackupSummary
+import com.cc.libackupnext.data.AppPrefs
+import com.cc.libackupnext.data.BackupEntry
+import com.cc.libackupnext.data.BackupRequest
+import com.cc.libackupnext.data.BackupSnapshot
+import com.cc.libackupnext.data.BackupStep
+import com.cc.libackupnext.data.BackupStepStatus
+import com.cc.libackupnext.data.RepoOverview
+import com.cc.libackupnext.data.SnapshotMeta
+import com.cc.libackupnext.data.SnapshotOverride
+import com.cc.libackupnext.data.kind
+import com.cc.libackupnext.entity.AppInfo
+import com.cc.libackupnext.util.ErrorLog
+import com.topjohnwu.superuser.Shell
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+
+/**
+ * 业务层：主进程直接用的入口。
+ *
+ * 和 [RusticServer]（root 侧）分开放 —— 那边是 `RootService` + JNI，
+ * 这边是绑定服务、拼请求、把结果整理成 UI 能直接渲染的模型。
+ */
+object RusticClient {
+
+    private const val TAG = "Rustic"
+
+    private val manager by lazy {
+        RootServiceManager<IRusticService>(RusticServer.Service::class.java) {
+            IRusticService.Stub.asInterface(it)
+        }
+    }
+
+    private suspend fun getService(): IRusticService = manager.getService()
+
+    /** 提前绑定 root 服务，避免点初始化时再等 su 握手。 */
+    suspend fun warmUp() {
+        runCatching { getService() }
+            .onFailure { Log.w(TAG, "warmUp failed", it) }
+    }
+
+    /**
+     * 断开并重启 root 服务进程。
+     *
+     * 应用升级后旧进程还跑着上一版 dex，新加的 AIDL 方法会调用失败，
+     * 启动时先断一次，确保进程里跑的是当前 APK 的代码。
+     */
+    fun restart() {
+        manager.release()
+    }
+
+    // ==================== 快照缓存 ====================
+
+    /**
+     * 每个包的备份概况（次数 + 最近一次备份 + 最新 apk 快照）。
+     * 不再拉「全量快照列表」：那样响应大小跟备份次数成正比，仓库大了会撑爆共享内存。
+     * 概况只跟应用数量有关，200 个应用约 160KB。
+     */
+    suspend fun repoOverview(): List<RepoOverview> = withContext(Dispatchers.IO) {
+        if (!AppPrefs.hasRepository()) return@withContext emptyList()
+
+        try {
+            val request = JSONObject().apply {
+                put("path", repoPath)
+                put("password", repoPassword)
+            }
+
+            val json = JSONObject(getService().overview(request.toString()))
+            if (!json.optBoolean("ok", false)) {
+                ErrorLog.add(
+                    "备份概况",
+                    json.optString("error").ifBlank { "读取备份概况失败" }
+                )
+                return@withContext emptyList()
+            }
+
+            val array = json.optJSONArray("packages") ?: JSONArray()
+            buildList {
+                for (index in 0 until array.length()) {
+                    val item = array.getJSONObject(index)
+                    val packageName = item.optString("package")
+                    if (packageName.isBlank()) continue
+
+                    val tags = item.optString("tags")
+                    val time = item.optLong("time")
+                    val description = item.optString("description").takeIf { it.isNotBlank() }
+
+                    val snapshots = item.optJSONArray("snapshots") ?: JSONArray()
+                    add(
+                        RepoOverview(
+                            packageName = packageName,
+                            count = item.optInt("count"),
+                            time = time,
+                            tags = tags,
+                            description = description,
+                            snapshots = buildList {
+                                for (i in 0 until snapshots.length()) {
+                                    val snapshot = snapshots.getJSONObject(i)
+                                    add(
+                                        BackupSnapshot(
+                                            id = snapshot.optString("id"),
+                                            label = snapshot.optString("label"),
+                                            // 同一次备份里这些字段都一样，Rust 侧只回传一份
+                                            tags = tags,
+                                            time = time,
+                                            size = snapshot.optLong("size"),
+                                            description = description
+                                        )
+                                    )
+                                }
+                            },
+                            hasApk = item.optBoolean("has_apk"),
+                            apkTags = item.optString("apk_tags").takeIf { it.isNotBlank() },
+                            apkTime = item.optLong("apk_time"),
+                            hasIcon = item.optBoolean("has_icon")
+                        )
+                    )
+                }
+            }
+        } catch (t: Throwable) {
+            ErrorLog.e(TAG, "repoOverview failed", t)
+            emptyList()
+        }
+    }
+
+    /**
+     * 查询仓库里的快照。
+     *
+     * @param packageName 传 null 表示要全部快照
+     */
+    private suspend fun listSnapshots(
+        repoPath: String,
+        repoPassword: String,
+        packageName: String? = null
+    ): Result<List<BackupSnapshot>> = withContext(Dispatchers.IO) {
+        try {
+            val request = JSONObject().apply {
+                put("path", repoPath)
+                put("password", repoPassword)
+                put("package_name", packageName.orEmpty())
+            }
+
+            val json = JSONObject(getService().listSnapshots(request.toString()))
+            if (!json.optBoolean("ok", false)) {
+                return@withContext Result.failure(
+                    IllegalStateException(json.optString("error").ifBlank { "查询快照失败" })
+                )
+            }
+
+            val array = json.optJSONArray("snapshots") ?: JSONArray()
+            val snapshots = buildList {
+                for (index in 0 until array.length()) {
+                    val item = array.getJSONObject(index)
+                    add(
+                        BackupSnapshot(
+                            id = item.optString("id"),
+                            label = item.optString("label"),
+                            tags = item.optString("tags"),
+                            time = item.optLong("time"),
+                            size = item.optLong("size"),
+                            description = item.optString("description").takeIf { it.isNotBlank() }
+                        )
+                    )
+                }
+            }
+            Result.success(snapshots)
+        } catch (t: Throwable) {
+            ErrorLog.e(TAG, "listSnapshots failed", t)
+            Result.failure(t)
+        }
+    }
+
+    /** 删除一批快照。 */
+    private suspend fun deleteSnapshots(
+        repoPath: String,
+        repoPassword: String,
+        ids: List<String>
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val request = JSONObject().apply {
+                put("path", repoPath)
+                put("password", repoPassword)
+                put("ids", JSONArray(ids))
+            }
+            val error = getService().deleteSnapshots(request.toString())
+            if (error.isNullOrBlank()) Result.success(Unit)
+            else Result.failure(IllegalStateException(error))
+        } catch (t: Throwable) {
+            ErrorLog.e(TAG, "deleteSnapshots failed", t)
+            Result.failure(t)
+        }
+    }
+
+    /**
+     * 备份一个应用。
+     *
+     * @param onProgress 在 binder 线程回调，注意线程安全
+     */
+    private suspend fun runBackup(
+        request: BackupRequest,
+        overrides: Map<String, SnapshotOverride> = emptyMap(),
+        deleteIds: List<String> = emptyList(),
+        batchId: String? = null,
+        iconAlreadyBackedUp: Boolean? = null,
+        parentIds: Map<String, String>? = null,
+        onProgress: (BackupProgress) -> Unit
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val callback = object : IBackupProgressCallback.Stub() {
+                override fun onProgress(progress: String) {
+                    runCatching {
+                        val json = JSONObject(progress)
+                        onProgress(
+                            BackupProgress(
+                                stage = json.optString("stage"),
+                                state = json.optString("state"),
+                                files = json.optLong("files"),
+                                reason = json.optString("reason")
+                            )
+                        )
+                    }
+                }
+            }
+
+            // 目录没有图标，跳过这一步
+            val isDir = request.packageName.startsWith('/')
+
+            // 图标只保留一份：仓库里已有 pkg:icon 就不再备份。
+            // 批量备份时调用方已经知道答案（来自备份概况），不用再查一遍。
+            val hasIcon = isDir || iconAlreadyBackedUp ?: listSnapshots(
+                repoPath = request.repoPath,
+                repoPassword = request.repoPassword,
+                packageName = request.packageName
+            ).getOrNull()?.any { it.label == "${request.packageName}:icon" } ?: false
+
+            val payload = JSONObject().apply {
+                put("repoPath", request.repoPath)
+                put("repoPassword", request.repoPassword)
+                put("packageName", request.packageName)
+                put("appName", request.appName)
+                put("version", request.version)
+                put("userId", request.userId)
+                put("apk", request.backupApk)
+                put("obb", request.backupObb)
+                put("user", request.backupUser)
+                put("data", request.backupData)
+                put("permissions", request.backupPermissions)
+                put("timestamp", System.currentTimeMillis())
+                put("includeIcon", !hasIcon && !isDir)
+                if (!parentIds.isNullOrEmpty()) put("parents", JSONObject(parentIds))
+                // 同批次的多个应用共用一次「打开仓库 + 读索引」
+                if (!batchId.isNullOrBlank()) put("batch", batchId)
+                if (overrides.isNotEmpty()) {
+                    put(
+                        "overrides",
+                        JSONObject().apply {
+                            overrides.forEach { (kind, override) ->
+                                put(
+                                    kind,
+                                    JSONObject().apply {
+                                        put("label", override.label)
+                                        put("tags", override.tags)
+                                        if (override.description != null) {
+                                            put("description", override.description)
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    )
+                }
+            }
+
+            val error = getService().backup(payload.toString(), callback)
+            if (!error.isNullOrBlank()) {
+                return@withContext Result.failure(IllegalStateException(error))
+            }
+
+            // 覆盖备份：新的写成功了再删旧的
+            if (deleteIds.isNotEmpty()) {
+                val deleteRequest = JSONObject().apply {
+                    put("path", request.repoPath)
+                    put("password", request.repoPassword)
+                    put("ids", JSONArray(deleteIds))
+                }
+                val deleteError = getService().deleteSnapshots(deleteRequest.toString())
+                if (!deleteError.isNullOrBlank()) {
+                    return@withContext Result.failure(IllegalStateException(deleteError))
+                }
+            }
+
+            Result.success(Unit)
+        } catch (t: Throwable) {
+            ErrorLog.e(TAG, "backup failed", t)
+            Result.failure(t)
+        }
+    }
+
+    // ==================== 业务层 ====================
+    // 下面是对外真正使用的方法：读 AppPrefs 里的仓库信息，做业务判断和数据处理。
+    // UI 只拿这些方法的返回值渲染，不再自己拼请求、分组快照或判断勾选。
+
+    private val repoPath: String get() = AppPrefs.repoPath
+    private val repoPassword: String get() = AppPrefs.repoPassword
+
+    /**
+     * 初始化 / 校验 rustic 仓库，成功后记住地址和密码。
+     *
+     * @return 成功返回 Unit；失败返回带具体原因的错误。
+     */
+    suspend fun initRepository(path: String, password: String): Result<Unit> {
+        // 空目录 / 空密码都不该建仓库：空密码等于把备份完全敞开
+        if (path.isBlank()) {
+            return Result.failure(IllegalStateException("请先选择仓库目录"))
+        }
+        if (password.isBlank()) {
+            return Result.failure(IllegalStateException("请先输入仓库密码"))
+        }
+
+        return withContext(Dispatchers.IO) {
+            try {
+                val error = getService().initRepo(path, password)
+                if (error.isNullOrBlank()) {
+                    AppPrefs.saveRepository(path, password)
+                    Result.success(Unit)
+                } else {
+                    Result.failure(IllegalStateException(error))
+                }
+            } catch (t: Throwable) {
+                ErrorLog.e(TAG, "initRepository failed", t)
+                Result.failure(t)
+            }
+        }
+    }
+
+    /**
+     * 当前包的备份行（按备份时间分组，最新的在前）。
+     *
+     * 图标快照不展示，同一次备份的 apk / obb / user / user_de / data 合成一行。
+     */
+    suspend fun loadEntries(packageName: String, appName: String): Result<List<BackupEntry>> =
+        runCatching {
+            // 按包名查（rustic 侧按 label 前缀过滤），不再拉整个仓库的快照
+            listSnapshots(repoPath, repoPassword, packageName)
+                .getOrThrow()
+                .toEntries(appName)
+        }
+
+    /**
+     * 仓库里有备份的所有应用（含已安装的），[AppInfo.onlyInBackup] 统一为 true。
+     *
+     * 只列「有 apk 备份」的包：没有 apk 的包恢复不了，不该出现在列表里。
+     * 名字和版本取自**最新那条 apk 快照**的 tag —— 最近一次备份可能没勾 apk，
+     * 那时 apk 快照是更早那次、版本也更旧，跟实际能恢复的包对得上。
+     */
+    suspend fun backupApps(userId: Int, overview: List<RepoOverview>? = null): List<AppInfo> {
+        if (!AppPrefs.hasRepository()) return emptyList()
+
+        // 调用方已经查过概况就直接用，避免列表页一次刷新查两遍仓库
+        return (overview ?: repoOverview())
+            .asSequence()
+            .filter { it.hasApk }
+            .map { overview ->
+                val tags = overview.apkTags.orEmpty()
+                AppInfo(
+                    name = SnapshotMeta.appName(tags)?.ifBlank { overview.packageName }
+                        ?: overview.packageName,
+                    packageName = overview.packageName,
+                    version = SnapshotMeta.version(tags).orEmpty(),
+                    versionCode = 0,
+                    installTime = 0,
+                    updateTime = 0,
+                    userId = userId,
+                    isSystem = false,
+                    isFrozen = false,
+                    onlyInBackup = true
+                )
+            }
+            .toList()
+    }
+
+    /**
+     * 仓库里每个有备份的包：备份次数 + 最近一次备份。
+     *
+     * 一次 IPC 拿到所有包的概况（Rust 侧已经分好组），不再拉全量快照列表。
+     *
+     * @param appNames 包名 -> 应用名，用于拼每行的标题
+     */
+    suspend fun backupOverview(
+        appNames: Map<String, String>,
+        overview: List<RepoOverview>? = null
+    ): List<AppBackupSummary> =
+        (overview ?: repoOverview()).map { overview ->
+            val version = SnapshotMeta.version(overview.tags)
+            AppBackupSummary(
+                packageName = overview.packageName,
+                count = overview.count,
+                latest = BackupEntry(
+                    title = listOfNotNull(
+                        appNames[overview.packageName] ?: overview.packageName,
+                        version
+                    ).filter { it.isNotBlank() }.joinToString(" "),
+                    time = overview.time,
+                    description = overview.description,
+                    version = version,
+                    userName = SnapshotMeta.userName(overview.tags),
+                    snapshots = overview.snapshots
+                ),
+                hasIcon = overview.hasIcon
+            )
+        }.sortedByDescending { it.latest.time }
+
+    /**
+     * 取某个包备份里的图标（应用没装时用）。
+     *
+     * 内部完成：找 `<包名>:icon` 快照 → 导出到临时目录 → 读出字节 → 清理。
+     * 失败就说明没有图标，调用方不用再判断。
+     */
+    suspend fun loadIcon(packageName: String): Result<ByteArray> =
+        withContext(Dispatchers.IO) {
+            val icon = listSnapshots(repoPath, repoPassword, packageName)
+                .getOrNull()
+                ?.firstOrNull { it.label == "$packageName:icon" }
+                ?: return@withContext Result.failure(IllegalStateException("没有图标备份"))
+
+            val dir = File(App.application.cacheDir, "icon_cache/${packageName.hashCode()}")
+            dir.deleteRecursively()
+            if (!dir.mkdirs()) {
+                return@withContext Result.failure(IllegalStateException("无法创建缓存目录"))
+            }
+
+            try {
+                val request = JSONObject().apply {
+                    put("path", repoPath)
+                    put("password", repoPassword)
+                    put("id", icon.id)
+                    put("dest", dir.absolutePath)
+                }
+                val error = getService().exportSnapshot(request.toString())
+                if (!error.isNullOrBlank()) {
+                    return@withContext Result.failure(IllegalStateException(error))
+                }
+
+                val file = dir.listFiles()?.firstOrNull { it.isFile }
+                    ?: return@withContext Result.failure(IllegalStateException("图标文件不存在"))
+
+                Result.success(file.readBytes())
+            } catch (t: Throwable) {
+                Log.w(TAG, "loadIcon failed: $packageName", t)
+                Result.failure(t)
+            } finally {
+                dir.deleteRecursively()
+            }
+        }
+
+    /**
+     * 删除当前包下的所有快照（含图标快照），返回删除数量。
+     */
+    suspend fun deleteAll(packageName: String): Result<Int> {
+        // 按包名查（rustic 侧按 label 前缀过滤），不要拿全量列表自己筛：
+        // 全量列表有条数上限，备份次数多了会漏掉老快照，导致「删不干净」
+        val snapshots = listSnapshots(repoPath, repoPassword, packageName).getOrElse {
+            return Result.failure(it)
+        }
+
+        if (snapshots.isEmpty()) return Result.success(0)
+
+        return deleteSnapshots(repoPath, repoPassword, snapshots.map { it.id })
+            .map { snapshots.size }
+    }
+
+    /**
+     * 回收「备份已经删光、但 `包名:icon` 还留着」的孤儿图标快照。
+     *
+     * 图标快照不属于任何一次备份（没有时间戳分组），所以按备份删的时候碰不到它；
+     * 应用的所有备份都删完之后需要单独清理，否则仓库里会一直留着这些垃圾。
+     *
+     * @return 清掉的图标快照数量
+     */
+    suspend fun cleanOrphanIcons(): Result<Int> = withContext(Dispatchers.IO) {
+        if (!AppPrefs.hasRepository()) return@withContext Result.success(0)
+
+        try {
+            val request = JSONObject().apply {
+                put("path", repoPath)
+                put("password", repoPassword)
+            }
+            val json = JSONObject(getService().cleanOrphanIcons(request.toString()))
+            if (!json.optBoolean("ok", false)) {
+                return@withContext Result.failure(
+                    IllegalStateException(
+                        json.optString("error").ifBlank { "清理孤立图标失败" }
+                    )
+                )
+            }
+            Result.success(json.optInt("removed"))
+        } catch (t: Throwable) {
+            ErrorLog.e(TAG, "cleanOrphanIcons failed", t)
+            Result.failure(t)
+        }
+    }
+
+    /** 删除一行里勾选的快照。 */
+    suspend fun deleteSelected(entry: BackupEntry, kinds: Set<String>): Result<Unit> {
+        val ids = entry.selectedSnapshots(kinds).map { it.id }
+        if (ids.isEmpty()) {
+            return Result.failure(IllegalStateException("请先勾选要删除的内容"))
+        }
+        return deleteSnapshots(repoPath, repoPassword, ids)
+    }
+
+    /**
+     * 回收仓库空间。
+     *
+     * rustic 删快照只是删引用，数据要 prune 才真正释放；删完备份后调一次。
+     */
+    /**
+     * 整理仓库：先回收孤儿图标，再回收已删除备份占用的空间。
+     *
+     * 只有一个入口（设置页），所以固定做彻底清理（repack 所有半空的包）。
+     * 顺序很重要：先删图标快照，它占的数据块才能在同一次 prune 里被回收。
+     *
+     * @return 清掉的孤儿图标数量（没有就是 0）
+     */
+    suspend fun prune(): Result<Int> = withContext(Dispatchers.IO) {
+        try {
+            val request = JSONObject().apply {
+                put("path", repoPath)
+                put("password", repoPassword)
+            }
+            // 删除孤儿图标后再整理空间
+            val removedIcons = cleanOrphanIcons().getOrDefault(0)
+
+            val error = getService().prune(request.toString())
+            if (!error.isNullOrBlank()) {
+                return@withContext Result.failure(IllegalStateException(error))
+            }
+
+            Result.success(removedIcons)
+        } catch (t: Throwable) {
+            ErrorLog.e(TAG, "prune failed", t)
+            Result.failure(t)
+        }
+    }
+
+    /**
+     * 只算不删：估算整理仓库能回收多少字节。
+     *
+     * 走一遍 `prune_plan`（读索引 + 算计划），比真正执行快得多。
+     */
+    suspend fun estimatePrune(): Result<Long> = withContext(Dispatchers.IO) {
+        try {
+            val request = JSONObject().apply {
+                put("path", repoPath)
+                put("password", repoPassword)
+            }
+            val json = JSONObject(getService().pruneEstimate(request.toString()))
+            if (json.optBoolean("ok", false)) {
+                Result.success(json.optLong("bytes", 0L))
+            } else {
+                Result.failure(
+                    IllegalStateException(
+                        json.optString("error").ifBlank { "估算可回收空间失败" }
+                    )
+                )
+            }
+        } catch (t: Throwable) {
+            ErrorLog.e(TAG, "prune estimate failed", t)
+            Result.failure(t)
+        }
+    }
+
+    /** 修改一行里所有快照的备注；description 为 null 表示移除。 */
+    suspend fun updateEntryDescription(entry: BackupEntry, description: String?): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            try {
+                val request = JSONObject().apply {
+                    put("path", repoPath)
+                    put("password", repoPassword)
+                    put("ids", JSONArray(entry.ids))
+                    if (description != null) {
+                        put("description", description)
+                    }
+                }
+
+                val error = getService().updateDescription(request.toString())
+                if (error.isNullOrBlank()) {
+                    Result.success(Unit)
+                } else {
+                    Result.failure(IllegalStateException(error))
+                }
+            } catch (t: Throwable) {
+                ErrorLog.e(TAG, "updateEntryDescription failed", t)
+                Result.failure(t)
+            }
+        }
+
+    /** 覆盖备份按钮是否展示：应用没装就不允许覆盖。 */
+    fun canOverwrite(installed: Boolean): Boolean = installed
+
+    /** 普通备份。 */
+    suspend fun backup(
+        app: AppInfo,
+        kinds: Set<String>,
+        onProgress: (BackupProgress) -> Unit = {},
+        /**
+         * 批量备份的批次标识：同一批里每个应用传同一个值。
+         *
+         * 仓库只会在这一批的第一次打开（scrypt + 读索引 563ms），后面的应用直接复用。
+         * 单独备份不传，行为和原来完全一样。
+         */
+        batchId: String? = null,
+        /**
+         * 仓库里是否已经有这个应用的图标快照。
+         *
+         * 批量备份时由列表页的备份概况直接给，省掉每个应用一次「查这个包的快照」的 IPC
+         * （那是一次全仓库快照扫描）。传 null 就现场查一次。
+         */
+        iconAlreadyBackedUp: Boolean? = null,
+        /**
+         * 类型 -> 上一次同类快照的 id（来自备份概况）。
+         *
+         * 传给 rustic 当 parent：有了它就不用再列一遍全部快照去找 parent。
+         * 传 null 就退回 rustic 的默认行为。
+         */
+        parentIds: Map<String, String>? = null
+    ): Result<Unit> {
+        if (kinds.isEmpty()) {
+            return Result.failure(IllegalStateException("请先选择要备份的内容"))
+        }
+        val result = withAppPaused(app) {
+            runBackup(
+                request(app, kinds),
+                onProgress = onProgress,
+                batchId = batchId,
+                iconAlreadyBackedUp = iconAlreadyBackedUp,
+                parentIds = parentIds
+            )
+        }
+        if (result.isSuccess) afterBackup()
+        return result
+    }
+
+    /**
+     * 覆盖备份：沿用旧快照的 label / tag / 备注，新的写成功了再删掉旧的。
+     */
+    suspend fun overwrite(
+        app: AppInfo,
+        entry: BackupEntry,
+        kinds: Set<String>,
+        onProgress: (BackupProgress) -> Unit = {}
+    ): Result<Unit> {
+        val selected = entry.selectedSnapshots(kinds)
+        if (selected.isEmpty()) {
+            return Result.failure(IllegalStateException("请先勾选要覆盖的内容"))
+        }
+
+        val overrides = selected.associate {
+            it.kind() to SnapshotOverride(it.label, it.tags, it.description)
+        }
+        // user_de 快照由 user 这一步产生，备份请求里按 user 传
+        val backupKinds = selected.map { if (it.kind() == "user_de") "user" else it.kind() }.toSet()
+
+        val result = withAppPaused(app) {
+            runBackup(
+                request = request(app, backupKinds),
+                overrides = overrides,
+                deleteIds = selected.map { it.id },
+                onProgress = onProgress
+            )
+        }
+        if (result.isSuccess) afterBackup()
+        return result
+    }
+
+    /**
+     * 备份期间暂停目标应用：给它所有进程发 SIGSTOP，文件就不会再被改写。
+     *
+     * 备份结束（成功或失败）立刻 SIGCONT 恢复；同时记一份到 AppPrefs，
+     * 万一进程被杀，下次启动会把残留的暂停恢复掉。
+     */
+    private suspend fun <T> withAppPaused(app: AppInfo, block: suspend () -> T): T {
+        val key = "${app.packageName}|${app.userId}"
+        val paused = AppManagerService.pauseApp(app.packageName, app.userId)
+        if (paused) AppPrefs.addPausedApp(key)
+
+        return try {
+            block()
+        } finally {
+            if (paused) {
+                AppManagerService.resumeApp(app.packageName, app.userId)
+                AppPrefs.removePausedApp(key)
+            }
+        }
+    }
+
+    /** 备份成功后的收尾：按设置复制自身安装包。 */
+    private suspend fun afterBackup() {
+        copySelfApkIfNeeded()
+    }
+
+    /** 备份自身：把 LiBackupNext 的安装包复制到仓库根目录，方便从仓库里装回来。 */
+    private suspend fun copySelfApkIfNeeded() = withContext(Dispatchers.IO) {
+        if (!AppPrefs.backupSelf) return@withContext
+        val dir = repoPath
+        if (dir.isBlank()) return@withContext
+
+        runCatching {
+            val app = App.application
+            val source = app.applicationInfo.sourceDir
+            val dest = "$dir/app.apk"
+            val result = Shell.cmd("cp -f \"$source\" \"$dest\"").exec()
+            if (result.isSuccess) {
+                Log.i(TAG, "copySelfApk: $dest")
+            } else {
+                Log.w(TAG, "copySelfApk failed: ${result.err.joinToString()}")
+            }
+        }.onFailure { Log.w(TAG, "copySelfApk failed", it) }
+    }
+
+    /**
+     * 恢复前的检查：返回要提示给用户的原因，null 表示可以恢复。
+     */
+    fun restoreBlockedReason(
+        entry: BackupEntry,
+        kinds: Set<String>,
+        installed: Boolean
+    ): String? {
+        val selected = entry.selectedSnapshots(kinds)
+        if (selected.isEmpty()) return "请先勾选要恢复的内容"
+
+        // 目录备份不依赖应用是否安装
+        if (selected.all { it.kind() == "dir" }) return null
+
+        val hasApk = selected.any { it.kind() == "apk" }
+        val needsApp = selected.any { it.kind() != "apk" }
+        return if (needsApp && !hasApk && !installed) "应用未安装，无法恢复数据" else null
+    }
+
+    /**
+     * 恢复一行里勾选的快照。
+     *
+     * @param installed 应用当前是否已安装（未安装且没勾 apk 时无法恢复数据）
+     */
+    suspend fun restore(
+        app: AppInfo,
+        entry: BackupEntry,
+        kinds: Set<String>,
+        installed: Boolean,
+        onProgress: (BackupProgress) -> Unit = {}
+    ): Result<Unit> {
+        val selected = entry.selectedSnapshots(kinds)
+        restoreBlockedReason(entry, kinds, installed)?.let {
+            return Result.failure(IllegalStateException(it))
+        }
+
+        // 恢复前先停掉应用：一边写一边被覆盖会拿到半新半旧的数据
+        // （目录不是应用，没有进程可停）
+        if (!app.packageName.startsWith('/')) {
+            AppManagerService.stopQuietly(app.packageName, app.userId)
+        }
+
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = JSONObject().apply {
+                    put("repoPath", repoPath)
+                    put("repoPassword", repoPassword)
+                    put("userId", app.userId)
+                    put("packageName", app.packageName)
+                    put("delete", true)
+                    put(
+                        "items",
+                        JSONArray().apply {
+                            selected.forEach { snapshot ->
+                                put(JSONObject().put("kind", snapshot.kind()).put("id", snapshot.id))
+                            }
+                        }
+                    )
+                }
+                val callback = object : IBackupProgressCallback.Stub() {
+                    override fun onProgress(progress: String) {
+                        runCatching {
+                            val json = JSONObject(progress)
+                            onProgress(
+                                BackupProgress(
+                                    stage = json.optString("stage"),
+                                    state = json.optString("state"),
+                                    files = json.optLong("files"),
+                                    reason = json.optString("reason")
+                                )
+                            )
+                        }
+                    }
+                }
+
+                val error = getService().restoreSnapshots(request.toString(), callback)
+                if (error.isNullOrBlank()) Result.success(Unit)
+                else Result.failure(IllegalStateException(error))
+            } catch (t: Throwable) {
+                ErrorLog.e(TAG, "restore failed", t)
+                Result.failure(t)
+            }
+        }
+    }
+
+    // ==================== 进度步骤 ====================
+
+    /** 备份要显示的步骤（顺序固定）。 */
+    fun backupSteps(kinds: Set<String>): List<BackupStep> = buildList {
+        if ("apk" in kinds) {
+            add("apk")
+            // obb 跟着 apk 一起备份
+            add("obb")
+        }
+        if ("user" in kinds) {
+            add("user")
+            add("user_de")
+            add("permissions")
+        }
+        if ("data" in kinds) add("data")
+    }.map { BackupStep(it, BackupStepStatus.WAITING) }
+
+    /** 恢复要显示的步骤：只列出真正勾选到的快照。 */
+    fun restoreSteps(entry: BackupEntry, kinds: Set<String>): List<BackupStep> {
+        val selected = entry.selectedSnapshots(kinds)
+        return buildList {
+            if (selected.any { it.kind() == "dir" }) add("dir")
+            if (selected.any { it.kind() == "apk" }) add("apk")
+            if (selected.any { it.kind() == "obb" }) add("obb")
+            if (selected.any { it.kind() == "user" }) add("user")
+            if (selected.any { it.kind() == "user_de" }) add("user_de")
+            if (selected.any { it.kind() == "permissions" }) add("permissions")
+            if (selected.any { it.kind() == "data" }) add("data")
+        }.map { BackupStep(it, BackupStepStatus.WAITING) }
+    }
+
+    /** 把一条进度事件合并进步骤列表。 */
+    fun applyProgress(steps: List<BackupStep>, progress: BackupProgress): List<BackupStep> {
+        if (progress.stage.isBlank()) return steps
+        return steps.map { step ->
+            if (step.key != progress.stage) {
+                step
+            } else {
+                step.copy(
+                    status = statusOf(progress.state, step.status),
+                    files = progress.files,
+                    reason = progress.reason
+                )
+            }
+        }
+    }
+
+    /** 失败时把还没跑完的步骤标成失败。 */
+    fun markFailed(steps: List<BackupStep>): List<BackupStep> = steps.map {
+        if (it.status == BackupStepStatus.WAITING || it.status == BackupStepStatus.RUNNING) {
+            it.copy(status = BackupStepStatus.FAILED)
+        } else {
+            it
+        }
+    }
+
+    // ==================== 内部 ====================
+
+    private fun request(app: AppInfo, kinds: Set<String>) = BackupRequest(
+        repoPath = repoPath,
+        repoPassword = repoPassword,
+        packageName = app.packageName,
+        appName = app.name,
+        version = app.version,
+        userId = app.userId,
+        backupApk = "apk" in kinds,
+        backupObb = "apk" in kinds,
+        backupUser = "user" in kinds,
+        backupData = "data" in kinds,
+        backupPermissions = "user" in kinds
+    )
+
+    private fun statusOf(state: String, fallback: BackupStepStatus): BackupStepStatus =
+        when (state) {
+            "running" -> BackupStepStatus.RUNNING
+            "done" -> BackupStepStatus.DONE
+            "skipped" -> BackupStepStatus.SKIPPED
+            else -> fallback
+        }
+
+    /** 快照 -> 备份行：去掉 icon，同一次备份（时间戳相同）的合成一行。 */
+    private fun List<BackupSnapshot>.toEntries(appName: String): List<BackupEntry> =
+        asSequence()
+            .filterNot { it.label.endsWith(":icon") }
+            .groupBy { SnapshotMeta.timestamp(it.tags) ?: it.time }
+            .map { (time, group) ->
+                val version = group.firstNotNullOfOrNull { SnapshotMeta.version(it.tags) }
+                BackupEntry(
+                    title = listOfNotNull(appName, version)
+                        .filter { it.isNotBlank() }
+                        .joinToString(" "),
+                    time = time,
+                    description = group.firstNotNullOfOrNull { it.description },
+                    version = version,
+                    userName = group.firstNotNullOfOrNull { SnapshotMeta.userName(it.tags) },
+                    snapshots = group
+                )
+            }
+            .sortedByDescending { it.time }
+            .toList()
+}

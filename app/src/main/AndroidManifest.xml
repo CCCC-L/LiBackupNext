@@ -49,7 +49,7 @@
        android:process=":root"
        tools:ignore="Instantiatable"/>
 
-    <service android:name=".service.RusticService" android:exported="false"
+    <service android:name=".service.RusticServer" android:exported="false"
        android:process=":root"
        tools:ignore="Instantiatable"/>
   </application>

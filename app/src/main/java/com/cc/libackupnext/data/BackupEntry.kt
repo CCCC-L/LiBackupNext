@@ -7,7 +7,7 @@ fun BackupSnapshot.kind(): String = SnapshotMeta.kind(label)
  * 备份页里的一行：同一次备份产生的多个快照（apk / obb / user / user_de / data）。
  *
  * 纯数据模型，UI 直接渲染；分组、勾选换算等逻辑在
- * [com.cc.libackupnext.service.RusticService] 里。
+ * [com.cc.libackupnext.service.Rustic] 里。
  */
 data class BackupEntry(
     val title: String,

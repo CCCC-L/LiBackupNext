@@ -66,7 +66,7 @@ import com.cc.libackupnext.data.SnapshotMeta
 import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.entity.isDirectory
 import com.cc.libackupnext.service.BackupProgress
-import com.cc.libackupnext.service.RusticService
+import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.ui.AppTopBar
 import com.cc.libackupnext.ui.MainViewModel
 import com.cc.libackupnext.ui.dialog.BackupHelpDialog
@@ -245,7 +245,7 @@ private fun BackupBatchScreen(
     // displayApps 为空时（应用列表还没加载完）也要重跑一次，否则默认全选选不到东西
     LaunchedEffect(reloadKey, displayApps.isEmpty()) {
         val names = allApps.associate { it.packageName to it.name }
-        val list = RusticService.backupOverview(names)
+        val list = RusticClient.backupOverview(names)
         overview = list.associateBy { it.packageName }
         viewModel.batchOverviewCache = overview
         // 概况已经是仓库的最新状态，临时记录可以清掉了
@@ -470,7 +470,7 @@ private fun BackupBatchScreen(
                 action(app, kinds) { progress ->
                     val last = progressSections.last()
                     progressSections = progressSections.dropLast(1) +
-                            last.copy(steps = RusticService.applyProgress(last.steps, progress))
+                            last.copy(steps = RusticClient.applyProgress(last.steps, progress))
 
                     val stepIndex = appSteps.indexOfFirst { it.key == progress.stage }
                     BackupNotifier.update(
@@ -491,7 +491,7 @@ private fun BackupBatchScreen(
                     progressError = it.message ?: "操作失败"
                     val last = progressSections.last()
                     progressSections = progressSections.dropLast(1) +
-                            last.copy(steps = RusticService.markFailed(last.steps))
+                            last.copy(steps = RusticClient.markFailed(last.steps))
                 }
                 finished++
             }
@@ -526,10 +526,10 @@ private fun BackupBatchScreen(
             doneTitle = "备份成功",
             isRestore = false,
             list = targets(),
-            stepsOf = { _, kinds -> RusticService.backupSteps(kinds) }
+            stepsOf = { _, kinds -> RusticClient.backupSteps(kinds) }
         ) { app, kinds, onProgress ->
             // 图标有没有备份过，概况里已经带了，不用每个应用再查一次仓库
-            RusticService.backup(
+            RusticClient.backup(
                 app = app,
                 kinds = kinds,
                 onProgress = onProgress,
@@ -553,7 +553,7 @@ private fun BackupBatchScreen(
             val entry = entryOf(app.packageName)
                 ?: return@runBatch Result.failure(IllegalStateException("没有可删除的备份"))
 
-            RusticService.deleteSelected(entry, kinds).onSuccess {
+            RusticClient.deleteSelected(entry, kinds).onSuccess {
                 // 删掉的类型立刻取消勾选并禁止再勾：仓库里已经没有它们了
                 selected[app.packageName] = kindsOf(app.packageName) - kinds
                 deletedKinds = deletedKinds +
@@ -570,11 +570,11 @@ private fun BackupBatchScreen(
             doneTitle = "覆盖成功",
             isRestore = false,
             list = targets(),
-            stepsOf = { _, kinds -> RusticService.backupSteps(kinds) }
+            stepsOf = { _, kinds -> RusticClient.backupSteps(kinds) }
         ) { app, kinds, onProgress ->
             val entry = entryOf(app.packageName)
                 ?: return@runBatch Result.failure(IllegalStateException("没有可覆盖的备份"))
-            RusticService.overwrite(app, entry, kinds, onProgress)
+            RusticClient.overwrite(app, entry, kinds, onProgress)
         }
     }
 
@@ -586,12 +586,12 @@ private fun BackupBatchScreen(
             list = targets(),
             stepsOf = { app, kinds ->
                 val entry = entryOf(app.packageName)
-                if (entry == null) emptyList() else RusticService.restoreSteps(entry, kinds)
+                if (entry == null) emptyList() else RusticClient.restoreSteps(entry, kinds)
             }
         ) { app, kinds, onProgress ->
             val entry = entryOf(app.packageName)
                 ?: return@runBatch Result.failure(IllegalStateException("没有可恢复的备份"))
-            RusticService.restore(app, entry, kinds, installed = !app.onlyInBackup, onProgress = onProgress)
+            RusticClient.restore(app, entry, kinds, installed = !app.onlyInBackup, onProgress = onProgress)
         }
     }
 

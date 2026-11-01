@@ -10,7 +10,7 @@ import com.cc.libackupnext.data.AppPrefs
 import com.cc.libackupnext.data.AppBackupSummary
 import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.service.AppManagerService
-import com.cc.libackupnext.service.RusticService
+import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.util.ErrorLog
 import com.cc.libackupnext.ui.util.AppIconStore
 import kotlinx.coroutines.CancellationException
@@ -161,7 +161,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 // 备份概况只查一次：既用来补「只在备份里」的应用，也用来算备份数
                 val overviewDeferred = async(Dispatchers.IO) {
-                    RusticService.repoOverview()
+                    RusticClient.repoOverview()
                 }
 
                 // 先渲染已安装应用，备份里独有的应用到了再追加。
@@ -179,7 +179,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 val overview = overviewDeferred.await()
                 val installedNames = installed.mapTo(HashSet()) { it.packageName }
-                val merged = installed + RusticService.backupApps(userId, overview)
+                val merged = installed + RusticClient.backupApps(userId, overview)
                     .filter { it.packageName !in installedNames }
                 if (userId != currentUserId.value) return@launch
 
@@ -252,7 +252,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         overview: List<com.cc.libackupnext.data.RepoOverview>? = null
     ) {
         val names = apps.associate { it.packageName to it.name }
-        val summaries = runCatching { RusticService.backupOverview(names, overview) }
+        val summaries = runCatching { RusticClient.backupOverview(names, overview) }
             .getOrDefault(emptyList())
             .associateBy { it.packageName }
 

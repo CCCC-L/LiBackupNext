@@ -53,7 +53,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.BuildConfig
 import com.cc.libackupnext.data.AppPrefs
-import com.cc.libackupnext.service.RusticService
+import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.ui.dialog.PruneProgressDialog
 import com.cc.libackupnext.ui.util.RepoSetupForm
 import com.cc.libackupnext.ui.util.formatSize
@@ -94,7 +94,7 @@ fun SettingsScreen(
         estimating = true
         reclaimable = null
         scope.launch {
-            reclaimable = RusticService.estimatePrune().getOrNull()
+            reclaimable = RusticClient.estimatePrune().getOrNull()
             estimating = false
         }
     }
@@ -135,7 +135,7 @@ fun SettingsScreen(
         scope.launch {
             isInitializing = true
             initError = null
-            RusticService.initRepository(dialogPath, dialogPassword)
+            RusticClient.initRepository(dialogPath, dialogPassword)
                 .onSuccess {
                     repoPath = dialogPath
                     showDialog = false
@@ -413,7 +413,7 @@ fun SettingsScreen(
                             KeepAwake.acquire(context)
                             val result = try {
                                 // 彻底清理：repack 所有半空的包
-                                RusticService.prune()
+                                RusticClient.prune()
                             } finally {
                                 KeepAwake.release()
                             }
