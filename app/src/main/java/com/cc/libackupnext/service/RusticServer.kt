@@ -242,28 +242,22 @@ object RusticServer {
                 byKind["dir"]?.let { id ->
                     emit("dir", "running")
 
-                    // 和备份对称：写到 /data/media/0，而不是 FUSE 的 /sdcard
-                    val parent = File(mediaPath(packageName)).parent
-                    if (parent == null) {
-                        emit("dir", "failed")
-                        return "路径不合法：$packageName"
-                    }
-
-                    val error = restoreTo(repoPath, repoPassword, id, parent, delete = false)
-                    if (error.isNotBlank()) {
-                        emit("dir", "failed")
-                        return error
-                    }
-
+                    // 和备份对称：写到 /data/media/0，而不是 FUSE 的 /sdcard。
                     // 用户目录归 media_rw、权限 2770 —— 和系统自己建的一致。
-                    val restoredDir = File(mediaPath(packageName))
-                    fixupTree(
-                        restoredDir,
-                        MEDIA_RW_UID,
-                        MEDIA_RW_UID,
+                    val error = restoreTree(
+                        repoPath, repoPassword,
+                        snapshotId = id,
+                        target = File(mediaPath(packageName)),
+                        delete = false,
+                        uid = MEDIA_RW_UID,
+                        gid = MEDIA_RW_UID,
                         parentContext = true,
                         dirMode = "2770"
                     )
+                    if (error != null) {
+                        emit("dir", "failed")
+                        return error
+                    }
 
                     emit("dir", "done")
                 }
@@ -312,8 +306,6 @@ object RusticServer {
                         return "应用未安装，无法恢复数据"
                     }
 
-                    emit(kind, "running")
-
                     val dest = when (kind) {
                         "obb" -> "/data/media/$userId/Android/obb"
                         "user" -> "/data/user/$userId"
@@ -321,18 +313,27 @@ object RusticServer {
                         else -> "/data/media/$userId/Android/data"
                     }
 
-                    val error = restoreTo(repoPath, repoPassword, id, dest, deleteFirst)
-                    if (error.isNotBlank()) {
+                    emit(kind, "running")
+                    val error = restoreTree(
+                        repoPath, repoPassword,
+                        snapshotId = id,
+                        target = File(dest, packageName),
+                        delete = deleteFirst,
+                        uid = appUid,
+                        gid = when (kind) {
+                            "data" -> EXT_DATA_RW_GID
+                            "obb" -> EXT_OBB_RW_GID
+                            else -> appUid
+                        },
+                        dirMode = when (kind) {
+                            "obb", "data" -> "2770"
+                            else -> null
+                        }
+                    )
+                    if (error != null) {
                         emit(kind, "failed")
                         return error
                     }
-
-                    val gid = when (kind) {
-                        "data" -> EXT_DATA_RW_GID
-                        "obb" -> EXT_OBB_RW_GID
-                        else -> appUid
-                    }
-                    fixupTree(File(dest, packageName), appUid, gid)
 
                     emit(kind, "done")
                 }
@@ -383,6 +384,34 @@ object RusticServer {
                 Log.e(TAG, "restoreSnapshots failed", t)
                 "恢复异常：${t.message ?: t.javaClass.simpleName}"
             }
+        }
+
+        /**
+         * 把一个快照展开到 [target] 的父目录，再修正 [target] 的归属 / SELinux 上下文。
+         *
+         * @param delete 恢复后删掉父目录里快照没有的文件。**父目录里有别的东西时绝不能开**
+         * @param parentContext 用父目录的 SELinux 上下文（外部存储必须 true）
+         * @param dirMode 恢复后统一设的目录权限；null = 保持快照里记录的权限
+         * @return 出错时返回给用户看的说明，成功返回 null
+         */
+        private fun restoreTree(
+            repoPath: String,
+            repoPassword: String,
+            snapshotId: String,
+            target: File,
+            delete: Boolean,
+            uid: Int,
+            gid: Int,
+            parentContext: Boolean = false,
+            dirMode: String? = null
+        ): String? {
+            val dest = target.parentFile ?: return "路径不合法：${target.absolutePath}"
+
+            val error = restoreTo(repoPath, repoPassword, snapshotId, dest.absolutePath, delete)
+            if (error.isNotBlank()) return error
+
+            fixupTree(target, uid, gid, parentContext, dirMode)
+            return null
         }
 
         /** 把单个快照恢复到 dest。 */
