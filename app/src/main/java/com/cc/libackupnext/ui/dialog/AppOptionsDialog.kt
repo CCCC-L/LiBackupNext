@@ -12,6 +12,7 @@ import androidx.compose.ui.unit.dp
 
 /** 详情页操作菜单的菜单项。不同目标（应用 / 文件夹 / 以后的 Wi-Fi 等）用不同的子集。 */
 enum class ItemAction {
+    /** 应用 */
     LAUNCH,
     FORCE_STOP,
     FREEZE,
@@ -20,10 +21,8 @@ enum class ItemAction {
     CLEAR_DATA,
     UNINSTALL,
 
-    /** 目录专用：用系统文件管理器打开 */
+    /**目录 */
     OPEN_DIR,
-
-    /** 目录专用：把目录从硬盘上删掉 */
     DELETE_DIR;
 
     fun title(): String = when (this) {

@@ -62,10 +62,11 @@ fun BackupManageDialog(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // 目录备份没有可勾选的内容，只显示一句「什么时候备份的哪个路径」
+                // 目录备份没有可勾选的内容，只显示一句「什么时候备份的哪个路径、多大」
                 when (target) {
                     BackupTarget.DIR -> Text(
-                        text = "${formatDateTime(entry.time)} 备份的 $dirPath",
+                        text = "${formatDateTime(entry.time)} 备份的 $dirPath" +
+                                " · ${formatSize(entry.snapshotsOf(BackupGroup.DIR).sumOf { it.size })}",
                         style = MaterialTheme.typography.bodyMedium
                     )
 
