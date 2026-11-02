@@ -4,6 +4,7 @@ import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.entity.DefaultBackupDirs
 import com.cc.libackupnext.entity.dirAppInfo
 import com.cc.libackupnext.entity.isDirectory
+import java.io.File
 
 /**
  * 批量页 / 列表页备份的「目标类型」。
@@ -56,7 +57,9 @@ enum class BackupTarget(val unit: String, val kinds: List<BackupGroup>) {
     ): List<AppInfo> {
         val all = when (this) {
             APP -> apps.filterNot { create && it.onlyInBackup }
-            DIR -> backupDirs(AppPrefs.extraDirs).map { dirAppInfo(it) }
+            DIR -> backupDirs(AppPrefs.extraDirs)
+                .filterNot { create && !File(it).isDirectory }
+                .map { dirAppInfo(it) }
         }
         return if (create) all else all.filter { hasBackup(it.packageName) }
     }
