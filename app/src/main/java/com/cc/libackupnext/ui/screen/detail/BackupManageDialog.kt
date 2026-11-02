@@ -22,7 +22,6 @@ import androidx.compose.ui.window.Dialog
 import com.cc.libackupnext.data.BackupEntry
 import com.cc.libackupnext.data.BackupGroup
 import com.cc.libackupnext.data.BackupTarget
-import com.cc.libackupnext.ui.util.formatDateTime
 import com.cc.libackupnext.ui.util.formatSize
 
 /**
@@ -31,14 +30,13 @@ import com.cc.libackupnext.ui.util.formatSize
  * 纯展示：勾选状态由 [checkedKinds] 传入，任何按钮点击都抛给调用方 —— 双击防误触、
  * 业务调用都留在外层，这样这个弹窗可以独立预览。
  *
- * @param target 应用 / 文件夹：决定列不列 apk/user/data 这些勾选单位
+ * @param target 目标类型：决定列哪几个勾选单位（apk/user/data、dir、wifi……）
  * @param canOverwrite 应用没装时没有可覆盖的内容，按钮不显示
  */
 @Composable
 fun BackupManageDialog(
     entry: BackupEntry,
     target: BackupTarget,
-    dirPath: String,
     canOverwrite: Boolean,
     checkedKinds: Set<BackupGroup>,
     onCheckedChange: (BackupGroup, Boolean) -> Unit,
@@ -62,27 +60,17 @@ fun BackupManageDialog(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // 目录备份没有可勾选的内容，只显示一句「什么时候备份的哪个路径、多大」
-                when {
-                    target == BackupTarget.DIR -> Text(
-                        text = "${formatDateTime(entry.time)} 备份的 $dirPath" +
-                                " · ${formatSize(entry.snapshotsOf(BackupGroup.DIR).sumOf { it.size })}",
-                        style = MaterialTheme.typography.bodyMedium
+                target.kinds.forEach { group ->
+                    val snaps = entry.snapshotsOf(group)
+                    val exists = snaps.isNotEmpty()
+                    ManageOptionRow(
+                        label = group.title,
+                        checked = group in checkedKinds,
+                        enabled = exists,
+                        size = if (exists) formatSize(snaps.sumOf { it.size }) else "",
+                        id = if (exists) snaps.joinToString(" ") { it.id.take(8) } else "",
+                        onCheckedChange = { onCheckedChange(group, it) }
                     )
-
-                    // 应用和系统数据都按自己的 kinds 列勾选框
-                    else -> target.kinds.forEach { group ->
-                        val snaps = entry.snapshotsOf(group)
-                        val exists = snaps.isNotEmpty()
-                        ManageOptionRow(
-                            label = group.title,
-                            checked = group in checkedKinds,
-                            enabled = exists,
-                            size = if (exists) formatSize(snaps.sumOf { it.size }) else "",
-                            id = if (exists) snaps.joinToString(" ") { it.id.take(8) } else "",
-                            onCheckedChange = { onCheckedChange(group, it) }
-                        )
-                    }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
