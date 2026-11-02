@@ -10,7 +10,6 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
@@ -23,9 +22,6 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
-import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -52,16 +48,11 @@ import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.entity.dirAppInfo
 import com.cc.libackupnext.ui.AppBottomBar
 import com.cc.libackupnext.ui.AppTopBar
-import com.cc.libackupnext.ui.MainTab
+import com.cc.libackupnext.ui.HomeTab
 import com.cc.libackupnext.ui.MainViewModel
 import com.cc.libackupnext.ui.SortType
-import com.cc.libackupnext.ui.UserBadge
-import com.cc.libackupnext.ui.isNonPrimaryUser
 import com.cc.libackupnext.ui.theme.pageTransitionSpec
-import com.cc.libackupnext.ui.util.AppItemCard
-import com.cc.libackupnext.ui.util.AppListContainer
 import com.cc.libackupnext.ui.util.formatShortDateTime
-import com.cc.libackupnext.ui.util.rememberAppIconWithBackup
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -81,28 +72,23 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
     val searchQueryText by viewModel.searchQuery.collectAsState()
     val scrollTrigger by viewModel.scrollToTopTrigger.collectAsState()
 
+    // ==================== 页面栈 ====================
+    var route by rememberSaveable { mutableStateOf(AppRoute.LIST) }
+    // 批量页的两个参数：模式 + 从哪个页签进来的（页签决定要列哪些目标）。
+    // 以前是「一种组合一个布尔」，四种组合四个变量
+    var batchMode by rememberSaveable { mutableStateOf(BackupBatchMode.CREATE) }
+    var batchTab by rememberSaveable { mutableStateOf(HomeTab.APPS) }
+    // 详情页是从批量页进来的吗？决定返回时回批量页还是列表页
+    var detailFromBatch by rememberSaveable { mutableStateOf(false) }
+
     var selectedApp by remember { mutableStateOf<AppInfo?>(null) }
     // 记住打开的是哪个包，进程被回收后还能回到这个页面
     var selectedPackage by rememberSaveable { mutableStateOf<String?>(null) }
-    // 新建应用备份页
-    var showNewBackup by rememberSaveable { mutableStateOf(false) }
-    // 管理应用备份页
-    var showManageBackup by rememberSaveable { mutableStateOf(false) }
-    // 新建文件备份页
-    var showNewFileBackup by rememberSaveable { mutableStateOf(false) }
-    // 管理文件备份页
-    var showManageFileBackup by rememberSaveable { mutableStateOf(false) }
-    // 设置页
-    var showSettings by rememberSaveable { mutableStateOf(false) }
-    // 错误日志页
-    var showErrorLog by rememberSaveable { mutableStateOf(false) }
-    // 详情页是从哪个批量页进来的：返回时回到原页面
-    var detailFrom by remember { mutableStateOf<AppRoute?>(null) }
     // 批量页列表的滚动位置：页面被重建时还能回到原来的位置
     val batchListState = rememberLazyListState()
 
-    // 底栏：应用 / 文件。不持久化，每次进应用都先落在「应用」页
-    var tab by remember { mutableStateOf(MainTab.APPS) }
+    // 底栏：应用 / 文件 / 设置。不持久化，每次进应用都先落在「应用」页
+    var tab by remember { mutableStateOf(HomeTab.APPS) }
     // 文件页要备份的目录：默认 4 个 + 用户自己加的
     var extraDirs by remember { mutableStateOf(AppPrefs.extraDirs) }
     val fileDirs = remember(extraDirs) { backupDirs(extraDirs) }
@@ -148,14 +134,23 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
     // LazyColumn 状态，用于滚动控制
     val listState = rememberLazyListState()
 
-    // 往下滑列表时把底栏收起来（向下移出），往上滑或到顶再出来
-    val activeListState = if (tab == MainTab.APPS) listState else fileListState
+    // 往下滑列表时把底栏收起来（向下移出），往上滑或到顶再出来。
+    // 设置页不是列表，没有滚动状态可跟，底栏一直显示。
+    val activeListState = when (tab) {
+        HomeTab.APPS -> listState
+        HomeTab.FILES -> fileListState
+        HomeTab.SETTINGS -> null
+    }
     var lastScrollPos by remember { mutableStateOf(0) }
     var barVisible by remember { mutableStateOf(true) }
     LaunchedEffect(activeListState) {
+        val state = activeListState
+        if (state == null) {
+            barVisible = true
+            return@LaunchedEffect
+        }
         snapshotFlow {
-            activeListState.firstVisibleItemIndex * 100_000 +
-                    activeListState.firstVisibleItemScrollOffset
+            state.firstVisibleItemIndex * 100_000 + state.firstVisibleItemScrollOffset
         }.collect { pos ->
             if (pos > lastScrollPos + 24) {
                 barVisible = false
@@ -166,9 +161,6 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
         }
     }
 
-    // 下拉刷新状态（指示器要用）
-    val pullState = rememberPullToRefreshState()
-
     // 滚动触发器变化 → 回到顶部
     LaunchedEffect(scrollTrigger) {
         if (scrollTrigger > 0) {
@@ -176,31 +168,36 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
         }
     }
 
+    // ==================== 导航 ====================
+    fun openBatch(mode: BackupBatchMode, from: HomeTab) {
+        if (isSearching) viewModel.toggleSearch()
+        batchMode = mode
+        batchTab = from
+        route = AppRoute.BATCH
+    }
+
+    fun openDetail(app: AppInfo, fromBatch: Boolean) {
+        selectedApp = app
+        selectedPackage = app.packageName
+        detailFromBatch = fromBatch
+        route = AppRoute.DETAIL
+    }
+
+    fun closeDetail() {
+        selectedApp = null
+        selectedPackage = null
+        route = if (detailFromBatch) AppRoute.BATCH else AppRoute.LIST
+        detailFromBatch = false
+    }
+
+    // 搜索优先响应返回
     BackHandler(enabled = isSearching) {
         viewModel.toggleSearch()
     }
 
-    // 新建备份页优先响应返回
-    BackHandler(enabled = showNewBackup) {
-        showNewBackup = false
-    }
-
-    // 管理备份页优先响应返回
-    BackHandler(enabled = showManageBackup) {
-        showManageBackup = false
-    }
-
-    BackHandler(enabled = showNewFileBackup) { showNewFileBackup = false }
-    BackHandler(enabled = showManageFileBackup) { showManageFileBackup = false }
-
-    // 设置页优先响应返回
-    BackHandler(enabled = showSettings) {
-        showSettings = false
-    }
-
-    // 错误日志页优先响应返回
-    BackHandler(enabled = showErrorLog) {
-        showErrorLog = false
+    // 批量页 / 错误日志：返回列表页。详情页自己处理返回（onBack）
+    BackHandler(enabled = route == AppRoute.BATCH || route == AppRoute.ERROR_LOG) {
+        route = AppRoute.LIST
     }
 
     // 页面内容单独记一份：切用户时 AppInfo 变了但页面不变，避免重放进入动画
@@ -209,55 +206,26 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
         if (selectedApp != null) pageApp = selectedApp
     }
 
-    val route = when {
-        showNewFileBackup -> AppRoute.NEW_FILE_BACKUP
-        showManageFileBackup -> AppRoute.MANAGE_FILE_BACKUP
-        showNewBackup -> AppRoute.NEW_BACKUP
-        showManageBackup -> AppRoute.MANAGE_BACKUP
-        showSettings -> AppRoute.SETTINGS
-        showErrorLog -> AppRoute.ERROR_LOG
-        selectedApp != null -> AppRoute.DETAIL
-        else -> AppRoute.LIST
-    }
-
     AnimatedContent(
         targetState = route,
         // 层级越深越靠右：进入时从右滑入，返回时反向
-        transitionSpec = pageTransitionSpec { it.ordinal },
+        transitionSpec = pageTransitionSpec { it.depth },
         label = "PageTransition"
     ) { target ->
         when (target) {
-            AppRoute.NEW_BACKUP -> AppBackupScreen(
+            AppRoute.BATCH -> BackupBatchScreen(
                 viewModel = viewModel,
-                onBack = { showNewBackup = false },
+                mode = batchMode,
+                tab = batchTab,
+                onBack = { route = AppRoute.LIST },
                 onSwitchMode = {
-                    if (isSearching) viewModel.toggleSearch()
-                    showNewBackup = false
-                    showManageBackup = true
+                    batchMode = if (batchMode == BackupBatchMode.CREATE) {
+                        BackupBatchMode.MANAGE
+                    } else {
+                        BackupBatchMode.CREATE
+                    }
                 },
-                onOpenAppDetail = { app ->
-                    detailFrom = AppRoute.NEW_BACKUP
-                    showNewBackup = false
-                    selectedApp = app
-                    selectedPackage = app.packageName
-                },
-                listState = batchListState
-            )
-
-            AppRoute.MANAGE_BACKUP -> ManageBackupScreen(
-                viewModel = viewModel,
-                onBack = { showManageBackup = false },
-                onSwitchMode = {
-                    if (isSearching) viewModel.toggleSearch()
-                    showManageBackup = false
-                    showNewBackup = true
-                },
-                onOpenAppDetail = { app ->
-                    detailFrom = AppRoute.MANAGE_BACKUP
-                    showManageBackup = false
-                    selectedApp = app
-                    selectedPackage = app.packageName
-                },
+                onOpenAppDetail = { app -> openDetail(app, fromBatch = true) },
                 listState = batchListState
             )
 
@@ -272,86 +240,28 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                             val next = AppPrefs.extraDirs - current.packageName
                             AppPrefs.extraDirs = next
                             extraDirs = next
-                            selectedApp = null
-                            selectedPackage = null
+                            closeDetail()
                         }
                     } else {
                         null
                     },
-                    onBack = {
-                        selectedApp = null
-                        selectedPackage = null
-                        when (detailFrom) {
-                            AppRoute.NEW_BACKUP -> showNewBackup = true
-                            AppRoute.MANAGE_BACKUP -> showManageBackup = true
-                            AppRoute.NEW_FILE_BACKUP -> showNewFileBackup = true
-                            AppRoute.MANAGE_FILE_BACKUP -> showManageFileBackup = true
-                            else -> Unit
-                        }
-                        detailFrom = null
-                    },
-                    // 只有从管理备份页进来才「点备份 = 选中并返回」，
-                    // 从应用列表进来点卡片还是改备注
-                    // 从「管理备份」页进来的：点列表就是选中这条备份并返回原页面。
-                    // 应用备份和文件备份走同一套逻辑，只是退回去的页面不同。
-                    onSelectBackup = when (detailFrom) {
-                        AppRoute.MANAGE_BACKUP, AppRoute.MANAGE_FILE_BACKUP -> { entry ->
-                            val backToFile = detailFrom == AppRoute.MANAGE_FILE_BACKUP
+                    onBack = { closeDetail() },
+                    // 从「管理备份」页进来时，点一条备份 = 选中它并返回原页面
+                    onSelectBackup = if (detailFromBatch && batchMode == BackupBatchMode.MANAGE) {
+                        { entry ->
                             viewModel.pendingSingleSelection =
                                 current.packageName to entry.availableKinds.toSet()
                             viewModel.selectedEntries[current.packageName] = entry
-                            selectedApp = null
-                            selectedPackage = null
-                            detailFrom = null
-                            if (backToFile) showManageFileBackup = true else showManageBackup = true
+                            closeDetail()
                         }
-
-                        else -> null
+                    } else {
+                        null
                     }
                 )
             }
 
-            AppRoute.NEW_FILE_BACKUP -> AppBackupScreen(
-                viewModel = viewModel,
-                onBack = { showNewFileBackup = false },
-                onSwitchMode = {
-                    showNewFileBackup = false
-                    showManageFileBackup = true
-                },
-                onOpenAppDetail = { app ->
-                    detailFrom = AppRoute.NEW_FILE_BACKUP
-                    showNewFileBackup = false
-                    selectedApp = app
-                    selectedPackage = app.packageName
-                },
-                listState = batchListState,
-                target = BackupTarget.DIR
-            )
-
-            AppRoute.MANAGE_FILE_BACKUP -> ManageBackupScreen(
-                viewModel = viewModel,
-                onBack = { showManageFileBackup = false },
-                onSwitchMode = {
-                    showManageFileBackup = false
-                    showNewFileBackup = true
-                },
-                onOpenAppDetail = { app ->
-                    detailFrom = AppRoute.MANAGE_FILE_BACKUP
-                    showManageFileBackup = false
-                    selectedApp = app
-                    selectedPackage = app.packageName
-                },
-                listState = batchListState,
-                target = BackupTarget.DIR
-            )
-
-            AppRoute.SETTINGS -> SettingsScreen(
-                onBack = { showSettings = false },
-                onSettingChanged = { viewModel.loadApps(scrollToTop = false) }
-            )
-
             AppRoute.ERROR_LOG -> ErrorLogScreen(
-                onBack = { showErrorLog = false }
+                onBack = { route = AppRoute.LIST }
             )
 
             AppRoute.LIST -> Scaffold(
@@ -360,37 +270,34 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                 topBar = {
                     AppTopBar(
                         viewModel = viewModel,
-                        title = appName,
-                        // 文件页不显示用户切换：文件夹备份只做主用户
-                        showUserButton = tab == MainTab.APPS,
-                        // 两个页签搜的东西不一样，占位文案跟着换
-                        searchPlaceholder = if (tab == MainTab.FILES) {
-                            "搜索文件夹路径或名称"
-                        } else {
-                            "搜索应用名称或包名"
-                        },
+                        title = if (tab == HomeTab.SETTINGS) tab.label else appName,
+                        // 用户切换只跟应用有关
+                        showUserButton = tab == HomeTab.APPS,
+                        // 设置页没有可搜 / 可排序的东西
+                        showSearch = tab != HomeTab.SETTINGS,
+                        showSortMenu = tab != HomeTab.SETTINGS,
+                        searchPlaceholder = tab.searchHint,
                         pageBackground = pageBackground,
                         searchBarBackground = searchBarBackground,
-                        onCreateBackup = {
-                            if (isSearching) viewModel.toggleSearch()
-                            if (tab == MainTab.FILES) showNewFileBackup = true else showNewBackup = true
+                        // 备份入口只给「备份目标列表」页
+                        onCreateBackup = if (tab.isTargetList) {
+                            { openBatch(BackupBatchMode.CREATE, tab) }
+                        } else {
+                            null
                         },
-                        onManageBackup = {
-                            if (isSearching) viewModel.toggleSearch()
-                            if (tab == MainTab.FILES) showManageFileBackup = true else showManageBackup = true
+                        onManageBackup = if (tab.isTargetList) {
+                            { openBatch(BackupBatchMode.MANAGE, tab) }
+                        } else {
+                            null
                         },
-                        createBackupLabel = if (tab == MainTab.FILES) "新建文件备份" else "新建应用备份",
-                        manageBackupLabel = if (tab == MainTab.FILES) "管理文件备份" else "管理应用备份",
-                        onOpenSettings = {
-                            if (isSearching) viewModel.toggleSearch()
-                            showSettings = true
-                        },
+                        createBackupLabel = tab.createLabel,
+                        manageBackupLabel = tab.manageLabel,
                         onOpenErrorLog = {
                             if (isSearching) viewModel.toggleSearch()
-                            showErrorLog = true
+                            route = AppRoute.ERROR_LOG
                         },
                         // 文件页的「重新加载」重算目录列表，顺手刷新备份数量
-                        onReload = if (tab == MainTab.FILES) {
+                        onReload = if (tab == HomeTab.FILES) {
                             {
                                 dirRefreshTick++
                                 viewModel.loadApps()
@@ -402,124 +309,103 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                 }
             ) { paddingValues ->
                 Box(modifier = Modifier.fillMaxSize()) {
-                AnimatedContent(
-                    targetState = tab,
-                    // 左右方向：切到文件页从右边进，切回应用页从左边进
-                    transitionSpec = pageTransitionSpec<MainTab> { it.ordinal },
-                    label = "ListTab"
-                ) { current ->
-                    if (current == MainTab.FILES) {
-                        FileListScreen(
-                            dirs = fileDirs,
-                            refreshTick = dirRefreshTick,
-                            query = searchQueryText,
-                            summaries = backupSummaries,
-                            listState = fileListState,
-                            onOpen = { path ->
-                                selectedApp = dirAppInfo(path)
-                                selectedPackage = path
-                            },
-                            onAdd = { path ->
-                                val next = AppPrefs.extraDirs + path
-                                AppPrefs.extraDirs = next
-                                extraDirs = next
-                            },
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(paddingValues)
-                        )
-                    } else {
-                    val contentModifier = Modifier
-                        .fillMaxSize()
-                        .padding(paddingValues)
-
-                    // 下拉刷新：手势只作用于列表，刷新时不显示全屏 loading
-                    PullToRefreshBox(
-                        isRefreshing = isRefreshing,
-                        onRefresh = { viewModel.refresh() },
-                        modifier = contentModifier,
-                        state = pullState,
-                        indicator = {
-                            PullToRefreshDefaults.LoadingIndicator(
-                                state = pullState,
+                    AnimatedContent(
+                        targetState = tab,
+                        // 左右方向：切到右边的页签从右边进，切回来反向
+                        transitionSpec = pageTransitionSpec<HomeTab> { it.ordinal },
+                        label = "ListTab"
+                    ) { current ->
+                        when (current) {
+                            HomeTab.FILES -> FileListScreen(
+                                dirs = fileDirs,
+                                refreshTick = dirRefreshTick,
+                                query = searchQueryText,
+                                summaries = backupSummaries,
+                                listState = fileListState,
+                                onOpen = { path ->
+                                    openDetail(dirAppInfo(path), fromBatch = false)
+                                },
+                                onAdd = { path ->
+                                    val next = AppPrefs.extraDirs + path
+                                    AppPrefs.extraDirs = next
+                                    extraDirs = next
+                                },
+                                modifier = Modifier.padding(paddingValues),
                                 isRefreshing = isRefreshing,
-                                modifier = Modifier.align(Alignment.TopCenter)
-                            )
-                        }
-                    ) {
-                        when {
-                            displayApps.isEmpty() && isLoading ->
-                                LoadingState(Modifier.fillMaxSize())
-
-                            displayApps.isEmpty() && loadError != null -> ErrorState(
-                                modifier = Modifier.fillMaxSize(),
-                                message = loadError.orEmpty(),
-                                onRetry = { viewModel.loadApps() }
+                                onRefresh = {
+                                    // 目录可能在别处被删了：重算一遍存在性，再刷新备份数
+                                    dirRefreshTick++
+                                    viewModel.refresh()
+                                }
                             )
 
-                            else -> AppListContainer(
-                                items = displayApps,
-                                state = listState,
-                                modifier = Modifier.fillMaxSize(),
-                                // 底部给悬浮底栏留空间，最后一条能滚到它上面
-                                contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 96.dp),
-                                key = { _, app -> app.packageName }
-                            ) { _, app, shape ->
-                                val userBadge: (@Composable () -> Unit)? =
-                                    if (isNonPrimaryUser(app.userId)) {
-                                        { UserBadge(userId = app.userId) }
-                                    } else {
-                                        null
-                                    }
+                            HomeTab.SETTINGS -> SettingsContent(
+                                // 底部给悬浮底栏留空间，最后一项能滚到它上面
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(paddingValues)
+                                    .padding(bottom = 88.dp),
+                                onSettingChanged = {
+                                    viewModel.loadApps(scrollToTop = false)
+                                }
+                            )
 
-                                AppItemCard(
-                                    // 本机取不到图标（其他用户的应用 / 只在备份里）就回落到仓库图标
-                                    icon = rememberAppIconWithBackup(app.packageName, app.userId),
-                                    iconPlaceholder = app.name,
-                                    frozen = app.isFrozen,
-                                    dimmed = app.onlyInBackup,
-                                    title = app.name,
-                                    subtitle = app.packageName,
-                                    // 备份数放在包名下面（版本号不再显示）
-                                    bottomText = "${backupSummaries[app.packageName]?.count ?: 0}个备份",
+                            HomeTab.APPS -> when {
+                                displayApps.isEmpty() && isLoading -> LoadingState(
+                                    Modifier
+                                        .fillMaxSize()
+                                        .padding(paddingValues)
+                                )
+
+                                displayApps.isEmpty() && loadError != null -> ErrorState(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(paddingValues),
+                                    message = loadError.orEmpty(),
+                                    onRetry = { viewModel.loadApps() }
+                                )
+
+                                else -> TargetListScreen(
+                                    rows = displayApps.map { TargetRow(BackupTarget.APP, it) },
+                                    summaries = backupSummaries,
+                                    listState = listState,
+                                    onOpen = { app -> openDetail(app, fromBatch = false) },
+                                    modifier = Modifier.padding(paddingValues),
+                                    isRefreshing = isRefreshing,
+                                    onRefresh = { viewModel.refresh() },
                                     // 按备份时间排序时，再下面显示备份时间；没备份就不显示
-                                    extraBottomText = if (sortType == SortType.BACKUP_TIME) {
-                                        backupSummaries[app.packageName]?.latest?.time
-                                            ?.takeIf { it > 0 }
-                                            ?.let { "备份于 ${formatShortDateTime(it)}" }
-                                    } else {
-                                        null
-                                    },
-                                    shape = shape,
-                                    trailingContent = userBadge,
-                                    onClick = {
-                                        selectedApp = app
-                                        selectedPackage = app.packageName
+                                    extraBottomText = { app ->
+                                        if (sortType == SortType.BACKUP_TIME) {
+                                            backupSummaries[app.packageName]?.latest?.time
+                                                ?.takeIf { it > 0 }
+                                                ?.let { "备份于 ${formatShortDateTime(it)}" }
+                                        } else {
+                                            null
+                                        }
                                     }
                                 )
                             }
                         }
                     }
-                    }
-                }
+
                     AnimatedVisibility(
                         visible = barVisible,
                         enter = slideInVertically(tween(200)) { it },
                         exit = slideOutVertically(tween(200)) { it },
                         modifier = Modifier.align(Alignment.BottomCenter)
                     ) {
-                    AppBottomBar(
-                        selected = tab,
-                        onSelect = {
-                            if (isSearching) viewModel.toggleSearch()
-                            tab = it
-                        },
-                        containerColor = if (isDark) {
-                            MaterialTheme.colorScheme.surfaceContainerHigh
-                        } else {
-                            Color(0xFFF2F3F7)
-                        },
-                    )
+                        AppBottomBar(
+                            selected = tab,
+                            onSelect = {
+                                if (isSearching) viewModel.toggleSearch()
+                                tab = it
+                            },
+                            containerColor = if (isDark) {
+                                MaterialTheme.colorScheme.surfaceContainerHigh
+                            } else {
+                                Color(0xFFF2F3F7)
+                            },
+                        )
                     }
                 }
             }
@@ -527,9 +413,19 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
     }
 }
 
-/** 应用列表页的层级：列表 / 应用详情 / 新建备份 / 管理备份。 */
-private enum class AppRoute {
-    LIST, DETAIL, NEW_BACKUP, MANAGE_BACKUP, SETTINGS, ERROR_LOG, NEW_FILE_BACKUP, MANAGE_FILE_BACKUP
+/**
+ * 主页面的页面栈。
+ *
+ * 底栏的三个页签都在这一个 route 里（[LIST]），切页签不算换页；
+ * 只有详情 / 批量备份 / 错误日志才是压在上面的页面。
+ *
+ * @param depth 转场方向：越深越靠右
+ */
+private enum class AppRoute(val depth: Int) {
+    LIST(0),
+    BATCH(1),
+    ERROR_LOG(1),
+    DETAIL(2)
 }
 
 @Composable

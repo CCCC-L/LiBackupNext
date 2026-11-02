@@ -13,9 +13,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -24,11 +25,41 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import com.cc.libackupnext.data.BackupTarget
 
-/** 主页面的两个页签。 */
-enum class MainTab(val label: String, val icon: ImageVector) {
-    APPS("应用", Icons.Filled.Apps),
-    FILES("文件", Icons.Filled.Folder)
+/**
+ * 主页面的页签。
+ *
+ * @param targets 这一页要列哪些备份目标。空 = 不是备份目标列表（设置页）。
+ * @param searchHint / createLabel / manageLabel 顶栏文案；只有目标列表页用得到。
+ */
+enum class HomeTab(
+    val label: String,
+    val icon: ImageVector,
+    val targets: List<BackupTarget>,
+    val searchHint: String = "",
+    val createLabel: String = "",
+    val manageLabel: String = ""
+) {
+    APPS(
+        "应用", Icons.Filled.Apps, listOf(BackupTarget.APP),
+        searchHint = "搜索应用名称或包名",
+        createLabel = "新建应用备份",
+        manageLabel = "管理应用备份"
+    ),
+
+    FILES(
+        "文件", Icons.Filled.Folder, listOf(BackupTarget.DIR),
+        searchHint = "搜索文件夹路径或名称",
+        createLabel = "新建文件备份",
+        manageLabel = "管理文件备份"
+    ),
+
+    /** 不是备份目标列表：内容由 [com.cc.libackupnext.ui.screen.SettingsContent] 自己管。 */
+    SETTINGS("设置", Icons.Filled.Settings, emptyList());
+
+    /** 这一页是不是「备份目标列表」。 */
+    val isTargetList: Boolean get() = targets.isNotEmpty()
 }
 
 /**
@@ -36,12 +67,12 @@ enum class MainTab(val label: String, val icon: ImageVector) {
  */
 @Composable
 fun AppBottomBar(
-    selected: MainTab,
-    onSelect: (MainTab) -> Unit,
+    selected: HomeTab,
+    onSelect: (HomeTab) -> Unit,
     containerColor: Color,
     modifier: Modifier = Modifier
 ) {
-    val items = MainTab.entries
+    val items = HomeTab.entries
     Surface(
         modifier = modifier
             .fillMaxWidth()

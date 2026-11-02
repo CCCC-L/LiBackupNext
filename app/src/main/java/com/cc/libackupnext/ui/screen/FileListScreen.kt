@@ -5,31 +5,22 @@ import android.provider.DocumentsContract
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CreateNewFolder
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.data.AppBackupSummary
-import com.cc.libackupnext.ui.theme.LocalAppColors
-import com.cc.libackupnext.ui.util.AppItemCard
-import com.cc.libackupnext.ui.util.AppListContainer
+import com.cc.libackupnext.data.BackupTarget
+import com.cc.libackupnext.entity.dirAppInfo
+import java.io.File
 
 /**
  * 文件页：列出要备份的目录。
@@ -48,7 +39,10 @@ fun FileListScreen(
     listState: LazyListState,
     onOpen: (String) -> Unit,
     onAdd: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** 下拉刷新：重算目录存在性 + 刷新备份数，具体动作由调用方给 */
+    isRefreshing: Boolean = false,
+    onRefresh: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
 
@@ -63,7 +57,7 @@ fun FileListScreen(
                 .makeText(context, "这个位置拿不到绝对路径，换一个文件夹试试", Toast.LENGTH_SHORT)
                 .show()
 
-            path in dirs -> if (java.io.File(path).isDirectory) {
+            path in dirs -> if (File(path).isDirectory) {
                 Toast.makeText(context, "已经在列表里了", Toast.LENGTH_SHORT).show()
             } else {
                 onAdd(path)
@@ -78,7 +72,7 @@ fun FileListScreen(
     val visibleDirs = remember(dirs, summaries, refreshTick, query) {
         val keyword = query.trim()
         dirs.filter { path ->
-            val exists = java.io.File(path).isDirectory
+            val exists = File(path).isDirectory
             if (!exists && summaries[path] == null) return@filter false
             if (keyword.isEmpty()) return@filter true
             // 完整路径或文件夹名任一命中即可
@@ -87,56 +81,26 @@ fun FileListScreen(
         }
     }
 
-    Box(modifier = modifier.fillMaxSize()) {
-        AppListContainer(
-            items = visibleDirs,
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 88.dp),
-            key = { _, path -> path }
-        ) { _, path, shape ->
-            val accent = LocalAppColors.current.accentColor
-            // 目录被删掉后按「已卸载」处理：划线置灰，和应用列表保持一致
-            val exists = java.io.File(path).isDirectory
-            AppItemCard(
-                icon = null,
-                iconContent = {
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(accent.copy(alpha = 0.12f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Filled.Folder,
-                            contentDescription = null,
-                            tint = accent,
-                            modifier = Modifier.size(26.dp)
-                        )
-                    }
-                },
-                title = path.trimEnd('/').substringAfterLast('/'),
-                subtitle = path,
-                bottomText = "${summaries[path]?.count ?: 0}个备份",
-                dimmed = !exists,
-                shape = shape,
-                onClick = { onOpen(path) }
-            )
-        }
-
+    TargetListScreen(
+        rows = visibleDirs.map { TargetRow(BackupTarget.DIR, dirAppInfo(it)) },
+        summaries = summaries,
+        listState = listState,
+        onOpen = { onOpen(it.packageName) },
+        modifier = modifier,
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 88.dp),
+        isRefreshing = isRefreshing,
+        onRefresh = onRefresh,
         // 右下角圆形按钮：打开系统文件夹选择器
-        FloatingActionButton(
-            onClick = { picker.launch(null) },
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 96.dp),
-            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-        ) {
-            Icon(Icons.Filled.CreateNewFolder, contentDescription = "添加文件夹")
+        extraAction = {
+            FloatingActionButton(
+                onClick = { picker.launch(null) },
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+            ) {
+                Icon(Icons.Filled.CreateNewFolder, contentDescription = "添加文件夹")
+            }
         }
-    }
+    )
 }
 
 /**

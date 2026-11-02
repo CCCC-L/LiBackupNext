@@ -77,6 +77,8 @@ fun AppTopBar(
     searchPlaceholder: String = "搜索应用名称或包名",
     /** 是否显示右上角的用户切换按钮（只有应用相关的需要显示）。 */
     showUserButton: Boolean = true,
+    /** 是否显示搜索按钮（设置页没有可搜的东西）。 */
+    showSearch: Boolean = true,
     /** 外部接管搜索状态：传了就用自己的，不再读写 ViewModel 里的全局搜索状态。 */
     searchOpen: Boolean? = null,
     searchQueryText: String? = null,
@@ -156,7 +158,7 @@ fun AppTopBar(
 
     // 传了 searchOpen 就用外部的状态（例如应用信息页自己管搜索）
     // 多选模式下不显示搜索框（标题要让位给「已选择 N 项」）
-    val isSearching = (searchOpen ?: vmIsSearching) && !selectionMode
+    val isSearching = showSearch && (searchOpen ?: vmIsSearching) && !selectionMode
     val searchQuery = searchQueryText ?: vmSearchQuery
     val toggleSearch: () -> Unit = { onToggleSearch?.invoke() ?: viewModel.toggleSearch() }
     val updateQuery: (String) -> Unit = { onSearchQueryChange?.invoke(it) ?: viewModel.updateSearchQuery(it) }
@@ -189,7 +191,8 @@ fun AppTopBar(
 
     // 中间按钮的位置动画 & 复合容器宽度动画
     val middleButtonEndPadding by rememberMiddleButtonEndPadding(isSearching)
-    val actionGroupWidth by rememberActionGroupWidth(isSearching)
+    // 没有排序按钮时右边只剩「更多」一个槽位（搜索态也是只剩一个）
+    val actionGroupWidth by rememberActionGroupWidth(isSearching || !showSortMenu)
 
     val isDark = isSystemInDarkTheme()
     val menuColor = if (isDark) Color(0xFF2B2D31) else Color(0xFFF2F3F7)
@@ -304,12 +307,14 @@ fun AppTopBar(
                 }
             } else {
             // ===== 搜索按钮：使用独立擦除动画 =====
-            Box(modifier = Modifier.eraseToRight(searchButtonErase)) {
-                IconButton(
-                    onClick = { toggleSearch() },
-                    modifier = Modifier.requiredWidth(IconSlotWidth)
-                ) {
-                    Icon(Icons.Default.Search, contentDescription = "搜索")
+            if (showSearch) {
+                Box(modifier = Modifier.eraseToRight(searchButtonErase)) {
+                    IconButton(
+                        onClick = { toggleSearch() },
+                        modifier = Modifier.requiredWidth(IconSlotWidth)
+                    ) {
+                        Icon(Icons.Default.Search, contentDescription = "搜索")
+                    }
                 }
             }
 
@@ -385,14 +390,16 @@ fun AppTopBar(
                     }
                 }
 
-                // 中间按钮：位置随搜索状态变化
-                IconButton(
-                    onClick = onMiddleClick,
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .padding(end = middleButtonEndPadding)
-                ) {
-                    Icon(middleIcon, contentDescription = null)
+                // 中间按钮：位置随搜索状态变化；没有排序菜单时不显示（否则是个死按钮）
+                if (showSortMenu) {
+                    IconButton(
+                        onClick = onMiddleClick,
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(end = middleButtonEndPadding)
+                    ) {
+                        Icon(middleIcon, contentDescription = null)
+                    }
                 }
             }
 

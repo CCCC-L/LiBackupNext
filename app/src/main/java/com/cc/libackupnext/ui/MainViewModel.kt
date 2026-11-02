@@ -4,24 +4,28 @@ import android.app.Application
 import android.content.pm.UserInfo
 import android.os.SystemClock
 import android.util.Log
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.cc.libackupnext.data.AppPrefs
 import com.cc.libackupnext.data.AppBackupSummary
+import com.cc.libackupnext.data.AppPrefs
+import com.cc.libackupnext.data.BackupGroup
 import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.service.AppManagerService
 import com.cc.libackupnext.service.RusticClient
-import com.cc.libackupnext.util.ErrorLog
+import com.cc.libackupnext.ui.screen.BackupBatchMode
 import com.cc.libackupnext.ui.util.AppIconStore
+import com.cc.libackupnext.util.ErrorLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -105,23 +109,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 新建备份页的勾选状态：包名 -> 勾选的类型。
+     * 批量页的勾选状态：包名 -> 勾选的类型。
      *
-     * 放在 ViewModel 里，进出应用详情页不会丢；和管理页各自独立。
+     * 按「页签 + 模式」分开存。应用页和文件页勾的完全不是一回事，
+     * 共用一个 map 会互相污染 —— 典型表现是先开「新建应用备份」（默认全选并置位
+     * 「已初始化」），再开「新建文件备份」时一个都不勾。
+     *
+     * 放在 ViewModel 里，进出详情页不会丢。
      */
-    val createSelection =
-        androidx.compose.runtime.mutableStateMapOf<String, Set<com.cc.libackupnext.data.BackupGroup>>()
+    private val batchSelections =
+        mutableMapOf<Pair<HomeTab, BackupBatchMode>, SnapshotStateMap<String, Set<BackupGroup>>>()
 
-    /** 管理备份页的勾选状态，和新建页互不影响。 */
-    val manageSelection =
-        androidx.compose.runtime.mutableStateMapOf<String, Set<com.cc.libackupnext.data.BackupGroup>>()
+    fun batchSelection(
+        tab: HomeTab,
+        mode: BackupBatchMode
+    ): SnapshotStateMap<String, Set<BackupGroup>> =
+        batchSelections.getOrPut(tab to mode) { mutableStateMapOf() }
 
-    /** 默认勾选只做一次：用户手动取消后，再进页面不会又被全选。 */
-    var createSelectionInitialized = false
-    var manageSelectionInitialized = false
+    /**
+     * 默认勾选只做一次：每个「页签 + 模式」各一次。
+     *
+     * 用户手动取消后，再进同一个页面不会又被全选。
+     */
+    private val batchSelectionInitialized = mutableSetOf<Pair<HomeTab, BackupBatchMode>>()
+
+    fun isBatchSelectionInitialized(tab: HomeTab, mode: BackupBatchMode): Boolean =
+        (tab to mode) in batchSelectionInitialized
+
+    fun markBatchSelectionInitialized(tab: HomeTab, mode: BackupBatchMode) {
+        batchSelectionInitialized += tab to mode
+    }
 
     /** 从详情页选中某条备份返回管理页时，只勾这一个应用（消费一次就清掉）。 */
-    var pendingSingleSelection: Pair<String, Set<com.cc.libackupnext.data.BackupGroup>>? = null
+    var pendingSingleSelection: Pair<String, Set<BackupGroup>>? = null
 
     /** 批量页上次的备份概况缓存：返回页面时先拿它渲染，列表不会先空一帧。 */
     var batchOverviewCache: Map<String, com.cc.libackupnext.data.AppBackupSummary> = emptyMap()

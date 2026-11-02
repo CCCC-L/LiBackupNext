@@ -6,7 +6,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,20 +18,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -44,7 +35,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
@@ -55,23 +45,24 @@ import com.cc.libackupnext.BuildConfig
 import com.cc.libackupnext.data.AppPrefs
 import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.ui.dialog.PruneProgressDialog
+import com.cc.libackupnext.ui.util.AppIconStore
 import com.cc.libackupnext.ui.util.RepoSetupForm
 import com.cc.libackupnext.ui.util.formatSize
-import com.cc.libackupnext.ui.util.AppIconStore
 import com.cc.libackupnext.util.ErrorLog
 import com.cc.libackupnext.util.KeepAwake
 import com.cc.libackupnext.util.RepoPath
 import kotlinx.coroutines.launch
 
 /**
- * 设置页：Rustic 仓库信息 + 备份行为。
+ * 设置页的内容：Rustic 仓库信息 + 备份行为。
  *
  * 仓库地址只读展示（灰色），点击弹确认框后重新选目录并初始化仓库，长按复制当前路径。
+ *
+ * 它是底栏的一个 tab，顶栏 / 底栏由主页提供，所以这里只有内容没有 Scaffold。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(
-    onBack: () -> Unit,
+fun SettingsContent(
+    modifier: Modifier = Modifier,
     /** 影响应用列表的设置项改动后通知外面重新加载。 */
     onSettingChanged: () -> Unit = {}
 ) {
@@ -151,228 +142,196 @@ fun SettingsScreen(
         }
     }
 
-    val isDark = isSystemInDarkTheme()
-    val pageBackground =
-        if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else Color(0xFFEAEEF7)
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        SectionTitle("Rustic")
 
-    Scaffold(
-        containerColor = pageBackground,
-        topBar = {
-            // 设置页不需要搜索 / 用户 / 排序 / 更多，只留标题和返回
-            TopAppBar(
-                title = {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface
+        ) {
+            Column {
+                // rustic 依赖版本：只展示，不可点击（值来自 Cargo.toml）
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp)
+                ) {
                     Text(
-                        text = "设置",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
+                        text = "Rustic 版本",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "core ${BuildConfig.RUSTIC_CORE_VERSION}" +
+                                "  ·  backend ${BuildConfig.RUSTIC_BACKEND_VERSION}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                )
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .combinedClickable(
+                            onClick = {
+                                dialogPath = repoPath
+                                dialogPassword = AppPrefs.repoPassword.ifBlank { "rustic" }
+                                showDialog = true
+                            },
+                            onLongClick = {
+                                if (repoPath.isNotBlank()) {
+                                    val path = repoPath
+                                    scope.launch {
+                                        clipboard.setClipEntry(
+                                            ClipEntry(ClipData.newPlainText("仓库地址", path))
+                                        )
+                                        Toast.makeText(
+                                            context,
+                                            "已复制仓库地址",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                }
+                            }
+                        )
+                        .padding(horizontal = 16.dp, vertical = 14.dp)
+                ) {
+                    Text(
+                        text = "仓库地址",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = repoPath.ifBlank { "未设置" },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "返回"
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = pageBackground)
-            )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "点击选择并初始化仓库，长按复制地址",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
+
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                )
+
+                // 整理仓库：红色，放在仓库地址下面
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !cleaning) { openCleanConfirm() }
+                        .padding(horizontal = 16.dp, vertical = 14.dp)
+                ) {
+                    Text(
+                        text = "整理仓库",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "清理无用的数据（已删除备份占用的空间）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.75f)
+                    )
+                }
+            }
         }
-    ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp)
+
+        SectionTitle("备份")
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface
         ) {
-            SectionTitle("Rustic")
-
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surface
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    // rustic 依赖版本：只展示，不可点击（值来自 Cargo.toml）
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 14.dp)
-                    ) {
-                        Text(
-                            text = "Rustic 版本",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "core ${BuildConfig.RUSTIC_CORE_VERSION}" +
-                                    "  ·  backend ${BuildConfig.RUSTIC_BACKEND_VERSION}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                        )
-                    }
-
-                    HorizontalDivider(
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "备份自身",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
-
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .combinedClickable(
-                                onClick = {
-                                    dialogPath = repoPath
-                                    dialogPassword = AppPrefs.repoPassword.ifBlank { "rustic" }
-                                    showDialog = true
-                                },
-                                onLongClick = {
-                                    if (repoPath.isNotBlank()) {
-                                        val path = repoPath
-                                        scope.launch {
-                                            clipboard.setClipEntry(
-                                                ClipEntry(ClipData.newPlainText("仓库地址", path))
-                                            )
-                                            Toast.makeText(
-                                                context,
-                                                "已复制仓库地址",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
-                                        }
-                                    }
-                                }
-                            )
-                            .padding(horizontal = 16.dp, vertical = 14.dp)
-                    ) {
-                        Text(
-                            text = "仓库地址",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = repoPath.ifBlank { "未设置" },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "点击选择并初始化仓库，长按复制地址",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                    }
-
-                    HorizontalDivider(
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "备份时将 LiBackupNext 的安装包复制到 rustic 仓库的根目录",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-
-                    // 整理仓库：红色，放在仓库地址下面
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable(enabled = !cleaning) { openCleanConfirm() }
-                            .padding(horizontal = 16.dp, vertical = 14.dp)
-                    ) {
-                        Text(
-                            text = "整理仓库",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "清理无用的数据（已删除备份占用的空间）",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.75f)
-                        )
-                    }
                 }
+                Switch(
+                    checked = backupSelf,
+                    onCheckedChange = {
+                        backupSelf = it
+                        AppPrefs.backupSelf = it
+                    }
+                )
             }
+        }
 
-            SectionTitle("备份")
+        SectionTitle("其他")
 
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surface
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "备份自身",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "备份时将 LiBackupNext 的安装包复制到 rustic 仓库的根目录",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = backupSelf,
-                        onCheckedChange = {
-                            backupSelf = it
-                            AppPrefs.backupSelf = it
-                        }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "从仓库中获取图标",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "从仓库中获取没有安装应用的图标\n推荐关闭",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-            }
-
-            SectionTitle("其他")
-
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surface
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "从仓库中获取图标",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "从仓库中获取没有安装应用的图标\n推荐关闭",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                Switch(
+                    checked = fetchIconFromRepo,
+                    onCheckedChange = {
+                        fetchIconFromRepo = it
+                        AppPrefs.fetchIconFromRepo = it
+                        // 关掉时把已经取到的图标也清掉，列表重新加载
+                        AppIconStore.clearAll()
+                        onSettingChanged()
                     }
-                    Switch(
-                        checked = fetchIconFromRepo,
-                        onCheckedChange = {
-                            fetchIconFromRepo = it
-                            AppPrefs.fetchIconFromRepo = it
-                            // 关掉时把已经取到的图标也清掉，列表重新加载
-                            AppIconStore.clearAll()
-                            onSettingChanged()
-                        }
-                    )
-                }
+                )
             }
         }
     }

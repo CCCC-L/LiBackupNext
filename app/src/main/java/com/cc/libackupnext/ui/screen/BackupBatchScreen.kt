@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -68,6 +67,7 @@ import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.service.BackupProgress
 import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.ui.AppTopBar
+import com.cc.libackupnext.ui.HomeTab
 import com.cc.libackupnext.ui.MainViewModel
 import com.cc.libackupnext.ui.dialog.BackupHelpDialog
 import com.cc.libackupnext.ui.dialog.BackupProgressDialog
@@ -103,48 +103,27 @@ enum class BackupBatchMode {
     MANAGE
 }
 
-@Composable
-fun AppBackupScreen(
-    viewModel: MainViewModel,
-    onBack: () -> Unit,
-    onSwitchMode: () -> Unit,
-    onOpenAppDetail: (AppInfo) -> Unit,
-    listState: LazyListState = rememberLazyListState(),
-    /** 备份目标类型：应用 / 目录……，以后可以再加。 */
-    target: BackupTarget = BackupTarget.APP
-) = BackupBatchScreen(
-    viewModel, BackupBatchMode.CREATE, onBack, onSwitchMode, onOpenAppDetail, listState, target
-)
-
-@Composable
-fun ManageBackupScreen(
-    viewModel: MainViewModel,
-    onBack: () -> Unit,
-    onSwitchMode: () -> Unit,
-    onOpenAppDetail: (AppInfo) -> Unit,
-    listState: LazyListState = rememberLazyListState(),
-    target: BackupTarget = BackupTarget.APP
-) = BackupBatchScreen(
-    viewModel, BackupBatchMode.MANAGE, onBack, onSwitchMode, onOpenAppDetail, listState, target
-)
-
 /**
  * 批量备份 / 批量管理页面。
  *
  * 两种模式共用同一套列表：勾选框、统计、底部操作按钮，
  * 区别只在数据来源（全部应用 / 有备份的应用）、默认勾选和底部按钮。
+ *
+ * @param tab 从哪个页签进来的：决定要列哪些目标（应用 / 文件各一个，其他页三个），
+ *   也决定勾选状态存在哪一份 —— 应用页和文件页的勾选互不影响
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun BackupBatchScreen(
+fun BackupBatchScreen(
     viewModel: MainViewModel,
     mode: BackupBatchMode,
+    tab: HomeTab,
     onBack: () -> Unit,
     onSwitchMode: () -> Unit,
     onOpenAppDetail: (AppInfo) -> Unit,
-    listState: LazyListState,
-    target: BackupTarget = BackupTarget.APP
+    listState: LazyListState
 ) {
+    val targets = tab.targets
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val displayApps by viewModel.displayApps.collectAsState()
@@ -162,19 +141,17 @@ private fun BackupBatchScreen(
 
     // 包名 -> 备份概况（备份次数 / 最近一次备份）
     // 先用上次缓存渲染，避免返回页面时列表先空一帧（空列表会把滚动位置归零）
-    // 这一页有哪些内容类型 / 统计单位，都由目标类型决定
-    val columnKinds = target.kinds
-    val unit = target.unit
+    // 列头只在一个目标有多种内容时才有意义：应用页是 all + apk/user/data 四个勾选框，
+    // 文件夹只有 dir 一个、其他页每个目标各一个 kind，都只留 all。
+    // 所以「多目标 → 空列头」，每行的勾选框另按自己 target 的 kinds 画。
+    val columnKinds = targets.singleOrNull()?.kinds.orEmpty()
+    val unit = targets.singleOrNull()?.unit ?: "项"
 
     var overview by remember { mutableStateOf(viewModel.batchOverviewCache) }
     var reloadKey by remember { mutableStateOf(0) }
 
-    // 包名 -> 勾选的类型；放 ViewModel 里，进出应用详情页不丢，两个页面各自独立
-    val selected = if (mode == BackupBatchMode.CREATE) {
-        viewModel.createSelection
-    } else {
-        viewModel.manageSelection
-    }
+    // 包名 -> 勾选的类型；按「页签 + 模式」分开存，进出详情页不丢、页签之间互不影响
+    val selected = viewModel.batchSelection(tab, mode)
 
     var running by remember { mutableStateOf(false) }
     var finished by remember { mutableStateOf(0) }
@@ -214,14 +191,23 @@ private fun BackupBatchScreen(
         anchorPackage = null
     }
 
-    // 管理页只显示仓库里有备份的应用
-    val apps = remember(displayApps, overview, mode, target) {
-        target.targets(
-            apps = displayApps,
-            create = mode == BackupBatchMode.CREATE,
-            hasBackup = { overview.containsKey(it) }
-        )
+    // 这一页的行：目标 + 展示数据。多目标页就是几个目标各自的行拼起来。
+    // 管理页只显示仓库里有备份的。
+    val rows = remember(displayApps, overview, mode, targets) {
+        targets.flatMap { target ->
+            target.targets(
+                apps = displayApps,
+                create = mode == BackupBatchMode.CREATE,
+                hasBackup = { overview.containsKey(it) }
+            ).map { TargetRow(target, it) }
+        }
     }
+
+    // 包名 -> 它属于哪个目标。选中状态都按包名索引，需要目标时查这张表
+    // （应用是包名、目录是路径、「其他」是 wifi / calls / contacts，不会撞）
+    val targetOf = remember(rows) { rows.associate { it.item.packageName to it.target } }
+
+    val apps = remember(rows) { rows.map { it.item } }
 
     // 每个批量页用自己的搜索状态，不影响 applist
     var searchOpen by remember { mutableStateOf(false) }
@@ -253,30 +239,34 @@ private fun BackupBatchScreen(
         if (pending != null) {
             viewModel.pendingSingleSelection = null
             selected[pending.first] = pending.second
-            viewModel.manageSelectionInitialized = true
+            viewModel.markBatchSelectionInitialized(tab, BackupBatchMode.MANAGE)
             return@LaunchedEffect
         }
 
         // 新建页：默认全选只做一次（用户取消后不会再被选上）
-        if (mode == BackupBatchMode.CREATE && !viewModel.createSelectionInitialized) {
-            val targets = target.targets(
-                apps = displayApps,
-                create = true,
-                hasBackup = { overview.containsKey(it) }
-            )
-            if (targets.isEmpty()) return@LaunchedEffect
+        if (mode == BackupBatchMode.CREATE && !viewModel.isBatchSelectionInitialized(tab, mode)) {
+            val allRows = targets.flatMap { target ->
+                target.targets(
+                    apps = displayApps,
+                    create = true,
+                    hasBackup = { overview.containsKey(it) }
+                ).map { TargetRow(target, it) }
+            }
+            if (allRows.isEmpty()) return@LaunchedEffect
 
-            targets.forEach { app -> selected[app.packageName] = columnKinds.toSet() }
-            viewModel.createSelectionInitialized = true
+            allRows.forEach { selected[it.item.packageName] = it.target.kinds.toSet() }
+            viewModel.markBatchSelectionInitialized(tab, mode)
             return@LaunchedEffect
         }
 
         // 管理页：默认勾上「仓库里已有的类型」，同样只做一次
-        if (mode == BackupBatchMode.MANAGE && !viewModel.manageSelectionInitialized) {
-            viewModel.manageSelectionInitialized = true
+        if (mode == BackupBatchMode.MANAGE && !viewModel.isBatchSelectionInitialized(tab, mode)) {
+            viewModel.markBatchSelectionInitialized(tab, mode)
             selected.clear()
             list.forEach { summary ->
-                val kinds = summary.latest.availableKinds.filter { it in columnKinds }.toSet()
+                val kinds = summary.latest.availableKinds
+                    .filter { it in targetOf[summary.packageName]?.kinds.orEmpty() }
+                    .toSet()
                 if (kinds.isNotEmpty()) selected[summary.packageName] = kinds
             }
         }
@@ -288,17 +278,23 @@ private fun BackupBatchScreen(
     fun entryOf(packageName: String): BackupEntry? =
         viewModel.selectedEntries[packageName] ?: overview[packageName]?.latest
 
+    /** 这一行属于哪个目标。行是从 [rows] 来的，一定查得到。 */
+    fun targetOfRow(packageName: String): BackupTarget =
+        targetOf[packageName] ?: targets.first()
+
     /** 这个应用当前能勾哪些类型：管理页只有仓库里确实存在的类型可勾。 */
-    fun availableKindsOf(packageName: String): Set<BackupGroup> =
-        if (mode == BackupBatchMode.CREATE) {
-            columnKinds.toSet()
+    fun availableKindsOf(packageName: String): Set<BackupGroup> {
+        val kinds = targetOfRow(packageName).kinds
+        return if (mode == BackupBatchMode.CREATE) {
+            kinds.toSet()
         } else {
             entryOf(packageName)?.availableKinds
                 .orEmpty()
-                .filter { it in columnKinds }
+                .filter { it in kinds }
                 .filterNot { it in deletedKinds[packageName].orEmpty() }
                 .toSet()
         }
+    }
 
     fun setKinds(packageName: String, kinds: Set<BackupGroup>) {
         if (kinds.isEmpty()) {
@@ -612,7 +608,9 @@ private fun BackupBatchScreen(
         onDispose { if (running) BackupNotifier.cancel(context) }
     }
 
-    val selectedCounts = columnKinds.associateWith { kind ->
+    // 统计文字里的类型：单目标页就是列头那几列；多目标页是这一页所有目标的 kinds
+    val summaryKinds = columnKinds.ifEmpty { targets.flatMap { it.kinds }.distinct() }
+    val selectedCounts = summaryKinds.associateWith { kind ->
         apps.count { kind in kindsOf(it.packageName) }
     }
     val selectedApps = selected.size
@@ -639,7 +637,8 @@ private fun BackupBatchScreen(
                 viewModel = viewModel,
                 title = if (mode == BackupBatchMode.CREATE) "新建备份" else "管理备份",
                 // 用户切换只跟应用有关，文件批量页不显示
-                showUserButton = target.isApp,
+                // 只有应用页需要切用户
+                showUserButton = targets.any { it.isApp },
                 searchOpen = searchOpen,
                 searchQueryText = searchQuery,
                 onToggleSearch = {
@@ -739,13 +738,14 @@ private fun BackupBatchScreen(
             ) { _, app, shape ->
                 BackupSelectRow(
                     app = app,
-                    target = target,
+                    target = targetOfRow(app.packageName),
                     summary = overview[app.packageName],
                     entry = entryOf(app.packageName),
                     showBackupTime = mode == BackupBatchMode.MANAGE,
                     kinds = kindsOf(app.packageName),
                     availableKinds = availableKindsOf(app.packageName),
-                    columns = columnKinds,
+                    // 列头只在单目标页显示；每行的勾选框永远按它自己的 target 画
+                    columns = columnKinds.ifEmpty { targetOfRow(app.packageName).kinds },
                     shape = shape,
                     multiSelect = multiSelect,
                     selected = app.packageName in multiSelected,
@@ -888,9 +888,9 @@ private fun SelectionHeader(
             Spacer(modifier = Modifier.height(1.dp))
             Text(
                 text = if (selectedApps == 0) {
-                    "已选择: " + columns.joinToString(" ") { "${it.title}:0" }
+                    "已选择: " + counts.entries.joinToString(" ") { "${it.key.title}:0" }
                 } else {
-                    "已选择: " + columns.joinToString(" ") { "${it.title}:${counts[it] ?: 0}" }
+                    "已选择: " + counts.entries.joinToString(" ") { "${it.key.title}:${it.value}" }
                 },
                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Normal),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
