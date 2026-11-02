@@ -18,7 +18,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Shape
@@ -78,7 +77,7 @@ fun AppItemCard(
                     modifier = Modifier
                         .padding(vertical = 12.dp)
                         .size(48.dp)
-                        .alpha(if (dimmed) 0.45f else 1f),
+                        .dimmedWhen(dimmed),
                     contentAlignment = Alignment.Center
                 ) {
                     if (iconContent != null) {
@@ -108,7 +107,7 @@ fun AppItemCard(
                         text = title,
                         style = titleStyle,
                         fontWeight = titleFontWeight,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        color = missingTitleColor(dimmed),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         textDecoration = if (dimmed) TextDecoration.LineThrough else null,

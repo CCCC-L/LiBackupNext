@@ -23,13 +23,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.ui.dialog.AppOptionsMenu
+import com.cc.libackupnext.ui.util.dimmedWhen
 
 /**
  * 详情页头部：图标 + 名称 / 副标题 / 版本 + 右侧「备份」按钮。
@@ -61,7 +61,7 @@ fun DetailHeader(
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
                     .clickable(enabled = canInteract) { showOptions = true }
-                    .alpha(if (target.isUninstalled) 0.45f else 1f)
+                    .dimmedWhen(target.isUninstalled)
                     .padding(horizontal = 6.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {

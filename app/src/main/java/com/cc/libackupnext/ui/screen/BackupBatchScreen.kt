@@ -52,6 +52,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
@@ -80,7 +81,10 @@ import com.cc.libackupnext.ui.util.AppIcon
 import com.cc.libackupnext.ui.util.AppIconStore
 import com.cc.libackupnext.ui.util.AppListContainer
 import com.cc.libackupnext.ui.util.FolderIconBox
+import com.cc.libackupnext.ui.util.dimmedWhen
 import com.cc.libackupnext.ui.util.formatShortDateTime
+import com.cc.libackupnext.ui.util.isMissing
+import com.cc.libackupnext.ui.util.missingTitleColor
 import com.cc.libackupnext.ui.util.rememberAppIcon
 import com.cc.libackupnext.util.BackupNotifier
 import com.cc.libackupnext.util.ErrorLog
@@ -972,6 +976,9 @@ private fun BackupSelectRow(
 ) {
     val appColors = LocalAppColors.current
 
+    // 应用没装 / 文件夹被删：和列表页一样，图标置灰 + 标题划线
+    val missing = target.isMissing(app)
+
     // 右滑选中：跟手位移 + 松手弹回（动画参数在 theme/Animation.kt）
     val swipe = rememberRowSwipeState(onSwipe = onSwipeSelect)
 
@@ -1013,13 +1020,15 @@ private fun BackupSelectRow(
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            when (target) {
-                BackupTarget.DIR -> FolderIconBox(size = 40.dp, iconSize = 22.dp)
-                BackupTarget.APP -> AppIcon(
-                    icon = rememberAppIcon(app.packageName, app.userId),
-                    name = app.name,
-                    modifier = Modifier.size(40.dp)
-                )
+            Box(modifier = Modifier.dimmedWhen(missing)) {
+                when (target) {
+                    BackupTarget.DIR -> FolderIconBox(size = 40.dp, iconSize = 22.dp)
+                    BackupTarget.APP -> AppIcon(
+                        icon = rememberAppIcon(app.packageName, app.userId),
+                        name = app.name,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
             }
             Spacer(modifier = Modifier.width(12.dp))
 
@@ -1041,9 +1050,10 @@ private fun BackupSelectRow(
                         }
                     },
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = missingTitleColor(missing),
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    textDecoration = if (missing) TextDecoration.LineThrough else null
                 )
                 Spacer(modifier = Modifier.height(1.dp))
                 Text(
