@@ -39,7 +39,7 @@ fun BackupHelpDialog(
                 Text("data：位于共享存储 /Android/data/ 下的数据")
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    "权限：已授予的运行时权限随 user 数据一起备份，恢复时重新授予；" +
+                    "权限：已授予的运行时权限随 apk 一起备份，恢复时重新授予；" +
                             "「仅本次允许」这类临时授权不备份"
                 )
             }

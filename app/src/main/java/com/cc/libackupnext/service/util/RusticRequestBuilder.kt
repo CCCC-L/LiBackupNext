@@ -171,6 +171,25 @@ internal class RusticRequestBuilder(
             )
         }
 
+        // 已授予的运行时权限：写成 permissions.json 一起进仓库。
+        if (options.optBoolean(SnapshotKind.PERMISSIONS.key, false)) {
+            val permissionFile = appState.write(packageName, userId)
+            items.put(
+                item(
+                    SnapshotKind.PERMISSIONS.key,
+                    labelOf(
+                        SnapshotKind.PERMISSIONS.key,
+                        "$packageName:${SnapshotKind.PERMISSIONS.key}"
+                    ),
+                    tagsOf(SnapshotKind.PERMISSIONS.key, tags),
+                    listOfNotNull(permissionFile),
+                    asPath = "permissions.json",
+                    skipReason = if (permissionFile == null) "没有已授予的运行时权限" else null,
+                    description = descriptionOf(SnapshotKind.PERMISSIONS.key)
+                )
+            )
+        }
+
         if (options.optBoolean(SnapshotKind.USER.key, false)) {
             val userDataPath = "/data/user/$userId/$packageName"
             val userDePath = "/data/user_de/$userId/$packageName"
@@ -210,25 +229,6 @@ internal class RusticRequestBuilder(
                     asPath = packageName,
                     skipReason = skipReasonOf(dataPath),
                     description = descriptionOf(SnapshotKind.DATA.key)
-                )
-            )
-        }
-
-        // 已授予的运行时权限：写成 permissions.json 一起进仓库
-        if (options.optBoolean(SnapshotKind.PERMISSIONS.key, false)) {
-            val permissionFile = appState.write(packageName, userId)
-            items.put(
-                item(
-                    SnapshotKind.PERMISSIONS.key,
-                    labelOf(
-                        SnapshotKind.PERMISSIONS.key,
-                        "$packageName:${SnapshotKind.PERMISSIONS.key}"
-                    ),
-                    tagsOf(SnapshotKind.PERMISSIONS.key, tags),
-                    listOfNotNull(permissionFile),
-                    asPath = "permissions.json",
-                    skipReason = if (permissionFile == null) "没有已授予的运行时权限" else null,
-                    description = descriptionOf(SnapshotKind.PERMISSIONS.key)
                 )
             )
         }

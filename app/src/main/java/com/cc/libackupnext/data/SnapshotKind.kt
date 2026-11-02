@@ -24,11 +24,10 @@ enum class SnapshotKind(val key: String) {
 
 /**
  * 勾选单位：详情页 / 管理弹窗里一个勾选框覆盖的快照。
- *
- * apk 连 obb 一起备；user 连 user_de 和权限快照一起备。
+ * apk 连 obb 和权限快照一起备；user 连 user_de 一起备。
  *
  * @param title 勾选框 / 列头的短名
- * @param optionLabel 备份选项弹窗里那一行的说明（apk 要说明含 obb）
+ * @param optionLabel 备份选项弹窗里那一行的说明（apk 要说明含 obb 和权限）
  * @param kinds 勾上这个单位会产出的快照类型
  */
 enum class BackupGroup(
@@ -36,8 +35,8 @@ enum class BackupGroup(
     val optionLabel: String,
     val kinds: List<SnapshotKind>
 ) {
-    APK("apk", "apk(含 obb)", listOf(SnapshotKind.APK, SnapshotKind.OBB)),
-    USER("user", "user", listOf(SnapshotKind.USER, SnapshotKind.USER_DE, SnapshotKind.PERMISSIONS)),
+    APK("apk", "apk(含 obb、权限)", listOf(SnapshotKind.APK, SnapshotKind.OBB, SnapshotKind.PERMISSIONS)),
+    USER("user", "user", listOf(SnapshotKind.USER, SnapshotKind.USER_DE)),
     DATA("data", "data", listOf(SnapshotKind.DATA)),
     DIR("dir", "dir", listOf(SnapshotKind.DIR));
 

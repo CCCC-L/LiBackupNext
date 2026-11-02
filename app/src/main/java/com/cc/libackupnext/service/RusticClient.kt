@@ -8,10 +8,10 @@ import com.cc.libackupnext.data.BackupEntry
 import com.cc.libackupnext.data.BackupGroup
 import com.cc.libackupnext.data.BackupRequest
 import com.cc.libackupnext.data.BackupSnapshot
-import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.BackupStep
 import com.cc.libackupnext.data.BackupStepStatus
 import com.cc.libackupnext.data.RepoOverview
+import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.SnapshotMeta
 import com.cc.libackupnext.data.SnapshotOverride
 import com.cc.libackupnext.data.kind
@@ -823,17 +823,16 @@ object RusticClient {
     // ==================== 进度步骤 ====================
 
     /**
-     * 进度弹窗里的步骤顺序：目录 → apk → obb → user → user_de → 权限 → data。
-     *
-     * 备份和恢复共用一张表，谁勾了/谁存在就显示谁。
+     * 备份时进度弹窗的步骤顺序：目录 → apk → obb → 权限 → user → user_de → data。
+     * 恢复时进度弹窗的步骤顺序：目录 → apk → obb → user → user_de → data → 权限 。
      */
     private val STEP_ORDER = listOf(
         SnapshotKind.DIR,
         SnapshotKind.APK,
         SnapshotKind.OBB,
+        SnapshotKind.PERMISSIONS,
         SnapshotKind.USER,
         SnapshotKind.USER_DE,
-        SnapshotKind.PERMISSIONS,
         SnapshotKind.DATA
     )
 
@@ -882,12 +881,12 @@ object RusticClient {
         appName = app.name,
         version = app.version,
         userId = app.userId,
-        // obb 跟着 apk 走，permissions 跟着 user 走
+        // obb 和权限都跟着 apk 走（apk 是「这个应用是什么」，user / data 是「它存了什么」）
         backupApk = BackupGroup.APK in groups,
         backupObb = BackupGroup.APK in groups,
         backupUser = BackupGroup.USER in groups,
         backupData = BackupGroup.DATA in groups,
-        backupPermissions = BackupGroup.USER in groups
+        backupPermissions = BackupGroup.APK in groups
     )
 
     private fun statusOf(state: String, fallback: BackupStepStatus): BackupStepStatus =

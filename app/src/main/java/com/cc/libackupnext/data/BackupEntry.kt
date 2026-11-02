@@ -29,7 +29,7 @@ data class BackupEntry(
         BackupGroup.entries.filter { snapshotsOf(it).isNotEmpty() }
     }
 
-    /** 某个勾选单位对应的快照；`apk` 带上 `obb`，`user` 带上 `user_de` 和权限。 */
+    /** 某个勾选单位对应的快照；`apk` 带上 `obb` 和权限，`user` 带上 `user_de`。 */
     fun snapshotsOf(group: BackupGroup): List<BackupSnapshot> =
         snapshots.filter { group.covers(it.kind()) }
 
