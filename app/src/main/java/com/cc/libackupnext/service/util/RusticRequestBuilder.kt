@@ -48,6 +48,11 @@ private val BACKUP_EXCLUDES: List<String> = buildList {
     }
 }
 
+/**
+ * apk的过滤规则，只保留指定文件夹的下的apk文件，其他的全都过滤，包括子文件夹
+ */
+private val APK_EXCLUDES = listOf("**/*.apk", "!*/", "!.*/")
+
 internal class RusticRequestBuilder(
     private val context: Context,
     private val appState: AppState
@@ -134,15 +139,19 @@ internal class RusticRequestBuilder(
 
         // 即使某个来源暂时不存在也要带上，Rust 侧会回报「跳过」
         if (options.optBoolean(SnapshotKind.APK.key, false)) {
-            val apk = apkPaths(packageName).firstOrNull()
+            val installDir = apkPaths(packageName)
+                .firstOrNull()
+                ?.let { File(it).parentFile?.absolutePath }
             items.put(
                 item(
                     SnapshotKind.APK.key,
                     labelOf(SnapshotKind.APK.key, "$packageName:${SnapshotKind.APK.key}"),
                     tagsOf(SnapshotKind.APK.key, tags),
-                    listOfNotNull(apk),
-                    asPath = apk?.let { File(it).name },
-                    description = descriptionOf(SnapshotKind.APK.key)
+                    listOfNotNull(installDir),
+                    asPath = "/",
+                    skipReason = if (installDir == null) "找不到 APK" else null,
+                    description = descriptionOf(SnapshotKind.APK.key),
+                    excludes = APK_EXCLUDES
                 )
             )
         }
@@ -263,7 +272,8 @@ internal class RusticRequestBuilder(
         sources: List<String>,
         asPath: String?,
         skipReason: String? = null,
-        description: String? = null
+        description: String? = null,
+        excludes: List<String>? = null
     ): JSONObject = JSONObject().apply {
         put("stage", stage)
         put("label", label)
@@ -277,6 +287,9 @@ internal class RusticRequestBuilder(
         }
         if (description != null) {
             put("description", description)
+        }
+        if (excludes != null) {
+            put("excludes", JSONArray(excludes))
         }
     }
 

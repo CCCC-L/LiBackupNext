@@ -257,27 +257,45 @@ internal fun packageUid(context: Context, packageName: String, userId: Int): Int
     }.getOrNull()
 }
 
-/** 用 `pm install` 把快照里的 APK 装到指定用户；失败时带上 pm 的输出。 */
-internal fun installApk(apk: File, userId: Int): Result<Int> {
-    val command = "pm install -r -d --user $userId ${apk.absolutePath}"
+/** `pm install-create` 成功时输出里的会话 id：`Success: created install session [1234567]`。 */
+private val INSTALL_SESSION_ID = Regex("""\[(\d+)]""")
 
-    val result = try {
-        Shell.cmd(command).exec()
-    } catch (t: Throwable) {
-        return Result.failure(
-            IllegalStateException("执行 pm install 失败：${t.message ?: t.javaClass.simpleName}")
-        )
+/**
+ * 把快照里的 APK 装到指定用户；失败时带上 pm 的输出。
+ */
+internal fun installApks(apks: List<File>, userId: Int): Result<Int> {
+    if (apks.isEmpty()) {
+        return Result.failure(IllegalStateException("没有可安装的 APK"))
     }
 
-    val output = (result.out + result.err).joinToString("\n").trim()
+    val createOutput = runPm("pm install-create -r -d --user $userId")
+    val session = INSTALL_SESSION_ID.find(createOutput)?.groupValues?.get(1)
+        ?: return Result.failure(IllegalStateException("创建安装会话失败：$createOutput"))
 
-    if (!output.contains("Success", ignoreCase = true)) {
-        return Result.failure(
-            IllegalStateException("安装失败：${output.ifBlank { "pm 没有输出" }}")
-        )
+    for (apk in apks) {
+        val path = "'" + apk.absolutePath.replace("'", "'\\''") + "'"
+        val output = runPm("pm install-write -S ${apk.length()} $session '${apk.name}' $path")
+        if (!output.contains("Success", ignoreCase = true)) {
+            // 写失败就把会话丢掉，别在系统里留个半截 session
+            runPm("pm install-abandon $session")
+            return Result.failure(IllegalStateException("写入 APK 失败：$output"))
+        }
+    }
+
+    val commitOutput = runPm("pm install-commit $session")
+    if (!commitOutput.contains("Success", ignoreCase = true)) {
+        return Result.failure(IllegalStateException("安装失败：$commitOutput"))
     }
 
     return Result.success(0)
+}
+
+/** 跑一条 pm 命令，返回合并后的输出（失败也返回文本，由调用方判断）。 */
+private fun runPm(command: String): String = try {
+    val result = Shell.cmd(command).exec()
+    (result.out + result.err).joinToString("\n").trim().ifBlank { "pm 没有输出" }
+} catch (t: Throwable) {
+    "执行失败：${t.message ?: t.javaClass.simpleName}"
 }
 
 /**

@@ -9,7 +9,7 @@ import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.service.util.AppState
 import com.cc.libackupnext.service.util.RusticRequestBuilder
 import com.cc.libackupnext.service.util.fixupTree
-import com.cc.libackupnext.service.util.installApk
+import com.cc.libackupnext.service.util.installApks
 import com.cc.libackupnext.service.util.mediaPath
 import com.cc.libackupnext.service.util.packageUid
 import com.topjohnwu.superuser.ipc.RootService
@@ -296,15 +296,17 @@ object RusticServer {
                         return error
                     }
 
-                    val apk = dir.listFiles()?.firstOrNull { it.name.endsWith(".apk") }
-                    if (apk == null) {
+                    val apks = dir.listFiles()
+                        ?.filter { it.isFile && it.name.endsWith(".apk") }
+                        .orEmpty()
+                    if (apks.isEmpty()) {
                         dir.deleteRecursively()
                         emit(SnapshotKind.APK, "failed")
                         return "恢复出来的 APK 不存在"
                     }
 
                     val installedUid = try {
-                        installApk(apk, userId)
+                        installApks(apks, userId)
                     } finally {
                         dir.deleteRecursively()
                     }
@@ -462,13 +464,6 @@ object RusticServer {
             }
             return runSimple(payload.toString(), ::nativeRestore)
         }
-
-        /**
-         * 安装 APK 到指定用户。
-         *
-         * 直接用 pm install（--user 只影响目标用户），装完再确认一遍。
-         */
-
 
         /**
          * 简单请求：把 JSON 写进共享内存，调 native，返回空串或错误。

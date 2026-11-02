@@ -85,11 +85,13 @@ struct BackupItem {
     #[serde(default)]
     description: Option<String>,
     /// 上一次同类快照的 id，作为 parent 做增量备份。
-    ///
     /// 不传的话 rustic 会调 `SnapshotFile::latest()`，也就是**把仓库里所有快照列一遍**
     /// 才能挑出 parent —— 每个应用每种类型各一次，批量备份时这是很大一笔开销。
     #[serde(default)]
     parent: Option<String>,
+    // 过滤规则glab
+    #[serde(default)]
+    excludes: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -1970,8 +1972,13 @@ fn backup_items(
 
         let mut backup_options = BackupOptions::default();
         backup_options.as_path = item.as_path.as_ref().map(PathBuf::from);
-        // 排除规则由 Kotlin 侧传入（gitignore 语义：`!` 开头表示排除）
-        backup_options.excludes.globs = request.excludes.clone();
+        // 排除规则由 Kotlin 侧传入（gitignore 语义：`!` 开头表示排除）。
+        // item 自己带了就用自己的，否则用整批共用的。
+        backup_options.excludes.globs = if item.excludes.is_empty() {
+            request.excludes.clone()
+        } else {
+            item.excludes.clone()
+        };
         // 进度是按「步骤」显示的，不需要总字节数；关掉这一步能省掉一整遍目录扫描
         backup_options.no_scan = true;
 
@@ -2226,6 +2233,7 @@ mod tests {
                 as_path: None,
                 skip_reason: None,
                 description: None,
+                excludes: Vec::new(),
             }],
         };
 
@@ -2286,6 +2294,7 @@ mod tests {
                 as_path: None,
                 skip_reason: None,
                 description: None,
+                excludes: Vec::new(),
             }],
         };
 
@@ -2344,6 +2353,7 @@ mod tests {
                     as_path: Some("com.example".to_string()),
                     skip_reason: None,
                     description: None,
+                    excludes: Vec::new(),
                 },
                 BackupItem {
                     stage: "apk".to_string(),
@@ -2353,6 +2363,7 @@ mod tests {
                     as_path: Some("base.apk".to_string()),
                     skip_reason: None,
                     description: None,
+                    excludes: Vec::new(),
                 },
             ],
         };
@@ -2401,6 +2412,7 @@ mod tests {
                     as_path: Some("com.example".to_string()),
                     skip_reason: None,
                     description: None,
+                    excludes: Vec::new(),
                 },
                 BackupItem {
                     stage: "icon".to_string(),
@@ -2410,6 +2422,7 @@ mod tests {
                     as_path: Some("icon.png".to_string()),
                     skip_reason: None,
                     description: None,
+                    excludes: Vec::new(),
                 },
             ],
         };
@@ -2473,6 +2486,7 @@ mod tests {
             as_path: Some("com.example".to_string()),
             skip_reason: None,
             description: None,
+            excludes: Vec::new(),
         };
 
         let request = BackupRequest {
@@ -2566,6 +2580,7 @@ mod tests {
                 as_path: Some("com.example".to_string()),
                 skip_reason: None,
                 description: None,
+                excludes: Vec::new(),
             }],
         };
 
@@ -2640,6 +2655,7 @@ mod tests {
                 as_path: Some("base.apk".to_string()),
                 skip_reason: None,
                 description: None,
+                excludes: Vec::new(),
             }],
         };
 
