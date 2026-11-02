@@ -77,7 +77,7 @@ fun BackupManageDialog(
                             label = group.title,
                             checked = group in checkedKinds,
                             enabled = exists,
-                            size = if (exists) formatSize(snaps.sumOf { it.size }) else "-",
+                            size = if (exists) formatSize(snaps.sumOf { it.size }) else "",
                             id = if (exists) snaps.joinToString(" ") { it.id.take(8) } else "",
                             onCheckedChange = { onCheckedChange(group, it) }
                         )
@@ -130,6 +130,11 @@ private fun ManageOptionRow(
         Text(
             text = label,
             style = MaterialTheme.typography.bodyMedium,
+            color = if (enabled) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
             modifier = Modifier.padding(start = 4.dp)
         )
         Spacer(Modifier.weight(1f))
