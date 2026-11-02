@@ -25,6 +25,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.cc.libackupnext.data.BackupGroup
+import com.cc.libackupnext.data.BackupTarget
 
 /**
  * 备份选项弹窗。
@@ -33,14 +35,10 @@ import androidx.compose.ui.unit.dp
  */
 @Composable
 fun BackupOptionsDialog(
-    isDirectory: Boolean,
+    target: BackupTarget,
     dirPath: String,
-    backupApk: Boolean,
-    backupUser: Boolean,
-    backupData: Boolean,
-    onApkChange: (Boolean) -> Unit,
-    onUserChange: (Boolean) -> Unit,
-    onDataChange: (Boolean) -> Unit,
+    checked: Set<BackupGroup>,
+    onToggle: (BackupGroup, Boolean) -> Unit,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
 ) {
@@ -54,22 +52,31 @@ fun BackupOptionsDialog(
         },
         text = {
             Column {
-                if (isDirectory) {
-                    Text(
+                when (target) {
+                    BackupTarget.DIR -> Text(
                         text = "确定备份「$dirPath」么？",
                         style = MaterialTheme.typography.bodyMedium
                     )
-                } else {
-                    BackupOptionRow("apk(含 obb)", backupApk, onApkChange)
-                    BackupOptionRow("user", backupUser, onUserChange)
-                    BackupOptionRow("data", backupData, onDataChange)
+
+                    // 勾哪几项由 target.kinds 决定，不在这里写死
+                    BackupTarget.APP -> target.kinds.forEach { group ->
+                        BackupOptionRow(
+                            label = group.optionLabel,
+                            checked = group in checked,
+                            onCheckedChange = { onToggle(group, it) }
+                        )
+                    }
                 }
             }
         },
         confirmButton = {
             TextButton(
                 onClick = onConfirm,
-                enabled = isDirectory || backupApk || backupUser || backupData
+                // 目录没有可选项，永远可以备份；应用至少要勾一项
+                enabled = when (target) {
+                    BackupTarget.DIR -> true
+                    BackupTarget.APP -> checked.isNotEmpty()
+                }
             ) {
                 Text("备份")
             }

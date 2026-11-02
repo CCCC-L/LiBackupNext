@@ -37,7 +37,7 @@ object BackupNotifier {
      * 是否还有进行中的备份 / 恢复。
      *
      * 进度回调是 `oneway` 的，最后几个事件可能在操作返回、[finish] 之后才送到，
-     * 会把「完成」通知又刷回「正在恢复权限」——结束后直接忽略这些迟到的事件。
+     * 会把「完成」通知又刷回「正在恢复permissions」——结束后直接忽略这些迟到的事件。
      */
     @Volatile
     private var running = false
@@ -55,11 +55,6 @@ object BackupNotifier {
         }
 
     /** 步骤名转成展示文案。 */
-    fun stageLabel(stage: String): String = when (stage) {
-        "permissions" -> "权限"
-        else -> stage
-    }
-
     fun start(
         context: Context,
         action: String,
@@ -101,7 +96,7 @@ object BackupNotifier {
     /**
      * 刷新进度。
      *
-     * @param stageLabel 当前步骤，例如 apk / obb / user / data / 权限
+     * @param stageLabel 当前步骤，就是 rustic 回传的 stage 名（apk / obb / user / data / permissions）
      * @param stageIndex 当前进行到第几步（从 1 开始）
      * @param stageTotal 这次操作一共几步
      */

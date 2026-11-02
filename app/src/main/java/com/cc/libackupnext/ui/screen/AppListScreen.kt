@@ -50,7 +50,6 @@ import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.data.backupDirs
 import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.entity.dirAppInfo
-import com.cc.libackupnext.entity.isDirectory
 import com.cc.libackupnext.ui.AppBottomBar
 import com.cc.libackupnext.ui.AppTopBar
 import com.cc.libackupnext.ui.MainTab
@@ -266,9 +265,9 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                 AppBackupScreen(
                     viewModel = viewModel,
                     app = current,
-                    target = if (current.isDirectory) BackupTarget.DIR else BackupTarget.APP,
+                    target = BackupTarget.of(current),
                     // 默认目录也在 extraDirs 里，所以移除逻辑只有一种：从集合里删掉
-                    onRemoveDir = if (current.isDirectory) {
+                    onRemoveDir = if (BackupTarget.of(current) == BackupTarget.DIR) {
                         {
                             val next = AppPrefs.extraDirs - current.packageName
                             AppPrefs.extraDirs = next

@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.cc.libackupnext.data.BackupStep
+import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.BackupStepStatus
 
 /**
@@ -124,7 +125,7 @@ fun BackupProgressDialog(
                             .filter { it.status != BackupStepStatus.WAITING }
                             .forEach { step ->
                                 Text(
-                                    text = "${backupStepTitle(step.key, isRestore)}:" +
+                                    text = "${backupStepTitle(step.kind, isRestore)}:" +
                                             backupStepStatusText(step),
                                     style = MaterialTheme.typography.bodySmall
                                 )
@@ -165,15 +166,8 @@ fun BackupProgressDialog(
 }
 
 /** 步骤标题：`备份apk` / `恢复user` 这种。 */
-private fun backupStepTitle(key: String, isRestore: Boolean): String {
-    val prefix = if (isRestore) "恢复" else "备份"
-    val name = when (key) {
-        "obb" -> "obb"
-        "permissions" -> "权限"
-        else -> key
-    }
-    return prefix + name
-}
+private fun backupStepTitle(kind: SnapshotKind, isRestore: Boolean): String =
+    (if (isRestore) "恢复" else "备份") + kind.key
 
 private fun backupStepStatusText(step: BackupStep): String = when (step.status) {
     BackupStepStatus.WAITING -> "等待"

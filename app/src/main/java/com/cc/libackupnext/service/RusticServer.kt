@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.IBinder
 import android.os.SharedMemory
 import android.util.Log
+import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.service.util.AppState
 import com.cc.libackupnext.service.util.RusticRequestBuilder
 import com.cc.libackupnext.service.util.fixupTree
@@ -16,6 +17,21 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.nio.ByteBuffer
+
+/**
+ * 恢复时要落到「应用数据目录」的那几种快照。
+ *
+ * 顺序就是恢复顺序：obb 先于 user / user_de / data。
+ */
+private val APP_DATA_KINDS = listOf(
+    SnapshotKind.OBB,
+    SnapshotKind.USER,
+    SnapshotKind.USER_DE,
+    SnapshotKind.DATA
+)
+
+/** 数据类快照恢复到哪里、归谁、什么权限。 */
+private data class RestoreSpec(val dir: String, val gid: Int, val dirMode: String?)
 
 /** 备份进度事件，state: running / done / skipped / finished */
 data class BackupProgress(
@@ -221,6 +237,8 @@ object RusticServer {
                 runCatching { callback?.onProgress(json.toString()) }
             }
 
+            fun emit(kind: SnapshotKind, state: String) = emit(kind.key, state)
+
             return try {
                 val options = JSONObject(request)
                 val packageName = options.getString("packageName")
@@ -232,15 +250,17 @@ object RusticServer {
 
                 if (items.length() == 0) return "没有可恢复的内容"
 
-                val byKind = mutableMapOf<String, String>()
+                // 类型 -> 快照 id。认不出来的类型直接忽略（旧客户端 / 新类型）
+                val byKind = mutableMapOf<SnapshotKind, String>()
                 for (index in 0 until items.length()) {
                     val item = items.getJSONObject(index)
-                    byKind[item.getString("kind")] = item.getString("id")
+                    val kind = SnapshotKind.of(item.getString("kind")) ?: continue
+                    byKind[kind] = item.getString("id")
                 }
 
                 // 目录恢复：把快照写回原路径的父目录，顶层目录名就是文件夹名。
-                byKind["dir"]?.let { id ->
-                    emit("dir", "running")
+                byKind[SnapshotKind.DIR]?.let { id ->
+                    emit(SnapshotKind.DIR, "running")
 
                     // 和备份对称：写到 /data/media/0，而不是 FUSE 的 /sdcard。
                     // 用户目录归 media_rw、权限 2770 —— 和系统自己建的一致。
@@ -255,15 +275,15 @@ object RusticServer {
                         dirMode = "2770"
                     )
                     if (error != null) {
-                        emit("dir", "failed")
+                        emit(SnapshotKind.DIR, "failed")
                         return error
                     }
 
-                    emit("dir", "done")
+                    emit(SnapshotKind.DIR, "done")
                 }
 
-                byKind["apk"]?.let { id ->
-                    emit("apk", "running")
+                byKind[SnapshotKind.APK]?.let { id ->
+                    emit(SnapshotKind.APK, "running")
 
                     val dir = File(context.cacheDir, "restore_apk").apply {
                         deleteRecursively()
@@ -272,14 +292,14 @@ object RusticServer {
 
                     val error = restoreTo(repoPath, repoPassword, id, dir.absolutePath, delete = false)
                     if (error.isNotBlank()) {
-                        emit("apk", "failed")
+                        emit(SnapshotKind.APK, "failed")
                         return error
                     }
 
                     val apk = dir.listFiles()?.firstOrNull { it.name.endsWith(".apk") }
                     if (apk == null) {
                         dir.deleteRecursively()
-                        emit("apk", "failed")
+                        emit(SnapshotKind.APK, "failed")
                         return "恢复出来的 APK 不存在"
                     }
 
@@ -290,15 +310,15 @@ object RusticServer {
                     }
 
                     if (installedUid.isFailure) {
-                        emit("apk", "failed")
+                        emit(SnapshotKind.APK, "failed")
                         return installedUid.exceptionOrNull()?.message ?: "安装失败"
                     }
 
-                    emit("apk", "done")
+                    emit(SnapshotKind.APK, "done")
                 }
 
-                val appUid: Int? = packageUid(context, packageName, userId);
-                for (kind in listOf("obb", "user", "user_de", "data")) {
+                val appUid: Int? = packageUid(context, packageName, userId)
+                for (kind in APP_DATA_KINDS) {
                     val id = byKind[kind] ?: continue
 
                     if (appUid == null) {
@@ -306,29 +326,34 @@ object RusticServer {
                         return "应用未安装，无法恢复数据"
                     }
 
-                    val dest = when (kind) {
-                        "obb" -> "/data/media/$userId/Android/obb"
-                        "user" -> "/data/user/$userId"
-                        "user_de" -> "/data/user_de/$userId"
-                        else -> "/data/media/$userId/Android/data"
+                    // 落点 / 归属 / 权限：只有数据类快照会走到这里
+                    val spec = when (kind) {
+                        SnapshotKind.OBB -> RestoreSpec(
+                            dir = "/data/media/$userId/Android/obb",
+                            gid = EXT_OBB_RW_GID,
+                            dirMode = "2770"
+                        )
+
+                        SnapshotKind.USER -> RestoreSpec("/data/user/$userId", appUid, null)
+                        SnapshotKind.USER_DE -> RestoreSpec("/data/user_de/$userId", appUid, null)
+                        SnapshotKind.DATA -> RestoreSpec(
+                            dir = "/data/media/$userId/Android/data",
+                            gid = EXT_DATA_RW_GID,
+                            dirMode = "2770"
+                        )
+
+                        else -> return "不支持恢复的快照类型：${kind.key}"
                     }
 
                     emit(kind, "running")
                     val error = restoreTree(
                         repoPath, repoPassword,
                         snapshotId = id,
-                        target = File(dest, packageName),
+                        target = File(spec.dir, packageName),
                         delete = deleteFirst,
                         uid = appUid,
-                        gid = when (kind) {
-                            "data" -> EXT_DATA_RW_GID
-                            "obb" -> EXT_OBB_RW_GID
-                            else -> appUid
-                        },
-                        dirMode = when (kind) {
-                            "obb", "data" -> "2770"
-                            else -> null
-                        }
+                        gid = spec.gid,
+                        dirMode = spec.dirMode
                     )
                     if (error != null) {
                         emit(kind, "failed")
@@ -339,12 +364,12 @@ object RusticServer {
                 }
 
                 // 权限 / appops / 电池白名单：解出 permissions.json，全量写回
-                byKind["permissions"]?.let { id ->
-                    emit("permissions", "running")
+                byKind[SnapshotKind.PERMISSIONS]?.let { id ->
+                    emit(SnapshotKind.PERMISSIONS, "running")
 
                     val uid = appUid ?: packageUid(context, packageName, userId)
                     if (uid == null) {
-                        emit("permissions", "skipped")
+                        emit(SnapshotKind.PERMISSIONS, "skipped")
                         return@let
                     }
 
@@ -365,10 +390,10 @@ object RusticServer {
 
                     if (json == null) {
                         if (error.isNotBlank()) {
-                            emit("permissions", "failed")
+                            emit(SnapshotKind.PERMISSIONS, "failed")
                             return error
                         }
-                        emit("permissions", "skipped")
+                        emit(SnapshotKind.PERMISSIONS, "skipped")
                         return@let
                     }
 
@@ -376,7 +401,7 @@ object RusticServer {
                     if (failed > 0) {
                         Log.w(TAG, "恢复权限有 $failed 项失败：$packageName")
                     }
-                    emit("permissions", "done")
+                    emit(SnapshotKind.PERMISSIONS, "done")
                 }
 
                 ""

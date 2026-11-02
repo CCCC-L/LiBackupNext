@@ -3,6 +3,7 @@ package com.cc.libackupnext.data
 import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.entity.DefaultBackupDirs
 import com.cc.libackupnext.entity.dirAppInfo
+import com.cc.libackupnext.entity.isDirectory
 
 /**
  * 批量页 / 列表页备份的「目标类型」。
@@ -11,17 +12,17 @@ import com.cc.libackupnext.entity.dirAppInfo
  * 以后要加「数据库备份」「微信记录」这类，只要在这里加一个枚举值 + 补一个 [targets] 分支。
  *
  * @param unit 统计文字里的单位，例如「个应用」
- * @param kinds 快照的内容类型，也是列表顶部的列
+ * @param kinds 可勾选的单位，也是列表顶部的列
  */
-enum class BackupTarget(val unit: String, val kinds: List<String>) {
+enum class BackupTarget(val unit: String, val kinds: List<BackupGroup>) {
 
     /** 已安装的应用：apk / user / data 三列。 */
-    APP("个应用", listOf("apk", "user", "data")),
+    APP("个应用", listOf(BackupGroup.APK, BackupGroup.USER, BackupGroup.DATA)),
 
     /** 目录备份：只有一列 dir，快照 label 是 `<绝对路径>:dir`。 */
-    DIR("个文件夹", listOf("dir"));
+    DIR("个文件夹", listOf(BackupGroup.DIR));
 
-    /** 是不是「应用」这种目标（决定详情页要不要走安装状态、备份选项长什么样）。 */
+    /** 是不是「应用」这种目标。目前只用来决定详情页 / 批量页显不显示用户切换按钮。 */
     val isApp: Boolean get() = this == APP
 
     /** 详情页顶栏标题。 */
@@ -30,8 +31,16 @@ enum class BackupTarget(val unit: String, val kinds: List<String>) {
         DIR -> "文件信息"
     }
 
-    /** 详情页点「备份」时默认勾上的内容。 */
-    val backupKinds: Set<String> get() = kinds.toSet()
+    /**
+     * 这次备份要产出的内容。
+     *
+     * 应用：用户勾了哪些就是哪些；
+     * 文件夹：整个全备，没有可选项，勾选状态忽略。
+     */
+    fun backupKinds(checked: Set<BackupGroup>): Set<BackupGroup> = when (this) {
+        APP -> checked intersect kinds.toSet()
+        DIR -> kinds.toSet()
+    }
 
     /**
      * 这一页要列的目标。
@@ -50,6 +59,11 @@ enum class BackupTarget(val unit: String, val kinds: List<String>) {
             DIR -> backupDirs(AppPrefs.extraDirs).map { dirAppInfo(it) }
         }
         return if (create) all else all.filter { hasBackup(it.packageName) }
+    }
+
+    companion object {
+        /** 从「伪应用」反推目标类型：路径形式的是文件夹。 */
+        fun of(app: AppInfo): BackupTarget = if (app.isDirectory) DIR else APP
     }
 }
 

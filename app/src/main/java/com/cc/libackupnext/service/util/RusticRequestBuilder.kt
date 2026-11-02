@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.os.UserManagerHidden
 import androidx.core.graphics.drawable.toBitmap
+import com.cc.libackupnext.data.SnapshotKind
 import dev.rikka.tools.refine.Refine
 import org.json.JSONArray
 import org.json.JSONObject
@@ -92,14 +93,14 @@ internal class RusticRequestBuilder(
             val dir = File(packageName)
             val dirItems = JSONArray().put(
                 item(
-                    "dir",
-                    "$packageName:dir",
+                    SnapshotKind.DIR.key,
+                    "$packageName:${SnapshotKind.DIR.key}",
                     tags,
                     // 备份走真实路径：/sdcard 是 FUSE 视图，root 读写会被权限限制
                     listOf(mediaPath(packageName)),
                     dir.name,
                     if (dir.isDirectory) null else "目录不存在",
-                    descriptionOf("dir")
+                    descriptionOf(SnapshotKind.DIR.key)
                 )
             )
             return JSONObject().apply {
@@ -122,8 +123,8 @@ internal class RusticRequestBuilder(
         if (includeIcon) writeIcon(packageName)?.let { iconPath ->
             items.put(
                 item(
-                    "icon",
-                    "$packageName:icon",
+                    SnapshotKind.ICON.key,
+                    "$packageName:${SnapshotKind.ICON.key}",
                     listOf(packageName),
                     listOf(iconPath),
                     asPath = File(iconPath).name
@@ -132,90 +133,93 @@ internal class RusticRequestBuilder(
         }
 
         // 即使某个来源暂时不存在也要带上，Rust 侧会回报「跳过」
-        if (options.optBoolean("apk", false)) {
+        if (options.optBoolean(SnapshotKind.APK.key, false)) {
             val apk = apkPaths(packageName).firstOrNull()
             items.put(
                 item(
-                    "apk",
-                    labelOf("apk", "$packageName:apk"),
-                    tagsOf("apk", tags),
+                    SnapshotKind.APK.key,
+                    labelOf(SnapshotKind.APK.key, "$packageName:${SnapshotKind.APK.key}"),
+                    tagsOf(SnapshotKind.APK.key, tags),
                     listOfNotNull(apk),
                     asPath = apk?.let { File(it).name },
-                    description = descriptionOf("apk")
+                    description = descriptionOf(SnapshotKind.APK.key)
                 )
             )
         }
 
-        if (options.optBoolean("obb", false)) {
+        if (options.optBoolean(SnapshotKind.OBB.key, false)) {
             val obbPath = "/data/media/$userId/Android/obb/$packageName"
             items.put(
                 item(
-                    "obb",
-                    labelOf("obb", "$packageName:obb"),
-                    tagsOf("obb", tags),
+                    SnapshotKind.OBB.key,
+                    labelOf(SnapshotKind.OBB.key, "$packageName:${SnapshotKind.OBB.key}"),
+                    tagsOf(SnapshotKind.OBB.key, tags),
                     listOf(obbPath),
                     asPath = packageName,
                     skipReason = skipReasonOf(obbPath),
-                    description = descriptionOf("obb")
+                    description = descriptionOf(SnapshotKind.OBB.key)
                 )
             )
         }
 
-        if (options.optBoolean("user", false)) {
+        if (options.optBoolean(SnapshotKind.USER.key, false)) {
             val userDataPath = "/data/user/$userId/$packageName"
             val userDePath = "/data/user_de/$userId/$packageName"
 
             items.put(
                 item(
-                    "user",
-                    labelOf("user", "$packageName:user"),
-                    tagsOf("user", tags),
+                    SnapshotKind.USER.key,
+                    labelOf(SnapshotKind.USER.key, "$packageName:${SnapshotKind.USER.key}"),
+                    tagsOf(SnapshotKind.USER.key, tags),
                     listOf(userDataPath),
                     asPath = packageName,
                     skipReason = skipReasonOf(userDataPath),
-                    description = descriptionOf("user")
+                    description = descriptionOf(SnapshotKind.USER.key)
                 )
             )
             items.put(
                 item(
-                    "user_de",
-                    labelOf("user_de", "$packageName:user_de"),
-                    tagsOf("user_de", tags),
+                    SnapshotKind.USER_DE.key,
+                    labelOf(SnapshotKind.USER_DE.key, "$packageName:${SnapshotKind.USER_DE.key}"),
+                    tagsOf(SnapshotKind.USER_DE.key, tags),
                     listOf(userDePath),
                     asPath = packageName,
                     skipReason = skipReasonOf(userDePath),
-                    description = descriptionOf("user_de")
+                    description = descriptionOf(SnapshotKind.USER_DE.key)
                 )
             )
         }
 
-        if (options.optBoolean("data", false)) {
+        if (options.optBoolean(SnapshotKind.DATA.key, false)) {
             val dataPath = "/data/media/$userId/Android/data/$packageName"
             items.put(
                 item(
-                    "data",
-                    labelOf("data", "$packageName:data"),
-                    tagsOf("data", tags),
+                    SnapshotKind.DATA.key,
+                    labelOf(SnapshotKind.DATA.key, "$packageName:${SnapshotKind.DATA.key}"),
+                    tagsOf(SnapshotKind.DATA.key, tags),
                     listOf(dataPath),
                     asPath = packageName,
                     skipReason = skipReasonOf(dataPath),
-                    description = descriptionOf("data")
+                    description = descriptionOf(SnapshotKind.DATA.key)
                 )
             )
         }
 
         // 已授予的运行时权限：写成 permissions.json 一起进仓库
-        if (options.optBoolean("permissions", false)) {
+        if (options.optBoolean(SnapshotKind.PERMISSIONS.key, false)) {
             val permissionFile = appState.write(packageName, userId)
             items.put(
                 item(
-                    "permissions",
-                    labelOf("permissions", "$packageName:permissions"),
-                    tagsOf("permissions", tags),
+                    SnapshotKind.PERMISSIONS.key,
+                    labelOf(
+                        SnapshotKind.PERMISSIONS.key,
+                        "$packageName:${SnapshotKind.PERMISSIONS.key}"
+                    ),
+                    tagsOf(SnapshotKind.PERMISSIONS.key, tags),
                     listOfNotNull(permissionFile),
                     asPath = "permissions.json",
                     skipReason = if (permissionFile == null) "没有已授予的运行时权限" else null,
-                    description = descriptionOf("permissions")
+                    description = descriptionOf(SnapshotKind.PERMISSIONS.key)
                 )
             )
         }

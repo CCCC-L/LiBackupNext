@@ -25,9 +25,12 @@ object SnapshotMeta {
      *
      * 应用是 `<包名>:<类型>`；目录是 `dir:<绝对路径>`，路径里本身带 `:` 和 `/`，
      * 不能按最后一个 `:` 切，否则类型会变成路径。
+     *
+     * 认不出来的类型返回 null：仓库里可能有本版本还不认识的快照。
      */
-    fun kind(label: String): String =
-        if (label.startsWith(DIR_LABEL_PREFIX)) "dir" else label.substringAfterLast(':')
+    fun kind(label: String): SnapshotKind? =
+        if (label.startsWith(DIR_LABEL_PREFIX)) SnapshotKind.DIR
+        else SnapshotKind.of(label.substringAfterLast(':'))
 
     /** 把 `应用名|版本|用户名|时间戳` 拆开。 */
     fun fields(rawTags: String): List<String> =

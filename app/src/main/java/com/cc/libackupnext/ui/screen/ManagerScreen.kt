@@ -40,10 +40,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.cc.libackupnext.data.BackupEntry
+import com.cc.libackupnext.data.BackupGroup
 import com.cc.libackupnext.data.BackupStep
 import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.entity.AppInfo
-import com.cc.libackupnext.entity.isDirectory
 import com.cc.libackupnext.service.AppManagerService
 import com.cc.libackupnext.service.BackupProgress
 import com.cc.libackupnext.service.RusticClient
@@ -60,8 +60,8 @@ import com.cc.libackupnext.ui.screen.detail.BackupOptionsDialog
 import com.cc.libackupnext.ui.screen.detail.ConfirmActionDialog
 import com.cc.libackupnext.ui.screen.detail.ConfirmDeleteAllDialog
 import com.cc.libackupnext.ui.screen.detail.DetailHeader
-import com.cc.libackupnext.ui.screen.detail.detailTargetOf
 import com.cc.libackupnext.ui.screen.detail.NoteEditDialog
+import com.cc.libackupnext.ui.screen.detail.detailTargetOf
 import com.cc.libackupnext.ui.theme.LocalAppColors
 import com.cc.libackupnext.ui.util.AppIconStore
 import com.cc.libackupnext.ui.util.AppListContainer
@@ -156,10 +156,9 @@ fun AppBackupScreen(
     }
 
     // 目录的「已不存在」直接看磁盘；应用还是看安装状态
-    val isUninstalled = if (displayApp.isDirectory) {
-        !dirExists
-    } else {
-        !restoredInstalled &&
+    val isUninstalled = when (target) {
+        BackupTarget.DIR -> !dirExists
+        BackupTarget.APP -> !restoredInstalled &&
                 (forceUninstalled ||
                         displayApp.onlyInBackup ||
                         (loadedUserId == currentUserId && appForCurrentUser == null))
@@ -170,9 +169,8 @@ fun AppBackupScreen(
 
     // ==================== 备份 ====================
     var showBackupOptions by remember { mutableStateOf(false) }
-    var backupApk by remember { mutableStateOf(true) }
-    var backupUser by remember { mutableStateOf(true) }
-    var backupData by remember { mutableStateOf(true) }
+    // 备份弹窗里勾了哪些内容：默认全勾
+    var backupGroups by remember { mutableStateOf(BackupTarget.APP.kinds.toSet()) }
     var showBackupProgress by remember { mutableStateOf(false) }
     var backupRunning by remember { mutableStateOf(false) }
 
@@ -204,7 +202,7 @@ fun AppBackupScreen(
     var reloadKey by remember { mutableStateOf(0) }
     var editingEntry by remember { mutableStateOf<BackupEntry?>(null) }
     var managingEntry by remember { mutableStateOf<BackupEntry?>(null) }
-    var managingKinds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var managingKinds by remember { mutableStateOf<Set<BackupGroup>>(emptySet()) }
     var confirmDeleteAll by remember { mutableStateOf(false) }
     // 移除文件夹前的确认（会连它的备份一起删）
     var confirmRemoveDir by remember { mutableStateOf(false) }
@@ -241,7 +239,10 @@ fun AppBackupScreen(
 
                         ItemAction.DELETE_DIR -> deleteDirectory(displayApp.packageName)
 
-                        else -> Unit
+                        // 这几个只做页面跳转，不碰 root
+                        ItemAction.LAUNCH,
+                        ItemAction.APP_SETTINGS,
+                        ItemAction.OPEN_DIR -> Unit
                     }
                 }
 
@@ -266,7 +267,12 @@ fun AppBackupScreen(
                     // 目录已经从磁盘删掉，退回列表
                     ItemAction.DELETE_DIR -> onBack()
 
-                    else -> Unit
+                    // 这几个动作不改页面上的状态
+                    ItemAction.LAUNCH,
+                    ItemAction.FORCE_STOP,
+                    ItemAction.APP_SETTINGS,
+                    ItemAction.CLEAR_DATA,
+                    ItemAction.OPEN_DIR -> Unit
                 }
 
                 Toast.makeText(context, "成功", Toast.LENGTH_SHORT).show()
@@ -283,14 +289,14 @@ fun AppBackupScreen(
     }
 
     /** 备份 / 覆盖备份共用：进度弹窗 + 结果处理，具体逻辑在 service 层。 */
-    fun runBackup(kinds: Set<String>, overwrite: BackupEntry? = null) {
+    fun runBackup(groups: Set<BackupGroup>, overwrite: BackupEntry? = null) {
         showBackupOptions = false
         managingEntry = null
         backupError = null
         progressTitle = "正在备份"
         backupRunning = true
         showBackupProgress = true
-        backupSteps.value = RusticClient.backupSteps(kinds)
+        backupSteps.value = RusticClient.backupSteps(groups)
         val steps = backupSteps.value
         BackupNotifier.start(
             context = context,
@@ -306,7 +312,7 @@ fun AppBackupScreen(
             val onProgress: (BackupProgress) -> Unit = { progress ->
                 backupSteps.update { RusticClient.applyProgress(it, progress) }
 
-                val stepIndex = steps.indexOfFirst { it.key == progress.stage }
+                val stepIndex = steps.indexOfFirst { it.kind.key == progress.stage }
                 BackupNotifier.update(
                     context = context,
                     action = "备份",
@@ -315,16 +321,16 @@ fun AppBackupScreen(
                     userId = displayApp.userId,
                     appIndex = 1,
                     appTotal = 1,
-                    stageLabel = BackupNotifier.stageLabel(progress.stage),
+                    stageLabel = progress.stage,
                     stageIndex = if (stepIndex >= 0) stepIndex + 1 else 1,
                     stageTotal = steps.size
                 )
             }
 
             val result = if (overwrite == null) {
-                RusticClient.backup(displayApp, kinds, onProgress)
+                RusticClient.backup(displayApp, groups, onProgress)
             } else {
-                RusticClient.overwrite(displayApp, overwrite, kinds, onProgress)
+                RusticClient.overwrite(displayApp, overwrite, groups, onProgress)
             }
 
             backupRunning = false
@@ -343,33 +349,25 @@ fun AppBackupScreen(
 
     /** 开始备份：先关选项弹窗，再打开不可关闭的进度弹窗。 */
     fun startBackup(
-        kinds: Set<String> = if (!target.isApp) {
-            target.backupKinds
-        } else {
-            setOfNotNull(
-                "apk".takeIf { backupApk },
-                "user".takeIf { backupUser },
-                "data".takeIf { backupData }
-            )
-        }
+        groups: Set<BackupGroup> = target.backupKinds(backupGroups)
     ) {
-        runBackup(kinds)
+        runBackup(groups)
     }
 
     /** 覆盖备份：沿用旧快照的 label / tag / 备注，成功后删掉旧快照。 */
     fun overwriteSelected(entry: BackupEntry) {
-        val kinds = managingKinds
-        if (entry.selectedSnapshots(kinds).isEmpty()) {
+        val groups = managingKinds
+        if (entry.selectedSnapshots(groups).isEmpty()) {
             Toast.makeText(context, "请先勾选要覆盖的内容", Toast.LENGTH_SHORT).show()
             return
         }
-        runBackup(kinds, overwrite = entry)
+        runBackup(groups, overwrite = entry)
     }
 
     /** 删除勾选的快照。 */
     fun deleteSelected(entry: BackupEntry) {
-        val kinds = managingKinds
-        if (entry.selectedSnapshots(kinds).isEmpty()) {
+        val groups = managingKinds
+        if (entry.selectedSnapshots(groups).isEmpty()) {
             Toast.makeText(context, "请先勾选要删除的内容", Toast.LENGTH_SHORT).show()
             return
         }
@@ -378,7 +376,7 @@ fun AppBackupScreen(
         scope.launch {
             KeepAwake.acquire(context)
             try {
-                RusticClient.deleteSelected(entry, kinds)
+                RusticClient.deleteSelected(entry, groups)
                     .onSuccess {
                         reloadKey++
                         // 删掉一条备份：只刷新列表里的备份数 / 备份时间
@@ -431,14 +429,14 @@ fun AppBackupScreen(
 
     /** 恢复勾选的快照。 */
     fun restoreSelected(entry: BackupEntry) {
-        val kinds = managingKinds
-        RusticClient.restoreBlockedReason(entry, kinds, isInstalled)?.let { reason ->
+        val groups = managingKinds
+        RusticClient.restoreBlockedReason(entry, groups, isInstalled)?.let { reason ->
             Toast.makeText(context, reason, Toast.LENGTH_SHORT).show()
             return
         }
 
         managingEntry = null
-        backupSteps.value = RusticClient.restoreSteps(entry, kinds)
+        backupSteps.value = RusticClient.restoreSteps(entry, groups)
         val steps = backupSteps.value
 
         progressTitle = "正在恢复"
@@ -460,12 +458,12 @@ fun AppBackupScreen(
             val result = RusticClient.restore(
                 app = displayApp,
                 entry = entry,
-                kinds = kinds,
+                groups = groups,
                 installed = isInstalled
             ) { progress ->
                 backupSteps.update { RusticClient.applyProgress(it, progress) }
 
-                val stepIndex = steps.indexOfFirst { it.key == progress.stage }
+                val stepIndex = steps.indexOfFirst { it.kind.key == progress.stage }
                 BackupNotifier.update(
                     context = context,
                     action = "恢复",
@@ -474,7 +472,7 @@ fun AppBackupScreen(
                     userId = displayApp.userId,
                     appIndex = 1,
                     appTotal = 1,
-                    stageLabel = BackupNotifier.stageLabel(progress.stage),
+                    stageLabel = progress.stage,
                     stageIndex = if (stepIndex >= 0) stepIndex + 1 else 1,
                     stageTotal = steps.size
                 )
@@ -493,7 +491,7 @@ fun AppBackupScreen(
                 dirExistsTick++
                 // 勾了 apk 就一定装上了：本地先翻成已安装（名称/版本/包名本来就在备份快照里），
                 // 列表刷新回来后自然以列表数据为准。
-                if (kinds.contains("apk")) restoredInstalled = true
+                if (BackupGroup.APK in groups) restoredInstalled = true
                 // 恢复可能把它装上了：清掉图标的负缓存，否则图标一直是首字母占位块
                 AppIconStore.invalidate(displayApp.packageName, displayApp.userId)
                 // 恢复可能装上/改动了应用，列表要重新读一次
@@ -545,7 +543,8 @@ fun AppBackupScreen(
             // 破坏性操作先确认
             ItemAction.CLEAR_DATA, ItemAction.UNINSTALL, ItemAction.DELETE_DIR -> confirmAction =
                 action
-            else -> runAction(action)
+            // 剩下的是直接执行的 root 操作
+            ItemAction.FORCE_STOP, ItemAction.FREEZE, ItemAction.UNFREEZE -> runAction(action)
         }
     }
 
@@ -570,7 +569,7 @@ fun AppBackupScreen(
                 onMiddleClick = { showHelpDialog = true },
                 showSortMenu = false,
                 // 用户切换只跟应用有关，文件详情页不显示
-                showUserButton = !displayApp.isDirectory,
+                showUserButton = target.isApp,
                 searchPlaceholder = "搜索备注",
                 searchOpen = detailSearchOpen,
                 searchQueryText = detailQuery,
@@ -706,7 +705,7 @@ fun AppBackupScreen(
     managingEntry?.let { entry ->
         BackupManageDialog(
             entry = entry,
-            isDirectory = displayApp.isDirectory,
+            target = target,
             dirPath = displayApp.packageName,
             canOverwrite = RusticClient.canOverwrite(isInstalled),
             checkedKinds = managingKinds,
@@ -739,14 +738,12 @@ fun AppBackupScreen(
 
     if (showBackupOptions) {
         BackupOptionsDialog(
-            isDirectory = displayApp.isDirectory,
+            target = target,
             dirPath = displayApp.packageName,
-            backupApk = backupApk,
-            backupUser = backupUser,
-            backupData = backupData,
-            onApkChange = { backupApk = it },
-            onUserChange = { backupUser = it },
-            onDataChange = { backupData = it },
+            checked = backupGroups,
+            onToggle = { group, checked ->
+                backupGroups = if (checked) backupGroups + group else backupGroups - group
+            },
             onDismiss = { showBackupOptions = false },
             onConfirm = { startBackup() }
         )

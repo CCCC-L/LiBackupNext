@@ -60,11 +60,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.cc.libackupnext.data.AppBackupSummary
 import com.cc.libackupnext.data.BackupEntry
+import com.cc.libackupnext.data.BackupGroup
 import com.cc.libackupnext.data.BackupStep
 import com.cc.libackupnext.data.BackupTarget
-import com.cc.libackupnext.data.SnapshotMeta
+import com.cc.libackupnext.data.kind
 import com.cc.libackupnext.entity.AppInfo
-import com.cc.libackupnext.entity.isDirectory
 import com.cc.libackupnext.service.BackupProgress
 import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.ui.AppTopBar
@@ -87,9 +87,6 @@ import com.cc.libackupnext.util.ErrorLog
 import kotlinx.coroutines.launch
 import java.util.UUID
 import kotlin.math.roundToInt
-
-/** 新建备份页里每个应用可勾选的内容，顺序与列表列头一致。 */
-private val BackupKinds = listOf("apk", "user", "data")
 
 /** 勾选列的宽度：列头和数据行保持一致才能对齐。 */
 private val KindColumnWidth = 34.dp
@@ -199,7 +196,7 @@ private fun BackupBatchScreen(
      * 删完之后立刻把对应的复选框变灰（仓库里已经没有这个类型了），
      * 不用等备份概况重新加载。
      */
-    var deletedKinds by remember { mutableStateOf<Map<String, Set<String>>>(emptyMap()) }
+    var deletedKinds by remember { mutableStateOf<Map<String, Set<BackupGroup>>>(emptyMap()) }
 
     // ==================== 多选模式 ====================
     /** 多选模式：右滑动某一行进入。 */
@@ -285,14 +282,14 @@ private fun BackupBatchScreen(
         }
     }
 
-    fun kindsOf(packageName: String): Set<String> = selected[packageName].orEmpty()
+    fun kindsOf(packageName: String): Set<BackupGroup> = selected[packageName].orEmpty()
 
     /** 这个应用要操作的那条备份：详情页里明确选过的优先，否则用最新的。 */
     fun entryOf(packageName: String): BackupEntry? =
         viewModel.selectedEntries[packageName] ?: overview[packageName]?.latest
 
     /** 这个应用当前能勾哪些类型：管理页只有仓库里确实存在的类型可勾。 */
-    fun availableKindsOf(packageName: String): Set<String> =
+    fun availableKindsOf(packageName: String): Set<BackupGroup> =
         if (mode == BackupBatchMode.CREATE) {
             columnKinds.toSet()
         } else {
@@ -303,7 +300,7 @@ private fun BackupBatchScreen(
                 .toSet()
         }
 
-    fun setKinds(packageName: String, kinds: Set<String>) {
+    fun setKinds(packageName: String, kinds: Set<BackupGroup>) {
         if (kinds.isEmpty()) {
             selected.remove(packageName)
             // 整行取消勾选后不再沿用详情页里选的那条备份
@@ -313,10 +310,10 @@ private fun BackupBatchScreen(
         }
     }
 
-    fun toggleKind(app: AppInfo, kind: String) {
-        if (kind !in availableKindsOf(app.packageName)) return
+    fun toggleKind(app: AppInfo, group: BackupGroup) {
+        if (group !in availableKindsOf(app.packageName)) return
         val current = kindsOf(app.packageName)
-        setKinds(app.packageName, if (kind in current) current - kind else current + kind)
+        setKinds(app.packageName, if (group in current) current - group else current + group)
     }
 
     fun toggleApp(app: AppInfo) {
@@ -362,12 +359,12 @@ private fun BackupBatchScreen(
     }
 
     /** 列头勾选：整列全选 / 全不选（只影响 [targets] 里确实有这一列的应用）。 */
-    fun toggleColumn(targets: List<AppInfo>, kind: String) {
-        val rows = targets.filter { kind in availableKindsOf(it.packageName) }
-        val allChecked = rows.isNotEmpty() && rows.all { kind in kindsOf(it.packageName) }
+    fun toggleColumn(targets: List<AppInfo>, group: BackupGroup) {
+        val rows = targets.filter { group in availableKindsOf(it.packageName) }
+        val allChecked = rows.isNotEmpty() && rows.all { group in kindsOf(it.packageName) }
         rows.forEach { app ->
             val current = kindsOf(app.packageName)
-            setKinds(app.packageName, if (allChecked) current - kind else current + kind)
+            setKinds(app.packageName, if (allChecked) current - group else current + group)
         }
     }
 
@@ -395,7 +392,7 @@ private fun BackupBatchScreen(
     }
 
     /** 这次操作的目标应用 + 类型：多选模式下只取选中的应用。 */
-    fun targets(): List<Pair<AppInfo, Set<String>>> = apps.mapNotNull { app ->
+    fun targets(): List<Pair<AppInfo, Set<BackupGroup>>> = apps.mapNotNull { app ->
         if (multiSelect && app.packageName !in multiSelected) return@mapNotNull null
         val kinds = kindsOf(app.packageName)
         if (kinds.isEmpty()) null else app to kinds
@@ -410,9 +407,9 @@ private fun BackupBatchScreen(
         title: String,
         doneTitle: String,
         isRestore: Boolean,
-        list: List<Pair<AppInfo, Set<String>>>,
-        stepsOf: (AppInfo, Set<String>) -> List<BackupStep>,
-        action: suspend (AppInfo, Set<String>, (BackupProgress) -> Unit) -> Result<Unit>
+        list: List<Pair<AppInfo, Set<BackupGroup>>>,
+        stepsOf: (AppInfo, Set<BackupGroup>) -> List<BackupStep>,
+        action: suspend (AppInfo, Set<BackupGroup>, (BackupProgress) -> Unit) -> Result<Unit>
     ) {
         if (list.isEmpty()) {
             Toast.makeText(context, "请先勾选要操作的内容", Toast.LENGTH_SHORT).show()
@@ -472,7 +469,7 @@ private fun BackupBatchScreen(
                     progressSections = progressSections.dropLast(1) +
                             last.copy(steps = RusticClient.applyProgress(last.steps, progress))
 
-                    val stepIndex = appSteps.indexOfFirst { it.key == progress.stage }
+                    val stepIndex = appSteps.indexOfFirst { it.kind.key == progress.stage }
                     BackupNotifier.update(
                         context = context,
                         action = actionLabel,
@@ -481,7 +478,7 @@ private fun BackupBatchScreen(
                         userId = app.userId,
                         appIndex = finished + 1,
                         appTotal = total,
-                        stageLabel = BackupNotifier.stageLabel(progress.stage),
+                        stageLabel = progress.stage,
                         stageIndex = if (stepIndex >= 0) stepIndex + 1 else 1,
                         stageTotal = appSteps.size
                     )
@@ -531,13 +528,14 @@ private fun BackupBatchScreen(
             // 图标有没有备份过，概况里已经带了，不用每个应用再查一次仓库
             RusticClient.backup(
                 app = app,
-                kinds = kinds,
+                groups = kinds,
                 onProgress = onProgress,
                 batchId = batchId,
                 iconAlreadyBackedUp = overview[app.packageName]?.hasIcon,
                 // 同类型最新快照的 id：给 rustic 当 parent，省掉它自己列一遍全部快照
                 parentIds = overview[app.packageName]?.latest?.snapshots
-                    ?.associate { SnapshotMeta.kind(it.label) to it.id }
+                    ?.mapNotNull { snapshot -> snapshot.kind()?.let { it to snapshot.id } }
+                    ?.toMap()
             )
         }
     }
@@ -741,6 +739,7 @@ private fun BackupBatchScreen(
             ) { _, app, shape ->
                 BackupSelectRow(
                     app = app,
+                    target = target,
                     summary = overview[app.packageName],
                     entry = entryOf(app.packageName),
                     showBackupTime = mode == BackupBatchMode.MANAGE,
@@ -859,18 +858,18 @@ private fun SelectionHeader(
     appCount: Int,
     hasBackupOnly: Boolean,
     selectedApps: Int,
-    counts: Map<String, Int>,
+    counts: Map<BackupGroup, Int>,
     currentUser: String,
-    /** 这一页有哪些内容类型（apk/user/data 或 dir）。 */
-    columns: List<String>,
+    /** 这一页有哪些勾选单位（apk/user/data 或 dir）。 */
+    columns: List<BackupGroup>,
     /** 统计文字里的单位：「个应用」/「个文件夹」。 */
     unit: String,
     /** 多选里一个都没选时，这四个勾选框没有作用对象，置灰。 */
     enabled: Boolean,
     allChecked: Boolean,
-    columnChecked: (String) -> Boolean,
+    columnChecked: (BackupGroup) -> Boolean,
     onToggleAll: () -> Unit,
-    onToggleColumn: (String) -> Unit,
+    onToggleColumn: (BackupGroup) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -889,9 +888,9 @@ private fun SelectionHeader(
             Spacer(modifier = Modifier.height(1.dp))
             Text(
                 text = if (selectedApps == 0) {
-                    "已选择: " + columns.joinToString(" ") { "$it:0" }
+                    "已选择: " + columns.joinToString(" ") { "${it.title}:0" }
                 } else {
-                    "已选择: " + columns.joinToString(" ") { "$it:${counts[it] ?: 0}" }
+                    "已选择: " + columns.joinToString(" ") { "${it.title}:${counts[it] ?: 0}" }
                 },
                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Normal),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -937,7 +936,7 @@ private fun SelectionHeader(
                     modifier = Modifier.size(KindCheckboxSize)
                 )
                 Text(
-                    text = kind,
+                    text = kind.title,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -950,14 +949,15 @@ private fun SelectionHeader(
 @Composable
 private fun BackupSelectRow(
     app: AppInfo,
+    target: BackupTarget,
     summary: AppBackupSummary?,
     /** 要展示的那条备份（详情页里选过的优先）。 */
     entry: BackupEntry?,
     showBackupTime: Boolean,
-    kinds: Set<String>,
-    availableKinds: Set<String>,
+    kinds: Set<BackupGroup>,
+    availableKinds: Set<BackupGroup>,
     /** 这一页要画哪几列勾选框。 */
-    columns: List<String>,
+    columns: List<BackupGroup>,
     shape: Shape,
     /** 多选模式：点击只切换选中、不显示水波纹。 */
     multiSelect: Boolean,
@@ -965,7 +965,7 @@ private fun BackupSelectRow(
     selected: Boolean,
     /** 备份进行中时不允许滑动改选中。 */
     swipeEnabled: Boolean,
-    onToggleKind: (String) -> Unit,
+    onToggleKind: (BackupGroup) -> Unit,
     onToggleApp: () -> Unit,
     onOpenDetail: () -> Unit,
     onSwipeSelect: () -> Unit
@@ -1013,10 +1013,9 @@ private fun BackupSelectRow(
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (app.isDirectory) {
-                FolderIconBox(size = 40.dp, iconSize = 22.dp)
-            } else {
-                AppIcon(
+            when (target) {
+                BackupTarget.DIR -> FolderIconBox(size = 40.dp, iconSize = 22.dp)
+                BackupTarget.APP -> AppIcon(
                     icon = rememberAppIcon(app.packageName, app.userId),
                     name = app.name,
                     modifier = Modifier.size(40.dp)

@@ -1,13 +1,13 @@
 package com.cc.libackupnext.data
 
-/** 快照类型：label 冒号后的部分（apk / obb / user / user_de / data / icon）。 */
-fun BackupSnapshot.kind(): String = SnapshotMeta.kind(label)
+/** 快照类型：label 冒号后的部分。认不出来的类型是 null。 */
+fun BackupSnapshot.kind(): SnapshotKind? = SnapshotMeta.kind(label)
 
 /**
  * 备份页里的一行：同一次备份产生的多个快照（apk / obb / user / user_de / data）。
  *
- * 纯数据模型，UI 直接渲染；分组、勾选换算等逻辑在
- * [com.cc.libackupnext.service.Rustic] 里。
+ * 纯数据模型，UI 直接渲染；备份 / 恢复的编排在
+ * [com.cc.libackupnext.service.RusticClient] 里。
  */
 data class BackupEntry(
     val title: String,
@@ -21,41 +21,28 @@ data class BackupEntry(
     val ids: List<String> get() = snapshots.map { it.id }
 
     /**
-     * 管理弹窗里真正可勾选的类型（user 包含 user_de）。
+     * 这条备份里真正可勾选的单位。
+     *
+     * 应用条目里没有 dir 快照、目录条目里没有 apk/user/data，靠「有没有快照」自然过滤掉。
      */
-    val availableKinds: List<String> by lazy(LazyThreadSafetyMode.NONE) {
-        // dir 也作为候选：应用条目里没有 dir 快照，自然不会出现
-        (KINDS + "dir").filter { snapshotsOf(it).isNotEmpty() }
+    val availableKinds: List<BackupGroup> by lazy(LazyThreadSafetyMode.NONE) {
+        BackupGroup.entries.filter { snapshotsOf(it).isNotEmpty() }
     }
 
-    /** 某个类型对应的快照；`apk` 带上 `obb`，`user` 带上 `user_de`。 */
-    fun snapshotsOf(kind: String): List<BackupSnapshot> = when (kind) {
-        "apk" -> snapshots.filter { it.kind() == "apk" || it.kind() == "obb" }
-        "user" -> snapshots.filter { it.kind() == "user" || it.kind() == "user_de" }
-        else -> snapshots.filter { it.kind() == kind }
-    }
+    /** 某个勾选单位对应的快照；`apk` 带上 `obb`，`user` 带上 `user_de` 和权限。 */
+    fun snapshotsOf(group: BackupGroup): List<BackupSnapshot> =
+        snapshots.filter { group.covers(it.kind()) }
 
-    /** 勾选的类型对应的快照。 */
-    fun selectedSnapshots(kinds: Set<String>): List<BackupSnapshot> =
-        snapshots.filter { snapshot -> kinds.any { it.covers(snapshot.kind()) } }
-
-    companion object {
-        /** 管理弹窗里的类型顺序。 */
-        val KINDS = listOf("apk", "user", "data")
-
-        /** apk 勾选同时覆盖 obb；user 勾选同时覆盖 user_de 和权限快照。 */
-        private fun String.covers(kind: String): Boolean =
-            this == kind ||
-                    (this == "apk" && kind == "obb") ||
-                    (this == "user" && (kind == "user_de" || kind == "permissions"))
-    }
+    /** 勾选的单位对应的快照。 */
+    fun selectedSnapshots(groups: Set<BackupGroup>): List<BackupSnapshot> =
+        snapshots.filter { snapshot -> groups.any { it.covers(snapshot.kind()) } }
 }
 
 /** 备份 / 恢复进度里的一步。 */
 enum class BackupStepStatus { WAITING, RUNNING, DONE, SKIPPED, FAILED }
 
 data class BackupStep(
-    val key: String,
+    val kind: SnapshotKind,
     val status: BackupStepStatus,
     val files: Long = 0,
     val reason: String = ""

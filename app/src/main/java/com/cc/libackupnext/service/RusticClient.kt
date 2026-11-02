@@ -5,8 +5,10 @@ import com.cc.libackupnext.App
 import com.cc.libackupnext.data.AppBackupSummary
 import com.cc.libackupnext.data.AppPrefs
 import com.cc.libackupnext.data.BackupEntry
+import com.cc.libackupnext.data.BackupGroup
 import com.cc.libackupnext.data.BackupRequest
 import com.cc.libackupnext.data.BackupSnapshot
+import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.BackupStep
 import com.cc.libackupnext.data.BackupStepStatus
 import com.cc.libackupnext.data.RepoOverview
@@ -209,7 +211,7 @@ object RusticClient {
         deleteIds: List<String> = emptyList(),
         batchId: String? = null,
         iconAlreadyBackedUp: Boolean? = null,
-        parentIds: Map<String, String>? = null,
+        parentIds: Map<SnapshotKind, String>? = null,
         onProgress: (BackupProgress) -> Unit
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
@@ -238,7 +240,8 @@ object RusticClient {
                 repoPath = request.repoPath,
                 repoPassword = request.repoPassword,
                 packageName = request.packageName
-            ).getOrNull()?.any { it.label == "${request.packageName}:icon" } ?: false
+            ).getOrNull()?.any { it.label == "${request.packageName}:${SnapshotKind.ICON.key}" }
+                ?: false
 
             val payload = JSONObject().apply {
                 put("repoPath", request.repoPath)
@@ -247,14 +250,15 @@ object RusticClient {
                 put("appName", request.appName)
                 put("version", request.version)
                 put("userId", request.userId)
-                put("apk", request.backupApk)
-                put("obb", request.backupObb)
-                put("user", request.backupUser)
-                put("data", request.backupData)
-                put("permissions", request.backupPermissions)
+                // 这些 key 就是 RusticRequestBuilder 里 optBoolean 读的那些
+                put(SnapshotKind.APK.key, request.backupApk)
+                put(SnapshotKind.OBB.key, request.backupObb)
+                put(SnapshotKind.USER.key, request.backupUser)
+                put(SnapshotKind.DATA.key, request.backupData)
+                put(SnapshotKind.PERMISSIONS.key, request.backupPermissions)
                 put("timestamp", System.currentTimeMillis())
                 put("includeIcon", !hasIcon && !isDir)
-                if (!parentIds.isNullOrEmpty()) put("parents", JSONObject(parentIds))
+                if (!parentIds.isNullOrEmpty()) put("parents", JSONObject(parentIds.mapKeys { it.key.key }))
                 // 同批次的多个应用共用一次「打开仓库 + 读索引」
                 if (!batchId.isNullOrBlank()) put("batch", batchId)
                 if (overrides.isNotEmpty()) {
@@ -427,7 +431,7 @@ object RusticClient {
         withContext(Dispatchers.IO) {
             val icon = listSnapshots(repoPath, repoPassword, packageName)
                 .getOrNull()
-                ?.firstOrNull { it.label == "$packageName:icon" }
+                ?.firstOrNull { it.label == "$packageName:${SnapshotKind.ICON.key}" }
                 ?: return@withContext Result.failure(IllegalStateException("没有图标备份"))
 
             val dir = File(App.application.cacheDir, "icon_cache/${packageName.hashCode()}")
@@ -508,8 +512,8 @@ object RusticClient {
     }
 
     /** 删除一行里勾选的快照。 */
-    suspend fun deleteSelected(entry: BackupEntry, kinds: Set<String>): Result<Unit> {
-        val ids = entry.selectedSnapshots(kinds).map { it.id }
+    suspend fun deleteSelected(entry: BackupEntry, groups: Set<BackupGroup>): Result<Unit> {
+        val ids = entry.selectedSnapshots(groups).map { it.id }
         if (ids.isEmpty()) {
             return Result.failure(IllegalStateException("请先勾选要删除的内容"))
         }
@@ -608,7 +612,7 @@ object RusticClient {
     /** 普通备份。 */
     suspend fun backup(
         app: AppInfo,
-        kinds: Set<String>,
+        groups: Set<BackupGroup>,
         onProgress: (BackupProgress) -> Unit = {},
         /**
          * 批量备份的批次标识：同一批里每个应用传同一个值。
@@ -630,14 +634,14 @@ object RusticClient {
          * 传给 rustic 当 parent：有了它就不用再列一遍全部快照去找 parent。
          * 传 null 就退回 rustic 的默认行为。
          */
-        parentIds: Map<String, String>? = null
+        parentIds: Map<SnapshotKind, String>? = null
     ): Result<Unit> {
-        if (kinds.isEmpty()) {
+        if (groups.isEmpty()) {
             return Result.failure(IllegalStateException("请先选择要备份的内容"))
         }
         val result = withAppPaused(app) {
             runBackup(
-                request(app, kinds),
+                request(app, groups),
                 onProgress = onProgress,
                 batchId = batchId,
                 iconAlreadyBackedUp = iconAlreadyBackedUp,
@@ -654,23 +658,27 @@ object RusticClient {
     suspend fun overwrite(
         app: AppInfo,
         entry: BackupEntry,
-        kinds: Set<String>,
+        groups: Set<BackupGroup>,
         onProgress: (BackupProgress) -> Unit = {}
     ): Result<Unit> {
-        val selected = entry.selectedSnapshots(kinds)
+        val selected = entry.selectedSnapshots(groups)
         if (selected.isEmpty()) {
             return Result.failure(IllegalStateException("请先勾选要覆盖的内容"))
         }
 
-        val overrides = selected.associate {
-            it.kind() to SnapshotOverride(it.label, it.tags, it.description)
-        }
-        // user_de 快照由 user 这一步产生，备份请求里按 user 传
-        val backupKinds = selected.map { if (it.kind() == "user_de") "user" else it.kind() }.toSet()
+        val overrides = selected.mapNotNull { snapshot ->
+            snapshot.kind()?.let {
+                it.key to SnapshotOverride(snapshot.label, snapshot.tags, snapshot.description)
+            }
+        }.toMap()
+        // user_de / permissions 快照由 user 这一步产生，备份请求里按 user 传
+        val groupsToBackup = selected.mapNotNull { it.kind() }.mapNotNull { kind ->
+            BackupGroup.entries.firstOrNull { kind in it.kinds }
+        }.toSet()
 
         val result = withAppPaused(app) {
             runBackup(
-                request = request(app, backupKinds),
+                request = request(app, groupsToBackup),
                 overrides = overrides,
                 deleteIds = selected.map { it.id },
                 onProgress = onProgress
@@ -730,17 +738,17 @@ object RusticClient {
      */
     fun restoreBlockedReason(
         entry: BackupEntry,
-        kinds: Set<String>,
+        groups: Set<BackupGroup>,
         installed: Boolean
     ): String? {
-        val selected = entry.selectedSnapshots(kinds)
+        val selected = entry.selectedSnapshots(groups)
         if (selected.isEmpty()) return "请先勾选要恢复的内容"
 
         // 目录备份不依赖应用是否安装
-        if (selected.all { it.kind() == "dir" }) return null
+        if (selected.all { it.kind() == SnapshotKind.DIR }) return null
 
-        val hasApk = selected.any { it.kind() == "apk" }
-        val needsApp = selected.any { it.kind() != "apk" }
+        val hasApk = selected.any { it.kind() == SnapshotKind.APK }
+        val needsApp = selected.any { it.kind() != SnapshotKind.APK }
         return if (needsApp && !hasApk && !installed) "应用未安装，无法恢复数据" else null
     }
 
@@ -752,12 +760,12 @@ object RusticClient {
     suspend fun restore(
         app: AppInfo,
         entry: BackupEntry,
-        kinds: Set<String>,
+        groups: Set<BackupGroup>,
         installed: Boolean,
         onProgress: (BackupProgress) -> Unit = {}
     ): Result<Unit> {
-        val selected = entry.selectedSnapshots(kinds)
-        restoreBlockedReason(entry, kinds, installed)?.let {
+        val selected = entry.selectedSnapshots(groups)
+        restoreBlockedReason(entry, groups, installed)?.let {
             return Result.failure(IllegalStateException(it))
         }
 
@@ -779,7 +787,9 @@ object RusticClient {
                         "items",
                         JSONArray().apply {
                             selected.forEach { snapshot ->
-                                put(JSONObject().put("kind", snapshot.kind()).put("id", snapshot.id))
+                                snapshot.kind()?.let { kind ->
+                                    put(JSONObject().put("kind", kind.key).put("id", snapshot.id))
+                                }
                             }
                         }
                     )
@@ -812,40 +822,37 @@ object RusticClient {
 
     // ==================== 进度步骤 ====================
 
+    /**
+     * 进度弹窗里的步骤顺序：目录 → apk → obb → user → user_de → 权限 → data。
+     *
+     * 备份和恢复共用一张表，谁勾了/谁存在就显示谁。
+     */
+    private val STEP_ORDER = listOf(
+        SnapshotKind.DIR,
+        SnapshotKind.APK,
+        SnapshotKind.OBB,
+        SnapshotKind.USER,
+        SnapshotKind.USER_DE,
+        SnapshotKind.PERMISSIONS,
+        SnapshotKind.DATA
+    )
+
     /** 备份要显示的步骤（顺序固定）。 */
-    fun backupSteps(kinds: Set<String>): List<BackupStep> = buildList {
-        if ("apk" in kinds) {
-            add("apk")
-            // obb 跟着 apk 一起备份
-            add("obb")
-        }
-        if ("user" in kinds) {
-            add("user")
-            add("user_de")
-            add("permissions")
-        }
-        if ("data" in kinds) add("data")
-    }.map { BackupStep(it, BackupStepStatus.WAITING) }
+    fun backupSteps(groups: Set<BackupGroup>): List<BackupStep> =
+        STEP_ORDER.filter { kind -> groups.any { it.covers(kind) } }
+            .map { BackupStep(it, BackupStepStatus.WAITING) }
 
     /** 恢复要显示的步骤：只列出真正勾选到的快照。 */
-    fun restoreSteps(entry: BackupEntry, kinds: Set<String>): List<BackupStep> {
-        val selected = entry.selectedSnapshots(kinds)
-        return buildList {
-            if (selected.any { it.kind() == "dir" }) add("dir")
-            if (selected.any { it.kind() == "apk" }) add("apk")
-            if (selected.any { it.kind() == "obb" }) add("obb")
-            if (selected.any { it.kind() == "user" }) add("user")
-            if (selected.any { it.kind() == "user_de" }) add("user_de")
-            if (selected.any { it.kind() == "permissions" }) add("permissions")
-            if (selected.any { it.kind() == "data" }) add("data")
-        }.map { BackupStep(it, BackupStepStatus.WAITING) }
+    fun restoreSteps(entry: BackupEntry, groups: Set<BackupGroup>): List<BackupStep> {
+        val kinds = entry.selectedSnapshots(groups).mapNotNull { it.kind() }.toSet()
+        return STEP_ORDER.filter { it in kinds }.map { BackupStep(it, BackupStepStatus.WAITING) }
     }
 
     /** 把一条进度事件合并进步骤列表。 */
     fun applyProgress(steps: List<BackupStep>, progress: BackupProgress): List<BackupStep> {
         if (progress.stage.isBlank()) return steps
         return steps.map { step ->
-            if (step.key != progress.stage) {
+            if (step.kind.key != progress.stage) {
                 step
             } else {
                 step.copy(
@@ -868,18 +875,19 @@ object RusticClient {
 
     // ==================== 内部 ====================
 
-    private fun request(app: AppInfo, kinds: Set<String>) = BackupRequest(
+    private fun request(app: AppInfo, groups: Set<BackupGroup>) = BackupRequest(
         repoPath = repoPath,
         repoPassword = repoPassword,
         packageName = app.packageName,
         appName = app.name,
         version = app.version,
         userId = app.userId,
-        backupApk = "apk" in kinds,
-        backupObb = "apk" in kinds,
-        backupUser = "user" in kinds,
-        backupData = "data" in kinds,
-        backupPermissions = "user" in kinds
+        // obb 跟着 apk 走，permissions 跟着 user 走
+        backupApk = BackupGroup.APK in groups,
+        backupObb = BackupGroup.APK in groups,
+        backupUser = BackupGroup.USER in groups,
+        backupData = BackupGroup.DATA in groups,
+        backupPermissions = BackupGroup.USER in groups
     )
 
     private fun statusOf(state: String, fallback: BackupStepStatus): BackupStepStatus =
@@ -893,7 +901,7 @@ object RusticClient {
     /** 快照 -> 备份行：去掉 icon，同一次备份（时间戳相同）的合成一行。 */
     private fun List<BackupSnapshot>.toEntries(appName: String): List<BackupEntry> =
         asSequence()
-            .filterNot { it.label.endsWith(":icon") }
+            .filterNot { it.kind() == SnapshotKind.ICON }
             .groupBy { SnapshotMeta.timestamp(it.tags) ?: it.time }
             .map { (time, group) ->
                 val version = group.firstNotNullOfOrNull { SnapshotMeta.version(it.tags) }

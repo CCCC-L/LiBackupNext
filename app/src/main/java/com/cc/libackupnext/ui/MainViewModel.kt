@@ -109,17 +109,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      *
      * 放在 ViewModel 里，进出应用详情页不会丢；和管理页各自独立。
      */
-    val createSelection = androidx.compose.runtime.mutableStateMapOf<String, Set<String>>()
+    val createSelection =
+        androidx.compose.runtime.mutableStateMapOf<String, Set<com.cc.libackupnext.data.BackupGroup>>()
 
     /** 管理备份页的勾选状态，和新建页互不影响。 */
-    val manageSelection = androidx.compose.runtime.mutableStateMapOf<String, Set<String>>()
+    val manageSelection =
+        androidx.compose.runtime.mutableStateMapOf<String, Set<com.cc.libackupnext.data.BackupGroup>>()
 
     /** 默认勾选只做一次：用户手动取消后，再进页面不会又被全选。 */
     var createSelectionInitialized = false
     var manageSelectionInitialized = false
 
     /** 从详情页选中某条备份返回管理页时，只勾这一个应用（消费一次就清掉）。 */
-    var pendingSingleSelection: Pair<String, Set<String>>? = null
+    var pendingSingleSelection: Pair<String, Set<com.cc.libackupnext.data.BackupGroup>>? = null
 
     /** 批量页上次的备份概况缓存：返回页面时先拿它渲染，列表不会先空一帧。 */
     var batchOverviewCache: Map<String, com.cc.libackupnext.data.AppBackupSummary> = emptyMap()
