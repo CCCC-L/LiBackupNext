@@ -264,8 +264,7 @@ fun AppBackupScreen(
                         viewModel.loadApps(scrollToTop = false)
                     }
 
-                    // 目录已经从磁盘删掉，退回列表
-                    ItemAction.DELETE_DIR -> onBack()
+                    ItemAction.DELETE_DIR -> dirExistsTick++
 
                     // 这几个动作不改页面上的状态
                     ItemAction.LAUNCH,
