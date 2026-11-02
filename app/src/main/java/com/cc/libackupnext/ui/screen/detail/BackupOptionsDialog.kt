@@ -31,7 +31,8 @@ import com.cc.libackupnext.data.BackupTarget
 /**
  * 备份选项弹窗。
  *
- * 应用：apk / user / data 三选；目录：只有一句确认（整个文件夹全备，没有可选项）。
+ * 应用：apk / user / data 三选
+ * 文件夹 / 系统数据 没有可选项，只有一句确认。
  */
 @Composable
 fun BackupOptionsDialog(
@@ -52,14 +53,19 @@ fun BackupOptionsDialog(
         },
         text = {
             Column {
-                when (target) {
-                    BackupTarget.DIR -> Text(
-                        text = "确定备份「$dirPath」么？",
+                if (target.kinds.size == 1) {
+                    // 整个全备，没有可选项
+                    Text(
+                        text = if (target == BackupTarget.DIR) {
+                            "确定备份「$dirPath」么？"
+                        } else {
+                            "确定备份「${target.displayName}」么？"
+                        },
                         style = MaterialTheme.typography.bodyMedium
                     )
-
+                } else {
                     // 勾哪几项由 target.kinds 决定，不在这里写死
-                    BackupTarget.APP -> target.kinds.forEach { group ->
+                    target.kinds.forEach { group ->
                         BackupOptionRow(
                             label = group.optionLabel,
                             checked = group in checked,
@@ -72,11 +78,8 @@ fun BackupOptionsDialog(
         confirmButton = {
             TextButton(
                 onClick = onConfirm,
-                // 目录没有可选项，永远可以备份；应用至少要勾一项
-                enabled = when (target) {
-                    BackupTarget.DIR -> true
-                    BackupTarget.APP -> checked.isNotEmpty()
-                }
+                // 没有可选项的目标永远可以备份；应用至少要勾一项
+                enabled = target.kinds.size == 1 || checked.isNotEmpty()
             ) {
                 Text("备份")
             }

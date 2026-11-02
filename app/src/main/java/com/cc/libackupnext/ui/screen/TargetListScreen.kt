@@ -42,6 +42,7 @@ data class TargetRow(val target: BackupTarget, val item: AppInfo)
  * @param onRefresh 下拉刷新的动作，由调用方给：应用页重拉应用列表，文件页重算目录 + 备份数。
  *   传 null 表示这一页不支持下拉
  * @param isRefreshing 刷新转圈的状态，同样由调用方维护
+ * @param subtitleOf 副标题；不传就用目标自己的（包名 / 路径）。「其他」页用它显示条数
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -61,10 +62,13 @@ fun TargetListScreen(
     extraAction: (@Composable () -> Unit)? = null,
     isRefreshing: Boolean = false,
     onRefresh: (() -> Unit)? = null,
+    subtitleOf: ((TargetRow) -> String?)? = null,
 ) {
     Box(modifier = modifier.fillMaxSize()) {
         if (onRefresh == null) {
-            ListContent(rows, summaries, listState, onOpen, contentPadding, extraBottomText)
+            ListContent(
+                rows, summaries, listState, onOpen, contentPadding, extraBottomText, subtitleOf
+            )
         } else {
             // 下拉刷新：手势只作用于列表，刷新时不显示全屏 loading
             val pullState = rememberPullToRefreshState()
@@ -81,7 +85,9 @@ fun TargetListScreen(
                     )
                 }
             ) {
-                ListContent(rows, summaries, listState, onOpen, contentPadding, extraBottomText)
+                ListContent(
+                    rows, summaries, listState, onOpen, contentPadding, extraBottomText, subtitleOf
+                )
             }
         }
 
@@ -105,6 +111,7 @@ private fun ListContent(
     onOpen: (AppInfo) -> Unit,
     contentPadding: PaddingValues,
     extraBottomText: (AppInfo) -> String?,
+    subtitleOf: ((TargetRow) -> String?)?,
 ) {
     AppListContainer(
         items = rows,
@@ -114,7 +121,12 @@ private fun ListContent(
         // 一页可能有多个目标，key 要带上目标，否则不同目标下同名的条目会撞
         key = { _, row -> "${row.target.name}:${row.item.packageName}" }
     ) { _, row, shape ->
-        val view = targetViewOf(row.target, row.item, row.target.isMissing(row.item))
+        val view = targetViewOf(
+            target = row.target,
+            app = row.item,
+            isMissing = row.target.isMissing(row.item),
+            subtitle = subtitleOf?.invoke(row)
+        )
 
         AppItemCard(
             icon = null,

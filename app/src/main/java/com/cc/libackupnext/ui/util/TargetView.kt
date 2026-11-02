@@ -125,14 +125,37 @@ class DirView(
     }
 }
 
+/**
+ * Wi-Fi / 联系人 / 通话记录：内容固定的目标，永远只有一行。
+ *
+ * @param subtitleText 副标题，由调用方算好（「已保存 12 个」这类），读不到就传 null
+ */
+class SystemView(
+    private val target: BackupTarget,
+    private val subtitleText: String?,
+) : TargetView() {
+
+    override val title: String = target.displayName
+    override val subtitle: String = subtitleText.orEmpty()
+    override val isMissing: Boolean = false
+
+    @Composable
+    override fun Icon(modifier: Modifier) {
+        Box(modifier) { SystemDataIconBox(target) }
+    }
+}
+
 /** 按目标类型造视图。 */
 fun targetViewOf(
     target: BackupTarget,
     app: AppInfo,
     isMissing: Boolean,
+    subtitle: String? = null,
 ): TargetView = when (target) {
     BackupTarget.APP -> AppView(app, isMissing)
     BackupTarget.DIR -> DirView(app.packageName, isMissing)
+    BackupTarget.WIFI, BackupTarget.CONTACTS,
+    BackupTarget.CALLS -> SystemView(target, subtitle)
 }
 
 /**
@@ -144,5 +167,8 @@ fun targetViewOf(
 fun BackupTarget.isMissing(app: AppInfo): Boolean = when (this) {
     BackupTarget.APP -> app.onlyInBackup
     BackupTarget.DIR -> !File(app.packageName).isDirectory
+    // 系统数据只要 provider 读得到就有；读不到时备份会自己跳过并给出说明
+    BackupTarget.WIFI, BackupTarget.CONTACTS,
+    BackupTarget.CALLS -> false
 }
 

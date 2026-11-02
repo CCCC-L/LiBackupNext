@@ -47,6 +47,8 @@ fun DetailHeader(
     // 目标已经不在了（应用没装 / 文件夹删了）：菜单和备份按钮一起置灰。
     // 恢复入口在下面的备份列表里，不靠这个菜单。
     val canInteract = !isBusy && !target.isUninstalled
+    // 系统数据这类目标没有菜单动作，点标题区弹一个空菜单很怪
+    val hasActions = target.actions.isNotEmpty()
 
     Row(
         modifier = modifier
@@ -60,7 +62,7 @@ fun DetailHeader(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
-                    .clickable(enabled = canInteract) { showOptions = true }
+                    .clickable(enabled = canInteract && hasActions) { showOptions = true }
                     .dimmedWhen(target.isUninstalled)
                     .padding(horizontal = 6.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically

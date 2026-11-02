@@ -81,6 +81,7 @@ import com.cc.libackupnext.ui.util.AppIcon
 import com.cc.libackupnext.ui.util.AppIconStore
 import com.cc.libackupnext.ui.util.AppListContainer
 import com.cc.libackupnext.ui.util.FolderIconBox
+import com.cc.libackupnext.ui.util.SystemDataIconBox
 import com.cc.libackupnext.ui.util.dimmedWhen
 import com.cc.libackupnext.ui.util.formatShortDateTime
 import com.cc.libackupnext.ui.util.isMissing
@@ -508,7 +509,7 @@ fun BackupBatchScreen(
             } else {
                 // 恢复可能装上了应用：清掉图标的负缓存，否则还是首字母占位块
                 if (actionLabel == "恢复") AppIconStore.invalidateMissing()
-                viewModel.loadApps(scrollToTop = false)
+                viewModel.loadList(scrollToTop = false)
             }
         }
     }
@@ -1028,6 +1029,9 @@ private fun BackupSelectRow(
                         name = app.name,
                         modifier = Modifier.size(40.dp)
                     )
+                    BackupTarget.WIFI, BackupTarget.CONTACTS,
+                    BackupTarget.CALLS ->
+                        SystemDataIconBox(target, size = 40.dp, iconSize = 22.dp)
                 }
             }
             Spacer(modifier = Modifier.width(12.dp))

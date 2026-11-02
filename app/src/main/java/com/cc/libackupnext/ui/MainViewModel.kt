@@ -11,6 +11,7 @@ import androidx.lifecycle.viewModelScope
 import com.cc.libackupnext.data.AppBackupSummary
 import com.cc.libackupnext.data.AppPrefs
 import com.cc.libackupnext.data.BackupGroup
+import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.service.AppManagerService
 import com.cc.libackupnext.service.RusticClient
@@ -78,6 +79,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var isUserMenuExpanded = MutableStateFlow(false)
     var currentUserId = MutableStateFlow(0)
 
+    // ==================== 系统数据条数 ====================
+    /**
+     * Wi-Fi / 联系人 / 通话记录各有多少条，「其他」页的副标题用。
+     * 由 root 进程查（它才读得到 provider），读不到的类型不在 map 里。
+     */
+    private val _systemDataCounts = MutableStateFlow<Map<SnapshotKind, Int>>(emptyMap())
+    val systemDataCounts: StateFlow<Map<SnapshotKind, Int>> = _systemDataCounts.asStateFlow()
+
+    fun loadSystemDataCounts() {
+        viewModelScope.launch {
+            _systemDataCounts.value = RusticClient.systemDataCounts()
+        }
+    }
+
     // ==================== 滚动触发器 ====================
     private val _scrollToTopTrigger = MutableStateFlow(0)
     val scrollToTopTrigger: StateFlow<Int> = _scrollToTopTrigger.asStateFlow()
@@ -90,7 +105,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         // 用户列表和应用列表互不依赖，并行加载
         loadUsers()
-        loadApps()
+        loadList()
+        loadSystemDataCounts()
     }
 
     // ==================== 用户 ====================
@@ -151,13 +167,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // ==================== 应用 ====================
     /**
-     * 读取应用列表。
+     * 读取列表。
      *
      * @param scrollToTop 读完后回到列表顶部
      * @param fromPullRefresh 下拉刷新：只用顶部指示器，不盖全屏 loading
      * @param silent 静默刷新：不碰 loading / 错误状态，数据没变时连列表都不重组（回前台用）
      */
-    fun loadApps(
+    fun loadList(
         scrollToTop: Boolean = true,
         fromPullRefresh: Boolean = false,
         silent: Boolean = false
@@ -243,7 +259,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** 下拉刷新：保留滚动位置，只用顶部指示器。 */
-    fun refresh() = loadApps(scrollToTop = false, fromPullRefresh = true)
+    fun refresh() = loadList(scrollToTop = false, fromPullRefresh = true)
 
     /**
      * 回到前台，静默刷新应用列表，获取这期间的新装 / 卸载。
@@ -259,7 +275,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         ) {
             return
         }
-        loadApps(scrollToTop = false, silent = !needsLoad)
+        loadList(scrollToTop = false, silent = !needsLoad)
     }
 
     // ==================== 备份概况 ====================

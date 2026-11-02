@@ -63,14 +63,15 @@ fun BackupManageDialog(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 // 目录备份没有可勾选的内容，只显示一句「什么时候备份的哪个路径、多大」
-                when (target) {
-                    BackupTarget.DIR -> Text(
+                when {
+                    target == BackupTarget.DIR -> Text(
                         text = "${formatDateTime(entry.time)} 备份的 $dirPath" +
                                 " · ${formatSize(entry.snapshotsOf(BackupGroup.DIR).sumOf { it.size })}",
                         style = MaterialTheme.typography.bodyMedium
                     )
 
-                    BackupTarget.APP -> target.kinds.forEach { group ->
+                    // 应用和系统数据都按自己的 kinds 列勾选框
+                    else -> target.kinds.forEach { group ->
                         val snaps = entry.snapshotsOf(group)
                         val exists = snaps.isNotEmpty()
                         ManageOptionRow(

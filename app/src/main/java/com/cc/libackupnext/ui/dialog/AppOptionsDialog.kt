@@ -23,7 +23,17 @@ enum class ItemAction {
 
     /**目录 */
     OPEN_DIR,
-    DELETE_DIR;
+    DELETE_DIR,
+
+    /** Wi-Fi */
+    WIFI_ON,
+    WIFI_OFF,
+    OPEN_WIFI_SETTINGS,
+
+    /** 联系人 */
+    OPEN_CONTACTS,
+    /** 通话记录 */
+    OPEN_CALL_LOG;
 
     fun title(): String = when (this) {
         LAUNCH -> "启动应用"
@@ -35,6 +45,11 @@ enum class ItemAction {
         UNINSTALL -> "卸载应用"
         OPEN_DIR -> "打开文件夹"
         DELETE_DIR -> "删除文件夹"
+        WIFI_ON -> "打开 Wi-Fi"
+        WIFI_OFF -> "关闭 Wi-Fi"
+        OPEN_WIFI_SETTINGS -> "Wi-Fi 设置"
+        OPEN_CONTACTS -> "打开联系人"
+        OPEN_CALL_LOG -> "打开通话记录"
     }
 }
 

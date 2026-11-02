@@ -3,14 +3,15 @@
   xmlns:tools="http://schemas.android.com/tools">
 
   <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
-    tools:ignore="QueryAllPackagesPermission" />
+    tools:ignore="PackageVisibilityPolicy,QueryAllPackagesPermission" />
 
   <!-- 备份 / 恢复进度通知（Android 16 起用 Live Updates 提升为常驻通知） -->
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
   <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
 
   <!-- 备份 / 恢复期间的前台服务：应用切到后台才不会被冻结，通知才能继续刷新 -->
-  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE"
+    tools:ignore="ForegroundServicesPolicy" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
   <uses-permission android:name="android.permission.WAKE_LOCK" />
 

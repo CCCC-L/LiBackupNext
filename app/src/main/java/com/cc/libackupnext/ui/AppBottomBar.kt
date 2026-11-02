@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Settings
@@ -55,6 +56,19 @@ enum class HomeTab(
         manageLabel = "管理文件备份"
     ),
 
+    /** Wi-Fi / 联系人 / 通话记录：一页列多个固定目标。 */
+    OTHERS(
+        "系统", Icons.Filled.Android,
+        listOf(
+            BackupTarget.WIFI,
+            BackupTarget.CONTACTS,
+            BackupTarget.CALLS
+        ),
+        searchHint = "搜索",
+        createLabel = "新建系统数据备份",
+        manageLabel = "管理系统数据备份"
+    ),
+
     /** 不是备份目标列表：内容由 [com.cc.libackupnext.ui.screen.SettingsContent] 自己管。 */
     SETTINGS("设置", Icons.Filled.Settings, emptyList());
 
@@ -76,7 +90,7 @@ fun AppBottomBar(
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .padding(start = 72.dp, top = 8.dp, end = 72.dp, bottom = 25.dp),
+            .padding(start = 25.dp, top = 8.dp, end = 25.dp, bottom = 25.dp),
         shape = RoundedCornerShape(20.dp),
         color = containerColor,
         shadowElevation = 2.dp
@@ -118,7 +132,10 @@ fun AppBottomBar(
                         Text(
                             text = item.label,
                             style = MaterialTheme.typography.labelLarge,
-                            color = tint
+                            color = tint,
+                            // 宁可省略也不能折行：竖排的「文/件」比截断更难看
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
                 }

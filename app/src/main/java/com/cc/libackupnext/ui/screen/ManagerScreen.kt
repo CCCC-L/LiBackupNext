@@ -5,6 +5,8 @@ import android.content.Intent
 import android.content.pm.LauncherApps
 import android.net.Uri
 import android.os.UserHandle
+import android.provider.CallLog
+import android.provider.ContactsContract
 import android.provider.DocumentsContract
 import android.provider.Settings
 import android.widget.Toast
@@ -65,6 +67,8 @@ import com.cc.libackupnext.ui.screen.detail.detailTargetOf
 import com.cc.libackupnext.ui.theme.LocalAppColors
 import com.cc.libackupnext.ui.util.AppIconStore
 import com.cc.libackupnext.ui.util.AppListContainer
+import com.cc.libackupnext.ui.util.countText
+import com.cc.libackupnext.ui.util.systemCount
 import com.cc.libackupnext.util.BackupNotifier
 import com.cc.libackupnext.util.ErrorLog
 import com.cc.libackupnext.util.KeepAwake
@@ -111,6 +115,8 @@ fun AppBackupScreen(
     // ==================== 应用状态 ====================
     val currentUserId by viewModel.currentUserId.collectAsState()
     val allApps by viewModel.allApps.collectAsState()
+    // 系统数据目标（Wi-Fi / 联系人 / 通话记录）的副标题要显示条数
+    val systemCounts by viewModel.systemDataCounts.collectAsState()
     val loadedUserId by viewModel.loadedUserId.collectAsState()
 
     // 切换用户后按包名重新匹配当前用户下的应用（列表数据就绪后才判断，避免闪烁）
@@ -162,6 +168,9 @@ fun AppBackupScreen(
                 (forceUninstalled ||
                         displayApp.onlyInBackup ||
                         (loadedUserId == currentUserId && appForCurrentUser == null))
+        // 系统数据没有「装没装」这回事
+        BackupTarget.WIFI, BackupTarget.CONTACTS,
+        BackupTarget.CALLS -> false
     }
 
     var isBusy by remember { mutableStateOf(false) }
@@ -239,10 +248,16 @@ fun AppBackupScreen(
 
                         ItemAction.DELETE_DIR -> deleteDirectory(displayApp.packageName)
 
+                        ItemAction.WIFI_ON, ItemAction.WIFI_OFF ->
+                            RusticClient.setWifiEnabled(action == ItemAction.WIFI_ON).getOrThrow()
+
                         // 这几个只做页面跳转，不碰 root
                         ItemAction.LAUNCH,
                         ItemAction.APP_SETTINGS,
-                        ItemAction.OPEN_DIR -> Unit
+                        ItemAction.OPEN_DIR,
+                        ItemAction.OPEN_WIFI_SETTINGS,
+                        ItemAction.OPEN_CONTACTS,
+                        ItemAction.OPEN_CALL_LOG -> Unit
                     }
                 }
 
@@ -250,18 +265,18 @@ fun AppBackupScreen(
                 when (action) {
                     ItemAction.FREEZE -> {
                         isFrozen = true
-                        viewModel.loadApps(scrollToTop = false)
+                        viewModel.loadList(scrollToTop = false)
                     }
 
                     ItemAction.UNFREEZE -> {
                         isFrozen = false
-                        viewModel.loadApps(scrollToTop = false)
+                        viewModel.loadList(scrollToTop = false)
                     }
 
                     ItemAction.UNINSTALL -> {
                         forceUninstalled = true
                         restoredInstalled = false
-                        viewModel.loadApps(scrollToTop = false)
+                        viewModel.loadList(scrollToTop = false)
                     }
 
                     ItemAction.DELETE_DIR -> dirExistsTick++
@@ -271,7 +286,12 @@ fun AppBackupScreen(
                     ItemAction.FORCE_STOP,
                     ItemAction.APP_SETTINGS,
                     ItemAction.CLEAR_DATA,
-                    ItemAction.OPEN_DIR -> Unit
+                    ItemAction.OPEN_DIR,
+                    ItemAction.OPEN_WIFI_SETTINGS,
+                    ItemAction.OPEN_CONTACTS,
+                    ItemAction.OPEN_CALL_LOG,
+                    ItemAction.WIFI_ON,
+                    ItemAction.WIFI_OFF -> Unit
                 }
 
                 Toast.makeText(context, "成功", Toast.LENGTH_SHORT).show()
@@ -410,7 +430,7 @@ fun AppBackupScreen(
                         ).show()
                         reloadKey++
                         // 备份全删了，只在备份里存在的应用也要从列表里去掉，整表重读
-                        viewModel.loadApps(scrollToTop = false)
+                        viewModel.loadList(scrollToTop = false)
                     }
                     .onFailure {
                         ErrorLog.add("删除", "删除失败", it)
@@ -494,7 +514,7 @@ fun AppBackupScreen(
                 // 恢复可能把它装上了：清掉图标的负缓存，否则图标一直是首字母占位块
                 AppIconStore.invalidate(displayApp.packageName, displayApp.userId)
                 // 恢复可能装上/改动了应用，列表要重新读一次
-                viewModel.loadApps(scrollToTop = false)
+                viewModel.loadList(scrollToTop = false)
             }
         }
     }
@@ -539,11 +559,15 @@ fun AppBackupScreen(
             ItemAction.LAUNCH -> launchApp(context, displayApp)
             ItemAction.APP_SETTINGS -> openAppSettings(context, displayApp)
             ItemAction.OPEN_DIR -> openDirectory(context, displayApp.packageName)
+            ItemAction.OPEN_WIFI_SETTINGS -> openWifiSettings(context)
+            ItemAction.OPEN_CONTACTS -> openContacts(context)
+            ItemAction.OPEN_CALL_LOG -> openCallLog(context)
             // 破坏性操作先确认
             ItemAction.CLEAR_DATA, ItemAction.UNINSTALL, ItemAction.DELETE_DIR -> confirmAction =
                 action
             // 剩下的是直接执行的 root 操作
-            ItemAction.FORCE_STOP, ItemAction.FREEZE, ItemAction.UNFREEZE -> runAction(action)
+            ItemAction.FORCE_STOP, ItemAction.FREEZE, ItemAction.UNFREEZE,
+            ItemAction.WIFI_ON, ItemAction.WIFI_OFF -> runAction(action)
         }
     }
 
@@ -616,7 +640,12 @@ fun AppBackupScreen(
                         isUninstalled = isUninstalled,
                         latestVersion = entries.firstOrNull()?.version,
                         onAction = { perform(it) },
-                        onBackup = { showBackupOptions = true }
+                        onBackup = { showBackupOptions = true },
+                        subtitle = if (target.isFixed) {
+                            target.countText(target.systemCount(systemCounts))
+                        } else {
+                            null
+                        }
                     ),
                     isBusy = isBusy
                 )
@@ -705,7 +734,6 @@ fun AppBackupScreen(
         BackupManageDialog(
             entry = entry,
             target = target,
-            dirPath = displayApp.packageName,
             canOverwrite = RusticClient.canOverwrite(isInstalled),
             checkedKinds = managingKinds,
             onCheckedChange = { kind, checked ->
@@ -870,6 +898,38 @@ private fun launchApp(context: Context, app: AppInfo) {
         }
     }.onFailure {
         Toast.makeText(context, "启动失败：${it.message ?: "未知错误"}", Toast.LENGTH_SHORT).show()
+    }
+}
+
+/** 打开系统的 Wi-Fi 设置页。 */
+private fun openWifiSettings(context: Context) {
+    val intent = Intent(Settings.ACTION_WIFI_SETTINGS)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    runCatching { context.startActivity(intent) }
+        .onFailure { Toast.makeText(context, "打开 Wi-Fi 设置失败", Toast.LENGTH_SHORT).show() }
+}
+
+/** 打开联系人应用 */
+private fun openContacts(context: Context) {
+    runCatching {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, ContactsContract.Contacts.CONTENT_URI)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }.onFailure {
+        Toast.makeText(context, "打开联系人失败", Toast.LENGTH_SHORT).show()
+    }
+}
+
+/** 打开通话记录（没有专门入口就退回拨号盘）。 */
+private fun openCallLog(context: Context) {
+    runCatching {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, CallLog.Calls.CONTENT_URI)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }.onFailure {
+        Toast.makeText(context, "打开通话记录失败", Toast.LENGTH_SHORT).show()
     }
 }
 

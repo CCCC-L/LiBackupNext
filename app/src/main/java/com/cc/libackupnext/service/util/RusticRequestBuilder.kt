@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.os.UserManagerHidden
 import androidx.core.graphics.drawable.toBitmap
+import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.data.SnapshotKind
 import dev.rikka.tools.refine.Refine
 import org.json.JSONArray
@@ -117,6 +118,34 @@ internal class RusticRequestBuilder(
                     "excludes",
                     JSONArray().put("!.thumbnails").put("!.trashed*")
                 )
+                options.optString("batch").takeIf { it.isNotBlank() }?.let { put("batch", it) }
+            }.toString()
+        }
+
+        // 系统数据（Wi-Fi / 联系人 / 通话记录）：内容由 root 侧导出成 JSON。
+        // 这里只声明要备份哪一项，sources 留空、由 RusticServer 导出后填。
+        val fixedTarget = BackupTarget.entries
+            .firstOrNull { it.fixedId != null && it.fixedId == packageName }
+        if (fixedTarget != null) {
+            val kind = fixedTarget.kinds.first().kinds.first()
+
+            val systemItem = item(
+                kind.key,
+                labelOf(kind.key, "$packageName:${kind.key}"),
+                tagsOf(kind.key, tags),
+                sources = emptyList(),
+                asPath = "$packageName.json",
+                description = descriptionOf(kind.key)
+            ).put("system", true)
+
+            parents?.optString(kind.key)?.takeIf { it.isNotBlank() }?.let {
+                systemItem.put("parent", it)
+            }
+
+            return JSONObject().apply {
+                put("path", options.getString("repoPath"))
+                put("password", options.getString("repoPassword"))
+                put("items", JSONArray().put(systemItem))
                 options.optString("batch").takeIf { it.isNotBlank() }?.let { put("batch", it) }
             }.toString()
         }

@@ -83,5 +83,19 @@ interface IRusticService {
    */
   String restoreSnapshots(String request, IBackupProgressCallback callback);
 
+  /**
+   * 系统数据（Wi-Fi / 联系人 / 通话记录）各有多少条，列表页副标题用。
+   *
+   * @return JSON：{ok:true, counts:{wifi:12, contacts:123, ...}}；读不到的类型不出现在 counts 里
+   */
+  String systemDataCounts();
+
+  /**
+   * 打开 / 关闭 Wi-Fi。普通应用从 Android 10 起就没这个权限了，只能由 root 侧代劳。
+   *
+   * @return 成功返回空字符串；失败返回具体原因
+   */
+  String setWifiEnabled(boolean enabled);
+
 
 }

@@ -2,12 +2,15 @@ package com.cc.libackupnext.service
 
 import android.content.Context
 import android.content.Intent
+import android.net.wifi.WifiManager
 import android.os.IBinder
 import android.os.SharedMemory
 import android.util.Log
 import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.service.util.AppState
 import com.cc.libackupnext.service.util.RusticRequestBuilder
+import com.cc.libackupnext.service.util.SystemDataExporter
+import com.cc.libackupnext.service.util.SystemDataRestorer
 import com.cc.libackupnext.service.util.fixupTree
 import com.cc.libackupnext.service.util.installApks
 import com.cc.libackupnext.service.util.mediaPath
@@ -208,26 +211,60 @@ object RusticServer {
         override fun pruneEstimate(request: String): String =
             runQuery(request, ::nativePruneEstimate, "估算可回收空间失败")
 
+        /**
+         * 把一个快照解到指定目录，再把目录的归属交还给主进程。
+         *
+         * 和目录恢复走同一个 [restoreTree]，区别只是快照里只有一个文件、没有顶层目录名，
+         * 所以解包目录本身就是目标。
+         */
         override fun exportSnapshot(request: String): String {
             val options = JSONObject(request)
-            val payload = JSONObject().apply {
-                put("path", options.getString("path"))
-                put("password", options.getString("password"))
-                put(
-                    "items",
-                    JSONArray().put(
-                        JSONObject()
-                            .put("id", options.getString("id"))
-                            .put("dest", options.getString("dest"))
-                            .put("delete", false)
-                    )
-                )
-            }
-            return runSimple(payload.toString(), ::nativeRestore)
+            val dest = File(options.getString("dest"))
+            val uid = context.applicationInfo.uid
+
+            return restoreTree(
+                repoPath = options.getString("path"),
+                repoPassword = options.getString("password"),
+                snapshotId = options.getString("id"),
+                target = dest,
+                uid = uid,
+                gid = uid,
+                dest = dest,
+                parentContext = true
+            ) ?: ""
         }
 
         override fun deleteSnapshots(request: String): String =
             runSimple(request, ::nativeDeleteSnapshots)
+
+        override fun systemDataCounts(): String = try {
+            val counts = JSONObject()
+            // 三类都由 root 侧数：Wi-Fi 走 WifiManager，联系人 / 通话记录走 provider 的外部通道
+            for (kind in SystemDataExporter.SYSTEM_KINDS) {
+                SystemDataExporter.count(context, kind)?.let { counts.put(kind.key, it) }
+            }
+            JSONObject().put("ok", true).put("counts", counts).toString()
+        } catch (t: Throwable) {
+            Log.e(TAG, "统计系统数据失败", t)
+            JSONObject().put("ok", false)
+                .put("error", t.message ?: "统计失败")
+                .toString()
+        }
+
+        @Suppress("DEPRECATION")
+        override fun setWifiEnabled(enabled: Boolean): String = try {
+            val manager = context.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                ?: return "拿不到 WifiManager"
+
+            when {
+                manager.isWifiEnabled == enabled -> ""
+                manager.setWifiEnabled(enabled) -> ""
+                else -> "系统拒绝了这次操作"
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "切换 Wi-Fi 失败", t)
+            t.message ?: "切换 Wi-Fi 失败"
+        }
 
         override fun restoreSnapshots(request: String, callback: IBackupProgressCallback?): String {
             nativeError?.let { return it }
@@ -250,7 +287,7 @@ object RusticServer {
 
                 if (items.length() == 0) return "没有可恢复的内容"
 
-                // 类型 -> 快照 id。认不出来的类型直接忽略（旧客户端 / 新类型）
+                // 类型 -> 快照 id
                 val byKind = mutableMapOf<SnapshotKind, String>()
                 for (index in 0 until items.length()) {
                     val item = items.getJSONObject(index)
@@ -406,7 +443,53 @@ object RusticServer {
                     emit(SnapshotKind.PERMISSIONS, "done")
                 }
 
-                ""
+                // 系统数据（Wi-Fi / 联系人 / 通话记录）：Wi-Fi 走 WifiManager，
+                // 另外两类走 provider 的外部通道，都不碰数据库文件
+                val failures = mutableListOf<String>()
+                for (kind in SystemDataExporter.SYSTEM_KINDS) {
+                    val id = byKind[kind] ?: continue
+                    emit(kind, "running")
+
+                    val dir = File(context.cacheDir, "restore_${kind.key}").apply {
+                        deleteRecursively()
+                        mkdirs()
+                    }
+                    val error =
+                        restoreTo(repoPath, repoPassword, id, dir.absolutePath, delete = false)
+                    // 快照里的文件名就是 <kind>.json（导出时就是这么写的），按名字找最稳
+                    val text = dir.listFiles()
+                        ?.let { files ->
+                            files.firstOrNull { it.name == "${kind.key}.json" }
+                                ?: files.firstOrNull { it.isFile }
+                        }
+                        ?.let { file -> runCatching { file.readText() }.getOrNull() }
+                    dir.deleteRecursively()
+
+                    if (text == null) {
+                        emit(kind, "failed")
+                        return error.ifBlank { "恢复出来的数据文件不存在" }
+                    }
+
+                    val result = try {
+                        SystemDataRestorer.restore(context, kind, text)
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "恢复 ${kind.key} 失败", t)
+                        emit(kind, "failed")
+                        return t.message ?: "恢复失败"
+                    }
+                    Log.d(
+                        TAG,
+                        "恢复 ${kind.key}：新增 ${result.added}，跳过 ${result.skipped}，" +
+                                "失败 ${result.failed}"
+                    )
+                    if (result.failed > 0) {
+                        failures += "${kind.key} 有 ${result.failed} 条写入失败"
+                    }
+                    emit(kind, "done")
+                }
+
+                // 部分写入失败不当作整次恢复失败，返回失败的内容
+                failures.joinToString("；")
             } catch (t: Throwable) {
                 Log.e(TAG, "restoreSnapshots failed", t)
                 "恢复异常：${t.message ?: t.javaClass.simpleName}"
@@ -421,19 +504,32 @@ object RusticServer {
          * @param dirMode 恢复后统一设的目录权限；null = 保持快照里记录的权限
          * @return 出错时返回给用户看的说明，成功返回 null
          */
+        /**
+         * 把一个快照解到 [dest]，再修正 [target] 的归属 / SELinux 上下文。
+         *
+         * 两种用法：
+         * - 目录 / 应用数据恢复：快照里带着顶层目录名（备份时 as_path 就是文件夹名），
+         *   解到 [target] 的父目录正好落在 [target]，所以 [dest] 默认取父目录；
+         * - 导出图标这类单文件快照：解包目录本身就是目标，[dest] 和 [target] 传同一个路径。
+         *
+         * @param delete 恢复后删掉 [dest] 里快照没有的文件。**里面还有别的东西时绝不能开**
+         * @param parentContext 用父目录的 SELinux 上下文（外部存储必须 true）
+         * @param dirMode 恢复后统一设的目录权限；null = 保持快照里记录的权限
+         * @return 出错时返回给用户看的说明，成功返回 null
+         */
         private fun restoreTree(
             repoPath: String,
             repoPassword: String,
             snapshotId: String,
             target: File,
-            delete: Boolean,
             uid: Int,
             gid: Int,
+            delete: Boolean = false,
+            // target 都是 File(父目录, 名字) 拼出来的，父目录一定在
+            dest: File = target.parentFile!!,
             parentContext: Boolean = false,
             dirMode: String? = null
         ): String? {
-            val dest = target.parentFile ?: return "路径不合法：${target.absolutePath}"
-
             val error = restoreTo(repoPath, repoPassword, snapshotId, dest.absolutePath, delete)
             if (error.isNotBlank()) return error
 
@@ -543,8 +639,11 @@ object RusticServer {
             nativeError?.let { return it }
 
             return try {
-                val rustRequest = rusticRequest.build(JSONObject(request))
-                    ?: return "没有需要备份的内容"
+                val built = JSONObject(
+                    rusticRequest.build(JSONObject(request)) ?: return "没有需要备份的内容"
+                )
+                prepareSystemItems(built)
+                val rustRequest = built.toString()
 
                 val shared = SharedMemory.create(SHARED_MEMORY_NAME, BUFFER_SIZE)
                 try {
@@ -565,6 +664,7 @@ object RusticServer {
                         }
                     } finally {
                         poller.stop()
+                        cleanupSystemItems(built)
                     }
                 } finally {
                     shared.close()
@@ -575,15 +675,42 @@ object RusticServer {
             }
         }
 
-        /** 把请求翻译成 Rust 侧要的备份项列表。 */
         /**
-         * 外部存储的显示路径 → 真实路径。
+         * 系统数据（Wi-Fi / 联系人 / 通话记录）的快照不是文件：
+         * 备份前先把内容导出成 JSON 写进 cache，再把路径填进 item 的 sources。
          *
-         * `/sdcard` 是 FUSE 挂载，root 读写会被权限和 SELinux 限制；`/data/media/0`
-         * 是同一块存储的真实路径。界面上仍然显示 `/sdcard/...`，用户看得懂。
-         *
-         * 文件夹备份只做**主用户**，所以这里固定用 0。
+         * 导出失败时把 item 标成跳过 —— Rust 侧看到空 sources 会自己跳。
          */
+        private fun prepareSystemItems(request: JSONObject) {
+            val items = request.optJSONArray("items") ?: return
+            for (index in 0 until items.length()) {
+                val item = items.getJSONObject(index)
+                if (!item.optBoolean("system", false)) continue
+
+                val kind = SnapshotKind.of(item.optString("stage")) ?: continue
+                val json = SystemDataExporter.export(context, kind)
+                if (json == null) {
+                    item.put("skip_reason", "导出失败")
+                    continue
+                }
+
+                // 文件名就是快照里的名字（rustic 对单文件源不认 as_path）
+                val file = File(context.cacheDir, "${kind.key}.json")
+                file.writeText(json)
+                item.put("sources", JSONArray().put(file.absolutePath))
+            }
+        }
+
+        /** 备份结束后删掉导出用的临时文件。 */
+        private fun cleanupSystemItems(request: JSONObject) {
+            val items = request.optJSONArray("items") ?: return
+            for (index in 0 until items.length()) {
+                val item = items.getJSONObject(index)
+                if (!item.optBoolean("system", false)) continue
+                val kind = SnapshotKind.of(item.optString("stage")) ?: continue
+                runCatching { File(context.cacheDir, "${kind.key}.json").delete() }
+            }
+        }
     }
 
 

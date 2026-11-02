@@ -52,7 +52,9 @@ import com.cc.libackupnext.ui.HomeTab
 import com.cc.libackupnext.ui.MainViewModel
 import com.cc.libackupnext.ui.SortType
 import com.cc.libackupnext.ui.theme.pageTransitionSpec
+import com.cc.libackupnext.ui.util.countText
 import com.cc.libackupnext.ui.util.formatShortDateTime
+import com.cc.libackupnext.ui.util.systemCount
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -93,12 +95,14 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
     var extraDirs by remember { mutableStateOf(AppPrefs.extraDirs) }
     val fileDirs = remember(extraDirs) { backupDirs(extraDirs) }
     val fileListState = rememberLazyListState()
+    val othersListState = rememberLazyListState()
     // 文件页的刷新信号：回到前台时递增，让它重新判断哪些目录还在硬盘上
     var dirRefreshTick by remember { mutableStateOf(0) }
 
 
     val allApps by viewModel.allApps.collectAsState()
     val currentUserId by viewModel.currentUserId.collectAsState()
+    val systemCounts by viewModel.systemDataCounts.collectAsState()
 
     // 切换用户 / 进程恢复时，保持当前打开的页面，只把 userId 换成新用户
     LaunchedEffect(currentUserId, allApps, selectedPackage) {
@@ -117,8 +121,8 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 viewModel.refreshOnForeground()
-                // 文件页也要重算：用户可能在别的应用里删了/建了目录
                 dirRefreshTick++
+                viewModel.loadSystemDataCounts()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -139,6 +143,7 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
     val activeListState = when (tab) {
         HomeTab.APPS -> listState
         HomeTab.FILES -> fileListState
+        HomeTab.OTHERS -> othersListState
         HomeTab.SETTINGS -> null
     }
     var lastScrollPos by remember { mutableStateOf(0) }
@@ -158,6 +163,14 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                 barVisible = true
             }
             lastScrollPos = pos
+        }
+    }
+
+    // 切到「其他」页、或者从详情页退回来时重新数一遍：
+    // 条数是别的应用随时会改的数据，不能只信进应用时那次
+    LaunchedEffect(tab, route) {
+        if (tab == HomeTab.OTHERS && route == AppRoute.LIST) {
+            viewModel.loadSystemDataCounts()
         }
     }
 
@@ -297,13 +310,22 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                             route = AppRoute.ERROR_LOG
                         },
                         // 文件页的「重新加载」重算目录列表，顺手刷新备份数量
-                        onReload = if (tab == HomeTab.FILES) {
-                            {
-                                dirRefreshTick++
-                                viewModel.loadApps()
+                        onReload = when (tab) {
+                            HomeTab.FILES -> {
+                                {
+                                    dirRefreshTick++
+                                    viewModel.loadList()
+                                }
                             }
-                        } else {
-                            null
+
+                            HomeTab.OTHERS -> {
+                                {
+                                    viewModel.loadSystemDataCounts()
+                                    viewModel.loadList(scrollToTop = false)
+                                }
+                            }
+
+                            else -> null
                         }
                     )
                 }
@@ -339,6 +361,30 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                                 }
                             )
 
+                            HomeTab.OTHERS -> TargetListScreen(
+                                // 固定目标永远各出一行，和系统里有没有数据无关
+                                rows = tab.targets.flatMap { target ->
+                                    target.targets(
+                                        emptyList(),
+                                        create = true,
+                                        hasBackup = { false })
+                                        .map { app -> TargetRow(target, app) }
+                                },
+                                summaries = backupSummaries,
+                                listState = othersListState,
+                                onOpen = { app -> openDetail(app, fromBatch = false) },
+                                modifier = Modifier.padding(paddingValues),
+                                isRefreshing = isRefreshing,
+                                onRefresh = {
+                                    viewModel.refresh()
+                                    viewModel.loadSystemDataCounts()
+                                },
+                                // 副标题是条数：已保存 12 个 / 共 123 个 / 共 86 条
+                                subtitleOf = { row ->
+                                    row.target.countText(row.target.systemCount(systemCounts))
+                                }
+                            )
+
                             HomeTab.SETTINGS -> SettingsContent(
                                 // 底部给悬浮底栏留空间，最后一项能滚到它上面
                                 modifier = Modifier
@@ -346,7 +392,7 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                                     .padding(paddingValues)
                                     .padding(bottom = 88.dp),
                                 onSettingChanged = {
-                                    viewModel.loadApps(scrollToTop = false)
+                                    viewModel.loadList(scrollToTop = false)
                                 }
                             )
 
@@ -362,7 +408,7 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                                         .fillMaxSize()
                                         .padding(paddingValues),
                                     message = loadError.orEmpty(),
-                                    onRetry = { viewModel.loadApps() }
+                                    onRetry = { viewModel.loadList() }
                                 )
 
                                 else -> TargetListScreen(

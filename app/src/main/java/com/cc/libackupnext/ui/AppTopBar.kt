@@ -112,7 +112,7 @@ fun AppTopBar(
             text = { Text("重新加载") },
             onClick = {
                 onDismiss()
-                onReload?.invoke() ?: viewModel.loadApps()
+                onReload?.invoke() ?: viewModel.loadList()
             }
         )
         if (onCreateBackup != null) {
@@ -347,7 +347,7 @@ fun AppTopBar(
                                 onClick = {
                                     viewModel.currentUserId.value = user.id
                                     viewModel.isUserMenuExpanded.value = false
-                                    viewModel.loadApps()
+                                    viewModel.loadList()
                                 },
                                 leadingIcon = {
                                     RadioButton(

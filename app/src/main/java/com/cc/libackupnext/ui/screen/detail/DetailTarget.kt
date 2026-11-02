@@ -9,10 +9,11 @@ import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.ui.dialog.ItemAction
 import com.cc.libackupnext.ui.util.AppView
 import com.cc.libackupnext.ui.util.DirView
+import com.cc.libackupnext.ui.util.SystemView
 import com.cc.libackupnext.ui.util.TargetView
 
 /**
- * 详情页展示的一个「目标」：应用、文件夹，以后可能是 Wi-Fi / 短信 / 通话记录。
+ * 详情页展示的一个「目标」：应用、文件夹、Wi-Fi / 联系人 / 通话记录。
  *
  * 展示部分（图标 / 标题 / 副标题 / 在不在）委托给 [view]，列表行用的是同一份；
  * 这里只加详情页才有的东西：菜单动作和备份按钮。
@@ -94,6 +95,29 @@ class DirTarget(
     override val actions: List<ItemAction> = listOf(ItemAction.OPEN_DIR, ItemAction.DELETE_DIR)
 }
 
+/** Wi-Fi / 联系人 / 通话记录：菜单里只有「打开系统对应的界面」。 */
+class SystemTarget(
+    private val target: BackupTarget,
+    subtitle: String?,
+    onAction: (ItemAction) -> Unit,
+    onBackup: () -> Unit,
+) : DetailTarget(SystemView(target, subtitle), onAction, onBackup) {
+
+    override val version: String? = null
+
+    override val actions: List<ItemAction> = when (target) {
+        BackupTarget.WIFI -> listOf(
+            ItemAction.WIFI_ON,
+            ItemAction.WIFI_OFF,
+            ItemAction.OPEN_WIFI_SETTINGS,
+        )
+
+        BackupTarget.CONTACTS -> listOf(ItemAction.OPEN_CONTACTS)
+        BackupTarget.CALLS -> listOf(ItemAction.OPEN_CALL_LOG)
+        else -> emptyList()
+    }
+}
+
 /**
  * 按目标类型造对应的 [DetailTarget]。
  *
@@ -107,7 +131,12 @@ fun detailTargetOf(
     latestVersion: String?,
     onAction: (ItemAction) -> Unit,
     onBackup: () -> Unit,
+    /** 固定目标的副标题（「共 123 个」这类），其它类型不用传 */
+    subtitle: String? = null,
 ): DetailTarget = when (kind) {
     BackupTarget.APP -> AppTarget(app, isUninstalled, latestVersion, onAction, onBackup)
     BackupTarget.DIR -> DirTarget(app.packageName, isUninstalled, onAction, onBackup)
+    BackupTarget.WIFI, BackupTarget.CONTACTS,
+    BackupTarget.CALLS ->
+        SystemTarget(kind, subtitle, onAction, onBackup)
 }

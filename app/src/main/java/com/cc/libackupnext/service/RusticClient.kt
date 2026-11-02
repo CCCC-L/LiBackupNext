@@ -10,12 +10,14 @@ import com.cc.libackupnext.data.BackupRequest
 import com.cc.libackupnext.data.BackupSnapshot
 import com.cc.libackupnext.data.BackupStep
 import com.cc.libackupnext.data.BackupStepStatus
+import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.data.RepoOverview
 import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.SnapshotMeta
 import com.cc.libackupnext.data.SnapshotOverride
 import com.cc.libackupnext.data.kind
 import com.cc.libackupnext.entity.AppInfo
+import com.cc.libackupnext.service.util.SystemDataExporter
 import com.cc.libackupnext.util.ErrorLog
 import com.topjohnwu.superuser.Shell
 import kotlinx.coroutines.Dispatchers
@@ -231,12 +233,13 @@ object RusticClient {
                 }
             }
 
-            // 目录没有图标，跳过这一步
+            // 目录 / 系统数据都没有图标，跳过这一步（系统数据也就不用去仓库里查了）
             val isDir = request.packageName.startsWith('/')
+            val isFixed = request.packageName in BackupTarget.fixedIds
 
             // 图标只保留一份：仓库里已有 pkg:icon 就不再备份。
             // 批量备份时调用方已经知道答案（来自备份概况），不用再查一遍。
-            val hasIcon = isDir || iconAlreadyBackedUp ?: listSnapshots(
+            val hasIcon = isDir || isFixed || iconAlreadyBackedUp ?: listSnapshots(
                 repoPath = request.repoPath,
                 repoPassword = request.repoPassword,
                 packageName = request.packageName
@@ -488,6 +491,32 @@ object RusticClient {
      *
      * @return 清掉的图标快照数量
      */
+    /**
+     * 系统数据（Wi-Fi / 联系人 / 通话记录）各有多少条；读不到的类型不在结果里。
+     * 三类都由 root 侧数（Wi-Fi 走 WifiManager，另外两类走 provider 的外部通道）。
+     */
+    suspend fun systemDataCounts(): Map<SnapshotKind, Int> = withContext(Dispatchers.IO) {
+        runCatching {
+            val counts = JSONObject(getService().systemDataCounts()).optJSONObject("counts")
+                ?: return@runCatching emptyMap<SnapshotKind, Int>()
+
+            SystemDataExporter.SYSTEM_KINDS.mapNotNull { kind ->
+                counts.optInt(kind.key, -1).takeIf { it >= 0 }?.let { kind to it }
+            }.toMap()
+        }.getOrDefault(emptyMap())
+    }
+
+    /** 打开 / 关闭 Wi-Fi */
+    suspend fun setWifiEnabled(enabled: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val error = getService().setWifiEnabled(enabled)
+            if (error.isNullOrBlank()) Result.success(Unit)
+            else Result.failure(IllegalStateException(error))
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
+    }
+
     suspend fun cleanOrphanIcons(): Result<Int> = withContext(Dispatchers.IO) {
         if (!AppPrefs.hasRepository()) return@withContext Result.success(0)
 
@@ -695,6 +724,9 @@ object RusticClient {
      * 万一进程被杀，下次启动会把残留的暂停恢复掉。
      */
     private suspend fun <T> withAppPaused(app: AppInfo, block: suspend () -> T): T {
+        // 系统数据不是应用，没有进程可停
+        if (BackupTarget.of(app).isFixed) return block()
+
         val key = "${app.packageName}|${app.userId}"
         val paused = AppManagerService.pauseApp(app.packageName, app.userId)
         if (paused) AppPrefs.addPausedApp(key)
@@ -744,8 +776,13 @@ object RusticClient {
         val selected = entry.selectedSnapshots(groups)
         if (selected.isEmpty()) return "请先勾选要恢复的内容"
 
-        // 目录备份不依赖应用是否安装
-        if (selected.all { it.kind() == SnapshotKind.DIR }) return null
+        // 目录和系统数据（Wi-Fi / 联系人 / 通话记录）都不依赖应用装没装
+        if (selected.all {
+                it.kind() == SnapshotKind.DIR || it.kind() in SystemDataExporter.SYSTEM_KINDS
+            }
+        ) {
+            return null
+        }
 
         val hasApk = selected.any { it.kind() == SnapshotKind.APK }
         val needsApp = selected.any { it.kind() != SnapshotKind.APK }
@@ -770,8 +807,8 @@ object RusticClient {
         }
 
         // 恢复前先停掉应用：一边写一边被覆盖会拿到半新半旧的数据
-        // （目录不是应用，没有进程可停）
-        if (!app.packageName.startsWith('/')) {
+        // （目录 / 系统数据不是应用，没有进程可停）
+        if (BackupTarget.of(app) == BackupTarget.APP) {
             AppManagerService.stopQuietly(app.packageName, app.userId)
         }
 
@@ -811,8 +848,11 @@ object RusticClient {
                 }
 
                 val error = getService().restoreSnapshots(request.toString(), callback)
-                if (error.isNullOrBlank()) Result.success(Unit)
-                else Result.failure(IllegalStateException(error))
+                if (!error.isNullOrBlank()) {
+                    return@withContext Result.failure(IllegalStateException(error))
+                }
+
+                Result.success(Unit)
             } catch (t: Throwable) {
                 ErrorLog.e(TAG, "restore failed", t)
                 Result.failure(t)
@@ -825,6 +865,9 @@ object RusticClient {
     /**
      * 备份时进度弹窗的步骤顺序：目录 → apk → obb → 权限 → user → user_de → data。
      * 恢复时进度弹窗的步骤顺序：目录 → apk → obb → user → user_de → data → 权限 。
+     *
+     * 系统数据（Wi-Fi / 联系人 / 通话记录）两种模式都排在最后 —— 它们各自一个快照，
+     * 不和应用的那几步混在一起。
      */
     private val STEP_ORDER = listOf(
         SnapshotKind.DIR,
@@ -833,7 +876,10 @@ object RusticClient {
         SnapshotKind.PERMISSIONS,
         SnapshotKind.USER,
         SnapshotKind.USER_DE,
-        SnapshotKind.DATA
+        SnapshotKind.DATA,
+        SnapshotKind.WIFI,
+        SnapshotKind.CONTACTS,
+        SnapshotKind.CALLS
     )
 
     /** 备份要显示的步骤（顺序固定）。 */
@@ -874,7 +920,10 @@ object RusticClient {
 
     // ==================== 内部 ====================
 
-    private fun request(app: AppInfo, groups: Set<BackupGroup>) = BackupRequest(
+    private fun request(
+        app: AppInfo,
+        groups: Set<BackupGroup>
+    ) = BackupRequest(
         repoPath = repoPath,
         repoPassword = repoPassword,
         packageName = app.packageName,
