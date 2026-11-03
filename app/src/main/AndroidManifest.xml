@@ -31,7 +31,8 @@
       android:label="@string/app_name"
       android:name=".MainActivity"
       android:theme="@style/Theme.LiBackupNext"
-      android:windowSoftInputMode="adjustResize">
+      android:windowSoftInputMode="adjustResize"
+      android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|uiMode|density|fontScale|locale|layoutDirection">
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
 
