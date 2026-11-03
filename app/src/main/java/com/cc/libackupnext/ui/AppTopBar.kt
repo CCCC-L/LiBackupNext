@@ -107,16 +107,19 @@ fun AppTopBar(
     onOpenSettings: (() -> Unit)? = null,
     /** 非空时在「更多」菜单里多一项「错误日志」。 */
     onOpenErrorLog: (() -> Unit)? = null,
-    /** 「重新加载」。默认重拉应用列表；文件页传自己的刷新逻辑。 */
+    /** 「重新加载」；传 null 就不显示这一项（设置页）。 */
     onReload: (() -> Unit)? = null,
     moreMenuContent: @Composable (onDismiss: () -> Unit) -> Unit = { onDismiss ->
-        DropdownMenuItem(
-            text = { Text("重新加载") },
-            onClick = {
-                onDismiss()
-                onReload?.invoke() ?: viewModel.loadList()
-            }
-        )
+        // 传了才显示：设置页这种没有可刷新内容的页面不传
+        if (onReload != null) {
+            DropdownMenuItem(
+                text = { Text("重新加载") },
+                onClick = {
+                    onDismiss()
+                    onReload.invoke()
+                }
+            )
+        }
         if (onCreateBackup != null) {
             DropdownMenuItem(
                 text = { Text(createBackupLabel) },
