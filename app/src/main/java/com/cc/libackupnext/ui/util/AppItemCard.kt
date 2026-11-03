@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -19,7 +18,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -29,16 +27,13 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 fun AppItemCard(
-    icon: ImageBitmap?,
     title: String,
     subtitle: String,
     bottomText: String,
     shape: Shape,
     onClick: (() -> Unit)? = null,
-    /** 非空时即使 [icon] 还没加载完也保留图标位，并显示首字母占位。 */
-    iconPlaceholder: String? = null,
-    /** 自定义图标（例如文件夹）：传了就不画 [icon]，直接画这个。 */
-    iconContent: (@Composable () -> Unit)? = null,
+    /** 图标：应用 / 文件夹 / 系统数据都从这里进，不传就不留图标位。 */
+    icon: (@Composable () -> Unit)? = null,
     /** 已冻结的应用在标题前显示小雪花。 */
     frozen: Boolean = false,
     /** 只在备份里存在（未安装）：标题划线、图标置灰。 */
@@ -71,8 +66,7 @@ fun AppItemCard(
                 .padding(start = 16.dp, end = endPadding),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            val hasAnyIcon = iconContent != null || icon != null || iconPlaceholder != null
-            if (hasAnyIcon) {
+            if (icon != null) {
                 Box(
                     modifier = Modifier
                         .padding(vertical = 12.dp)
@@ -80,15 +74,7 @@ fun AppItemCard(
                         .dimmedWhen(dimmed),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (iconContent != null) {
-                        iconContent()
-                    } else {
-                        AppIcon(
-                            icon = icon,
-                            name = iconPlaceholder ?: title,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
+                    icon()
                 }
                 Spacer(modifier = Modifier.width(14.dp))
             }

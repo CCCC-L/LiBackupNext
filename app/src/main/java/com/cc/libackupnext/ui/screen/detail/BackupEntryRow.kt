@@ -40,7 +40,6 @@ fun BackupEntryRow(
     onManage: () -> Unit,
 ) {
     AppItemCard(
-        icon = null,
         title = entry.title,
         subtitle = listOfNotNull(entry.userName, formatDateTime(entry.time))
             .joinToString(" · "),

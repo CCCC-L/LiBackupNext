@@ -128,8 +128,7 @@ private fun ListContent(
         )
 
         AppItemCard(
-            icon = null,
-            iconContent = { view.Icon() },
+            icon = { view.Icon() },
             frozen = view.isFrozen,
             dimmed = view.isMissing,
             title = view.title,
