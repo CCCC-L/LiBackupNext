@@ -7,6 +7,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +30,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -90,6 +93,26 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
 
     // 底栏：应用 / 文件 / 设置。不持久化，每次进应用都先落在「应用」页
     var tab by remember { mutableStateOf(HomeTab.APPS) }
+    // 页签的横向 Pager：手势、跟手、相邻页都由它负责
+    val pagerState = rememberPagerState(initialPage = tab.ordinal) { HomeTab.entries.size }
+
+    // 点底栏切页签 → 滚到对应页
+    LaunchedEffect(tab) {
+        if (pagerState.currentPage != tab.ordinal) {
+            pagerState.animateScrollToPage(tab.ordinal)
+        }
+    }
+
+    // 手滑停在某一页 → 同步回 tab（顶部标题、搜索占位都跟着变）
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.settledPage }.collect { page ->
+            val target = HomeTab.entries[page]
+            if (target != tab) {
+                if (isSearching) viewModel.toggleSearch()
+                tab = target
+            }
+        }
+    }
     // 文件页要备份的目录：默认 4 个 + 用户自己加的，AppPrefs 读出来就是字母序
     var extraDirs by remember { mutableStateOf(AppPrefs.extraDirs) }
     val fileDirs = extraDirs.toList()
@@ -327,19 +350,27 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                                 }
                             }
 
-                            else -> null
+                            HomeTab.APPS -> {
+                                {
+                                    viewModel.loadList()
+                                }
+                            }
+
+                            // 设置页没有可刷新的内容
+                            HomeTab.SETTINGS -> null
                         }
                     )
                 }
             ) { paddingValues ->
                 Box(modifier = Modifier.fillMaxSize()) {
-                    AnimatedContent(
-                        targetState = tab,
-                        // 左右方向：切到右边的页签从右边进，切回来反向
-                        transitionSpec = pageTransitionSpec<HomeTab> { it.ordinal },
-                        label = "ListTab"
-                    ) { current ->
-                        when (current) {
+                    // 页签用 Pager：拖动时当前页跟着手指走，相邻页同时露出来
+                    HorizontalPager(
+                        state = pagerState,
+                        modifier = Modifier.fillMaxSize(),
+                        // 预组合左右各一页，慢速拖动时不会先看到白底
+                        beyondViewportPageCount = 1
+                    ) { page ->
+                        when (HomeTab.entries[page]) {
                             HomeTab.FILES -> FileListScreen(
                                 dirs = fileDirs,
                                 refreshTick = dirRefreshTick,
