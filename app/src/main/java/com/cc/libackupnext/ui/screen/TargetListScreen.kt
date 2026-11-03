@@ -132,6 +132,7 @@ private fun ListContent(
             frozen = view.isFrozen,
             dimmed = view.isMissing,
             title = view.title,
+            titleColor = view.titleColor,
             subtitle = view.subtitle,
             bottomText = "${summaries[row.item.packageName]?.count ?: 0}个备份",
             extraBottomText = extraBottomText(row.item),

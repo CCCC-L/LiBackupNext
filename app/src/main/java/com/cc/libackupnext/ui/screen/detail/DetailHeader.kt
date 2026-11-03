@@ -77,7 +77,8 @@ fun DetailHeader(
                             text = target.title,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface,
+                            color = target.view.titleColor
+                                ?: MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             textDecoration = if (target.isUninstalled) {

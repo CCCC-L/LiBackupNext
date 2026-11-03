@@ -84,6 +84,7 @@ import com.cc.libackupnext.ui.util.dimmedWhen
 import com.cc.libackupnext.ui.util.formatShortDateTime
 import com.cc.libackupnext.ui.util.isMissing
 import com.cc.libackupnext.ui.util.missingTitleColor
+import com.cc.libackupnext.ui.util.systemAppTitleColor
 import com.cc.libackupnext.util.BackupNotifier
 import com.cc.libackupnext.util.ErrorLog
 import kotlinx.coroutines.launch
@@ -1117,7 +1118,8 @@ private fun BackupSelectRow(
                         }
                     },
                     style = MaterialTheme.typography.bodyMedium,
-                    color = missingTitleColor(missing),
+                    color = systemAppTitleColor(target.isApp && app.isSystem)
+                        ?: missingTitleColor(missing),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textDecoration = if (missing) TextDecoration.LineThrough else null

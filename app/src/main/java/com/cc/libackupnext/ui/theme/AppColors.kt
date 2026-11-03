@@ -10,6 +10,8 @@ import androidx.compose.ui.graphics.Color
 data class AppColors(
     val subtitleColor: Color,
     val bottomTextColor: Color,
+    /** 系统应用的标题色：红色，和用户自己装的应用区分开。 */
+    val systemAppTitleColor: Color,
 
     val pageBackground: Color,
     val cardBackground: Color,
@@ -37,6 +39,7 @@ data class AppColors(
 val LightAppColors = AppColors(
     subtitleColor = Color(0xFF3B6892),
     bottomTextColor = Color(0xFF4B5057),
+    systemAppTitleColor = Color(0xFFFF0000),
 
     pageBackground = Color(0xFFE8E8F0),
     cardBackground = Color(0xFFE0E2EC),
@@ -64,6 +67,8 @@ val LightAppColors = AppColors(
 val DarkAppColors = AppColors(
     subtitleColor = Color(0xFF8AB4E8),
     bottomTextColor = Color(0xFF9BA1A9),
+    // 暗色底上用浅一点的红，够亮但不刺眼
+    systemAppTitleColor = Color(0xFFFF8A80),
 
     pageBackground = Color(0xFF121318),
     cardBackground = Color(0xFF1E1F24),

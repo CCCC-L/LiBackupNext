@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.data.BackupTarget
@@ -41,6 +42,10 @@ sealed class TargetView(
 
     /** 标题前要不要显示冻结雪花。 */
     open val isFrozen: Boolean = false
+
+    /** 标题颜色；null 用默认色（不存在时灰、否则 onSurface）。 */
+    open val titleColor: Color?
+        @Composable get() = null
 
     /**
      * 图标
@@ -80,6 +85,10 @@ class AppView(
     override val title: String = app.name
     override val subtitle: String = app.packageName
     override val isFrozen: Boolean = app.isFrozen
+
+    /** 系统应用标题标红，一眼看出哪些是预装的。 */
+    override val titleColor: Color?
+        @Composable get() = systemAppTitleColor(app.isSystem)
 
     @Composable
     override fun Badge() {

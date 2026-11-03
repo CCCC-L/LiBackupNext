@@ -41,6 +41,8 @@ fun AppItemCard(
     trailingContent: (@Composable () -> Unit)? = null,
     titleStyle: TextStyle = MaterialTheme.typography.titleMedium,
     titleFontWeight: FontWeight = FontWeight.Bold,
+    /** 标题颜色；null 用默认（不存在时灰、否则 onSurface）。系统应用传红色。 */
+    titleColor: Color? = null,
     subtitleColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     bottomTextColor: Color = MaterialTheme.colorScheme.outline,
     extraBottomText: String? = null,
@@ -93,7 +95,7 @@ fun AppItemCard(
                         text = title,
                         style = titleStyle,
                         fontWeight = titleFontWeight,
-                        color = missingTitleColor(dimmed),
+                        color = titleColor ?: missingTitleColor(dimmed),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         textDecoration = if (dimmed) TextDecoration.LineThrough else null,
