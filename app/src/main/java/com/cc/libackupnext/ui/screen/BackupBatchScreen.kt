@@ -382,6 +382,56 @@ fun BackupBatchScreen(
         multiSelected = if (allSelected) multiSelected - visible else multiSelected + visible
     }
 
+    /**
+     * 多选：只勾选「有备份」或「没备份」的那些。
+     *
+     * 主要给新建备份页用：已备份的拿来覆盖，没备份的拿来补。
+     */
+    fun selectByBackup(backedUp: Boolean) {
+        val matched = visibleApps
+            .filter { overview.containsKey(it.packageName) == backedUp }
+            .mapTo(HashSet()) { it.packageName }
+
+        if (matched.isEmpty()) {
+            Toast.makeText(
+                context,
+                if (backedUp) "没有已备份的" else "没有未备份的",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        multiSelect = true
+        anchorPackage = null
+        multiSelected = matched
+    }
+
+    /**
+     * 多选：只勾选「有备份，但备份时的版本和现在装的不一样」的那些。
+     *
+     * 用来快速找出「备份过之后又更新过」的应用：这些应用的备份还是旧版本。
+     * 版本取最近一次备份的 tag（[BackupEntry.version]），备份时就是 AppInfo.version 原样写进去的。
+     */
+    fun selectUpdated() {
+        val matched = visibleApps
+            .filter { app ->
+                // 只在备份里、本机没装的，没有「已安装版本」可比
+                if (app.onlyInBackup) return@filter false
+                val backedUp = overview[app.packageName]?.latest?.version
+                backedUp != null && backedUp != app.version
+            }
+            .mapTo(HashSet()) { it.packageName }
+
+        if (matched.isEmpty()) {
+            Toast.makeText(context, "没有已更新的应用", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        multiSelect = true
+        anchorPackage = null
+        multiSelected = matched
+    }
+
     /** 多选：当前可见的应用取反。 */
     fun invertSelection() {
         val visible = visibleApps.mapTo(HashSet()) { it.packageName }
@@ -672,12 +722,37 @@ fun BackupBatchScreen(
                 // 两个批量页互相切换，不再显示「新建 / 管理」入口
                 moreMenuContent = { onDismiss ->
                     DropdownMenuItem(
+                        text = { Text("选中已备份的") },
+                        onClick = {
+                            onDismiss()
+                            selectByBackup(backedUp = true)
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("选中未备份的") },
+                        onClick = {
+                            onDismiss()
+                            selectByBackup(backedUp = false)
+                        }
+                    )
+                    // 只有应用的新建备份页才有「版本更新」这回事：
+                    // 文件夹 / 系统数据没有版本，管理页是拿来删和恢复的
+                    if (mode == BackupBatchMode.CREATE && targets.any { it.isApp }) {
+                        DropdownMenuItem(
+                            text = { Text("选中已更新的应用") },
+                            onClick = {
+                                onDismiss()
+                                selectUpdated()
+                            }
+                        )
+                    }
+                    DropdownMenuItem(
                         text = {
                             Text(
                                 if (mode == BackupBatchMode.CREATE) {
-                                    "切换到管理应用备份"
+                                    "切换到管理备份"
                                 } else {
-                                    "切换到新建应用备份"
+                                    "切换到新建备份"
                                 }
                             )
                         },
