@@ -27,6 +27,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
@@ -79,10 +80,14 @@ fun rememberEraseProgress(visible: Boolean): State<Float> =
  * - 宽度随 progress 从 [IconSlotWidth] 收缩到 0
  * - [clipToBounds] 让内容从右侧被裁掉（PPT 擦除效果）
  * - 内部 IconButton 需要用 `Modifier.requiredWidth(IconSlotWidth)` 保持原始宽度
+ *
+ * @param fade 擦除的同时淡出。跟手渐变（拖动切页签）时必须开：宽度会在中间值停留很久，
+ *   只裁不淡会长时间露出半个图标。定时动画（120ms）用默认的 false 就行。
  */
-fun Modifier.eraseToRight(progress: Float): Modifier = this
-    .width(IconSlotWidth * progress)
-    .clipToBounds()
+fun Modifier.eraseToRight(progress: Float, fade: Boolean = false): Modifier =
+    (if (fade) alpha(progress) else this)
+        .width(IconSlotWidth * progress)
+        .clipToBounds()
 
 // ================================================================
 //  图标位置移动动画（排序按钮在进入/退出搜索时，向右滑到"更多"位置）

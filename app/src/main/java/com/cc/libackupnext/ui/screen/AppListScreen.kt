@@ -28,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
@@ -57,6 +58,9 @@ import com.cc.libackupnext.ui.theme.pageTransitionSpec
 import com.cc.libackupnext.ui.util.countText
 import com.cc.libackupnext.ui.util.formatShortDateTime
 import com.cc.libackupnext.ui.util.systemCount
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -96,22 +100,61 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
     // 页签的横向 Pager：手势、跟手、相邻页都由它负责
     val pagerState = rememberPagerState(initialPage = tab.ordinal) { HomeTab.entries.size }
 
-    // 点底栏切页签 → 滚到对应页
-    LaunchedEffect(tab) {
-        if (pagerState.currentPage != tab.ordinal) {
-            pagerState.animateScrollToPage(tab.ordinal)
+    /**
+     * 页面的连续位置：0 = 应用，1 = 文件……
+     *
+     * 不能用 `currentPage + currentPageOffsetFraction`：这个版本的 `currentPage` 要等滚动
+     * 停下来才更新，拖动过程中一直是旧值，顶栏就只能在松手后才变。
+     * 拿「第一个可见页的偏移」算才是准的，而且拖动、惯性、程序化滚动都适用。
+     */
+    val pagerPosition by remember(pagerState) {
+        derivedStateOf {
+            val info = pagerState.layoutInfo
+            val first = info.visiblePagesInfo.minByOrNull { it.index }
+                ?: return@derivedStateOf 0f
+            // 页面没有 contentPadding，所以视口宽度就是每页宽度
+            val pageSize = (info.viewportEndOffset - info.viewportStartOffset).toFloat()
+            if (pageSize <= 0f) return@derivedStateOf first.index.toFloat()
+            first.index + (-first.offset.toFloat() / pageSize).coerceIn(0f, 1f)
         }
     }
 
-    // 手滑停在某一页 → 同步回 tab（顶部标题、搜索占位都跟着变）
-    LaunchedEffect(pagerState) {
-        snapshotFlow { pagerState.settledPage }.collect { page ->
-            val target = HomeTab.entries[page]
-            if (target != tab) {
-                if (isSearching) viewModel.toggleSearch()
-                tab = target
+    // 顶栏 / 底栏跟手渐变用的权重。
+    // 都是 lambda：读 pagerPosition 的地方在顶栏自己的组合里，不会让整页每帧重组。
+    val settingsWeight: () -> Float = {
+        (1f - abs(pagerPosition - HomeTab.SETTINGS.ordinal)).coerceIn(0f, 1f)
+    }
+    val appWeight: () -> Float = {
+        (1f - abs(pagerPosition - HomeTab.APPS.ordinal)).coerceIn(0f, 1f)
+    }
+
+    // 点底栏切页签 → 滚到对应页。
+    // 这段时间里不能用位置回写 tab：跨页动画会掠过中间页，标题会闪一路
+    var programmaticScroll by remember { mutableStateOf(false) }
+    LaunchedEffect(tab) {
+        if (pagerState.currentPage != tab.ordinal) {
+            programmaticScroll = true
+            try {
+                pagerState.animateScrollToPage(tab.ordinal)
+            } finally {
+                programmaticScroll = false
             }
         }
+    }
+
+    // 手滑过半页就同步回 tab：顶栏的标题 / 按钮动画跟着页面一起走，
+    // 而不是等松手 settle 完才开始
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerPosition.roundToInt() }
+            .distinctUntilChanged()
+            .collect { page ->
+                if (programmaticScroll) return@collect
+                val target = HomeTab.entries[page]
+                if (target != tab) {
+                    if (isSearching) viewModel.toggleSearch()
+                    tab = target
+                }
+            }
     }
     // 文件页要备份的目录：默认 4 个 + 用户自己加的，AppPrefs 读出来就是字母序
     var extraDirs by remember { mutableStateOf(AppPrefs.extraDirs) }
@@ -308,12 +351,24 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                 topBar = {
                     AppTopBar(
                         viewModel = viewModel,
-                        title = if (tab == HomeTab.SETTINGS) tab.label else appName,
+                        title = appName,
+                        // 只有「设置」和其它页的标题不同，所以只需要在这一条边界上做切换。
+                        // 和底栏文字同一套做法：宽度 + 透明度一起长 / 收。
+                        // 新标题从 35% 就开始长（不是等过半），否则两边同时归零，标题会空一帧。
+                        incomingTitle = HomeTab.SETTINGS.label,
+                        incomingTitleAlpha = {
+                            ((settingsWeight() - 0.35f) / 0.65f).coerceIn(0f, 1f)
+                        },
+                        titleAlpha = { ((0.5f - settingsWeight()) / 0.5f).coerceIn(0f, 1f) },
                         // 用户切换只跟应用有关
                         showUserButton = tab == HomeTab.APPS,
                         // 设置页没有可搜 / 可排序的东西
                         showSearch = tab != HomeTab.SETTINGS,
                         showSortMenu = tab != HomeTab.SETTINGS,
+                        // 连续权重：拖动时按钮宽度跟着手指走，而不是过半才补一段动画
+                        searchWeight = { 1f - settingsWeight() },
+                        userWeight = appWeight,
+                        middleWeight = { 1f - settingsWeight() },
                         searchPlaceholder = tab.searchHint,
                         pageBackground = pageBackground,
                         searchBarBackground = searchBarBackground,
@@ -370,7 +425,10 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                         // 预组合左右各一页，慢速拖动时不会先看到白底
                         beyondViewportPageCount = 1
                     ) { page ->
-                        when (HomeTab.entries[page]) {
+                        // 必须用「本页」的 tab，不能用外层的 tab：外层 tab 是「过半才更新」的，
+                        // 滑入过程中它可能还是旧页，拿 tab.targets 会让这一页是空的
+                        val pageTab = HomeTab.entries[page]
+                        when (pageTab) {
                             HomeTab.FILES -> FileListScreen(
                                 dirs = fileDirs,
                                 refreshTick = dirRefreshTick,
@@ -396,7 +454,7 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
 
                             HomeTab.OTHERS -> TargetListScreen(
                                 // 固定目标永远各出一行，和系统里有没有数据无关
-                                rows = tab.targets.flatMap { target ->
+                                rows = pageTab.targets.flatMap { target ->
                                     target.targets(
                                         emptyList(),
                                         create = true,
@@ -484,6 +542,8 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                             } else {
                                 Color(0xFFF2F3F7)
                             },
+                            // 选中块跟着页面滑：拖动 / 惯性滚动时都读这个连续位置
+                            position = { pagerPosition }
                         )
                     }
                 }

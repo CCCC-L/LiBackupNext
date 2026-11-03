@@ -81,6 +81,26 @@ fun AppTopBar(
     showUserButton: Boolean = true,
     /** 是否显示搜索按钮（设置页没有可搜的东西）。 */
     showSearch: Boolean = true,
+    /**
+     * 连续模式：搜索按钮的显示权重（0..1）。
+     *
+     * 滑动切页签时传它 —— 宽度逐帧跟着手指变，而不是等状态翻转后再补一段 120ms 动画。
+     * 传 null 就退回 [showSearch] + 擦除动画。
+     */
+    searchWeight: (() -> Float)? = null,
+    /** 连续模式：用户按钮的权重，含义同 [searchWeight]。 */
+    userWeight: (() -> Float)? = null,
+    /** 连续模式：中间按钮的权重，含义同 [searchWeight]。 */
+    middleWeight: (() -> Float)? = null,
+    /** 非空时和 [title] 做切换（滑动切页签时换标题用）。 */
+    incomingTitle: String? = null,
+    /**
+     * [incomingTitle] 的展开比例（0..1）：宽度和透明度用同一个值，
+     * 和底栏的文字展开是同一套做法 —— 从 0 宽长出来，不是整体淡入。
+     */
+    incomingTitleAlpha: () -> Float = { 0f },
+    /** [title] 的展开比例；不传就用 1 减 [incomingTitleAlpha]。 */
+    titleAlpha: (() -> Float)? = null,
     /** 外部接管搜索状态：传了就用自己的，不再读写 ViewModel 里的全局搜索状态。 */
     searchOpen: Boolean? = null,
     searchQueryText: String? = null,
@@ -188,16 +208,29 @@ fun AppTopBar(
         }
     }
 
-    // 每个图标独立使用擦除动画
-    val searchButtonErase by rememberEraseProgress(visible = !isSearching)
-    // 用户按钮的擦除进度：和搜索按钮用同一套动画，只是开关条件不同
-    val userButtonErase by rememberEraseProgress(visible = showUserButton)
+    // 每个图标独立使用擦除动画。
+    val searchOpenErase by rememberEraseProgress(visible = !isSearching)
+    val searchAnimated by rememberEraseProgress(visible = showSearch && !isSearching)
+    val searchErase = searchWeight?.let { weight -> weight() * searchOpenErase } ?: searchAnimated
+
+    val userAnimated by rememberEraseProgress(visible = showUserButton)
+    val userErase = userWeight?.invoke() ?: userAnimated
+
     val moreButtonErase by rememberEraseProgress(visible = !isSearching)
+
+    val middleAnimated by rememberEraseProgress(visible = showMiddleButton)
+    val middleWeightValue = middleWeight?.invoke()
+    val middleErase = middleWeightValue ?: middleAnimated
 
     // 中间按钮的位置动画 & 复合容器宽度动画
     val middleButtonEndPadding by rememberMiddleButtonEndPadding(isSearching)
     // 没有中间按钮时右边只剩「更多」一个槽位（搜索态也是只剩一个）
-    val actionGroupWidth by rememberActionGroupWidth(isSearching || !showMiddleButton)
+    val actionGroupWidthAnimated by rememberActionGroupWidth(isSearching || !showMiddleButton)
+    val actionGroupWidth = if (middleWeightValue != null) {
+        IconSlotWidth * (if (isSearching) 1f else 1f + middleWeightValue)
+    } else {
+        actionGroupWidthAnimated
+    }
 
     val isDark = isSystemInDarkTheme()
     val menuColor = if (isDark) Color(0xFF2B2D31) else Color(0xFFF2F3F7)
@@ -218,6 +251,17 @@ fun AppTopBar(
                         .weight(1f)
                         .height(64.dp)
                 ) {
+                    // 换页签时标题用「宽度展开」切换：宽度和透明度取同一个比例，
+                    // 和底栏的文字一样 —— 旧的收完、新的再从 0 宽长出来，两段不会叠在一起。
+                    val baseAlpha = if (isSearching) 0f else 1f
+                    val incomingAlpha =
+                        if (isSearching) 0f else incomingTitleAlpha().coerceIn(0f, 1f)
+                    val outgoingAlpha = if (isSearching) {
+                        0f
+                    } else {
+                        (titleAlpha?.invoke() ?: (1f - incomingAlpha)).coerceIn(0f, 1f)
+                    }
+
                     Text(
                         text = if (selectionMode) "已选择 $selectionCount 项" else title,
                         fontWeight = FontWeight.Bold,
@@ -225,10 +269,26 @@ fun AppTopBar(
                         overflow = TextOverflow.Ellipsis,
                         style = titleStyle,
                         modifier = Modifier
-                            .fillMaxWidth()
+                            .fillMaxWidth(outgoingAlpha)
+                            .clipToBounds()
                             .align(Alignment.CenterStart)
-                            .alpha(if (isSearching) 0f else 1f)
+                            .alpha(baseAlpha * outgoingAlpha)
                     )
+
+                    if (incomingTitle != null) {
+                        Text(
+                            text = incomingTitle,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = titleStyle,
+                            modifier = Modifier
+                                .fillMaxWidth(incomingAlpha)
+                                .clipToBounds()
+                                .align(Alignment.CenterStart)
+                                .alpha(baseAlpha * incomingAlpha)
+                        )
+                    }
 
                     this@Row.AnimatedVisibility(
                         visible = isSearching,
@@ -312,19 +372,17 @@ fun AppTopBar(
                 }
             } else {
             // ===== 搜索按钮：使用独立擦除动画 =====
-            if (showSearch) {
-                Box(modifier = Modifier.eraseToRight(searchButtonErase)) {
-                    IconButton(
-                        onClick = { toggleSearch() },
-                        modifier = Modifier.requiredWidth(IconSlotWidth)
-                    ) {
-                        Icon(Icons.Default.Search, contentDescription = "搜索")
-                    }
+            Box(modifier = Modifier.eraseToRight(searchErase, fade = searchWeight != null)) {
+                IconButton(
+                    onClick = { toggleSearch() },
+                    modifier = Modifier.requiredWidth(IconSlotWidth)
+                ) {
+                    Icon(Icons.Default.Search, contentDescription = "搜索")
                 }
             }
 
             // ===== 用户按钮：和搜索按钮同一套擦除动画 =====
-            Box(modifier = Modifier.eraseToRight(userButtonErase)) {
+            Box(modifier = Modifier.eraseToRight(userErase, fade = userWeight != null)) {
                 IconButton(
                     onClick = {
                         viewModel.loadUsers()
@@ -395,13 +453,16 @@ fun AppTopBar(
                     }
                 }
 
-                // 中间按钮：位置随搜索状态变化；没有中间按钮的页面（设置页）不显示
-                if (showMiddleButton) {
+                // 中间按钮：位置随搜索状态变化；设置页没有它，擦除收起而不是硬切
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = middleButtonEndPadding)
+                        .eraseToRight(middleErase, fade = middleWeight != null)
+                ) {
                     IconButton(
                         onClick = onMiddleClick,
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .padding(end = middleButtonEndPadding)
+                        modifier = Modifier.requiredWidth(IconSlotWidth)
                     ) {
                         Icon(middleIcon, contentDescription = null)
                     }
