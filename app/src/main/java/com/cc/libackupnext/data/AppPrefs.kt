@@ -110,19 +110,15 @@ object AppPrefs {
 
     // ==================== 文件备份 ====================
 
-    /** 用户自己添加的备份目录（绝对路径），默认的 4 个不算在内。 */
+    /**
+     * 备份目录（绝对路径），默认的 4 个也在里面。
+     *
+     * 读出来就按字母序排好 —— 文件页直接拿它渲染，不用再排一次。
+     */
     var extraDirs: Set<String>
-        get() {
-            val stored = prefs.getStringSet(KEY_EXTRA_DIRS, null) ?: return DefaultBackupDirs.toSet()
-            // 早期版本存的是 /sdcard/xxx，统一成 /storage/emulated/0/xxx（同一个位置，只是写法不同）
-            return stored.mapTo(LinkedHashSet()) {
-                when {
-                    it == "/sdcard" -> "/storage/emulated/0"
-                    it.startsWith("/sdcard/") -> "/storage/emulated/0/" + it.removePrefix("/sdcard/")
-                    else -> it
-                }
-            }
-        }
+        get() = (prefs.getStringSet(KEY_EXTRA_DIRS, null) ?: DefaultBackupDirs.toSet())
+            .sorted()
+            .toSet()
 
         set(value) = prefs.edit { putStringSet(KEY_EXTRA_DIRS, value) }
 }

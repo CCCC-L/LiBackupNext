@@ -1,7 +1,6 @@
 package com.cc.libackupnext.data
 
 import com.cc.libackupnext.entity.AppInfo
-import com.cc.libackupnext.entity.DefaultBackupDirs
 import com.cc.libackupnext.entity.dirAppInfo
 import com.cc.libackupnext.entity.isDirectory
 import java.io.File
@@ -80,7 +79,7 @@ enum class BackupTarget(
     ): List<AppInfo> {
         val all = when (this) {
             APP -> apps.filterNot { create && it.onlyInBackup }
-            DIR -> backupDirs(AppPrefs.extraDirs)
+            DIR -> AppPrefs.extraDirs
                 .filterNot { create && !File(it).isDirectory }
                 .map { dirAppInfo(it) }
             // 固定目标永远只有一行，和系统里有没有数据无关
@@ -112,11 +111,3 @@ enum class BackupTarget(
                 ?: if (app.isDirectory) DIR else APP
     }
 }
-
-/**
- * 文件页的目录列表：默认那几个按固定顺序排前面，用户自己加的按字母序排后面。
- *
- * [extra] 已经包含默认目录了（`AppPrefs.extraDirs` 的默认值就是它们），所以这里不再补。
- */
-fun backupDirs(extra: Set<String>): List<String> =
-    DefaultBackupDirs.filter { it in extra } + extra.filterNot { it in DefaultBackupDirs }.sorted()
