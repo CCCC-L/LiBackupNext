@@ -238,7 +238,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // 先渲染已安装应用，备份里独有的应用到了再追加。
                 // 静默刷新不走这一步：分两次写列表会闪，等最终结果一次写进去。
                 val installed = installedDeferred.await()
-                Log.i(TAG, "loadApps: userId=$userId, count=${installed.size}, silent=$silent")
+                Log.d(TAG, "loadApps: userId=$userId, count=${installed.size}, silent=$silent")
                 if (userId != currentUserId.value) return@launch
 
                 if (!silent) {

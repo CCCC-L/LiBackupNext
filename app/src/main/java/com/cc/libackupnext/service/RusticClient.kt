@@ -758,7 +758,7 @@ object RusticClient {
             val dest = "$dir/app.apk"
             val result = Shell.cmd("cp -f \"$source\" \"$dest\"").exec()
             if (result.isSuccess) {
-                Log.i(TAG, "copySelfApk: $dest")
+                Log.d(TAG, "copySelfApk: $dest")
             } else {
                 Log.w(TAG, "copySelfApk failed: ${result.err.joinToString()}")
             }

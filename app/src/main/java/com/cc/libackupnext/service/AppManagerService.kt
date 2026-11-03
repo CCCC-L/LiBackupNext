@@ -244,29 +244,19 @@ object AppManagerService {
         }
 
         override fun pauseApp(packageName: String, userId: Int): Boolean {
-            // 系统应用不暂停：systemui / 桌面这类进程被 SIGSTOP 会让整个系统卡住
-            if (isSystemApp(packageName, userId)) return false
-            return signalAppProcesses(packageName, userId, OsConstants.SIGSTOP) > 0
+            return freezeProcesses(packageName, userId, frozen = true) > 0
         }
 
         override fun resumeApp(packageName: String, userId: Int) {
-            signalAppProcesses(packageName, userId, OsConstants.SIGCONT)
+            freezeProcesses(packageName, userId, frozen = false)
         }
 
-        /** 是否是系统应用（预装）。 */
-        private fun isSystemApp(packageName: String, userId: Int): Boolean = runCatching {
-            val info = mPackageManagerHidden.getPackageInfoAsUser(packageName, 0, userId)
-            val flags = info.applicationInfo?.flags ?: 0
-            flags and ApplicationInfo.FLAG_SYSTEM != 0
-        }.getOrDefault(false)
-
         /**
-         * 给该用户下这个应用的所有进程发信号。
+         * 冻结 / 解冻这个包的所有进程。
          *
-         * SIGSTOP 让进程暂停（备份期间不会改写文件），SIGCONT 恢复。
-         * 自己的进程跳过，否则界面会直接卡死。
+         * @return 实际处理成功的进程数
          */
-        private fun signalAppProcesses(packageName: String, userId: Int, signal: Int): Int {
+        private fun freezeProcesses(packageName: String, userId: Int, frozen: Boolean): Int {
             if (packageName == mContext.packageName) return 0
 
             val uid = runCatching {
@@ -274,17 +264,20 @@ object AppManagerService {
                     .applicationInfo?.uid
             }.getOrNull() ?: return 0
 
-            val self = Os.getpid()
+            val signal = if (frozen) OsConstants.SIGSTOP else OsConstants.SIGCONT
             var count = 0
-            for (pid in processIdsOf(uid)) {
-                if (pid == self) continue
+            for (pid in processIdsOf(uid, packageName)) {
                 if (runCatching { Os.kill(pid, signal) }.isSuccess) count++
             }
+
             return count
         }
 
-        /** /proc 下属于 uid 的进程号。 */
-        private fun processIdsOf(uid: Int): List<Int> {
+
+        /**
+         * 找出「属于这个包」的进程。
+         */
+        private fun processIdsOf(uid: Int, packageName: String): List<Int> {
             val names = runCatching { File("/proc").list() }.getOrNull() ?: return emptyList()
             val pids = ArrayList<Int>()
 
@@ -299,8 +292,15 @@ object AppManagerService {
                             ?.toIntOrNull()
                     }
                 }.getOrNull()
+                if (realUid != uid) continue
 
-                if (realUid == uid) pids.add(pid)
+                // cmdline 是 NUL 分隔的，取第一段就是进程名
+                val cmdline = runCatching {
+                    File("/proc/$name/cmdline").readText().substringBefore('\u0000')
+                }.getOrDefault("")
+                if (cmdline != packageName && !cmdline.startsWith("$packageName:")) continue
+
+                pids.add(pid)
             }
             return pids
         }

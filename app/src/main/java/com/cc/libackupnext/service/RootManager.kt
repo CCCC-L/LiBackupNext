@@ -62,7 +62,7 @@ object RootManager {
                         .setFlags(Shell.FLAG_MOUNT_MASTER)
                         .setTimeout(30)
                 )
-                Log.i(TAG, "mount-master enabled")
+                Log.d(TAG, "mount-master enabled")
             } else {
                 Log.w(TAG, "mount-master not supported, fallback to default namespace")
             }
