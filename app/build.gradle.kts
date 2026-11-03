@@ -38,7 +38,7 @@ android {
 
     defaultConfig {
         applicationId = "com.cc.libackupnext"
-        minSdk = 30
+        minSdk = 31
         targetSdk = 37
         // CI 用 -PversionName / -PversionCode 覆盖；本地不传就是 1 / 1.0
         versionCode = providers.gradleProperty("versionCode").orNull?.toIntOrNull() ?: 1
