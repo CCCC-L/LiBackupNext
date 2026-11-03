@@ -1,6 +1,5 @@
 package com.cc.libackupnext.ui.util
 
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
@@ -8,6 +7,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.entity.AppInfo
@@ -23,7 +23,12 @@ import java.io.File
  * 加新类型时：在 [BackupTarget] 加枚举值 → 这里加子类 → [targetViewOf] 补分支，
  * `when` 是穷尽的，漏了编译不过。
  */
-sealed class TargetView {
+sealed class TargetView(
+    /** 这个视图描述的是哪种目标。 */
+    val target: BackupTarget,
+    /** 目标数据：应用 / 文件夹 / 固定目标都伪装成一个 [AppInfo]。 */
+    protected val app: AppInfo
+) {
 
     /** 标题：应用名 / 文件夹名。 */
     abstract val title: String
@@ -37,9 +42,15 @@ sealed class TargetView {
     /** 标题前要不要显示冻结雪花。 */
     open val isFrozen: Boolean = false
 
-    /** 纯图标，尺寸由调用方给。 */
+    /**
+     * 图标
+     *
+     * @param size 方块边长，由调用方按版面给（列表行 / 详情页 48，批量页 40）
+     */
     @Composable
-    abstract fun Icon(modifier: Modifier)
+    fun Icon(size: Dp = 48.dp) {
+        TargetIconBox(target, app, size)
+    }
 
     /** 标题前的小标记（冻结雪花之类），默认没有。自己负责后面的间距。 */
     @Composable
@@ -62,22 +73,13 @@ sealed class TargetView {
 
 /** 已安装 / 只在备份里存在的应用。 */
 class AppView(
-    private val app: AppInfo,
+    app: AppInfo,
     override val isMissing: Boolean,
-) : TargetView() {
+) : TargetView(BackupTarget.APP, app) {
 
     override val title: String = app.name
     override val subtitle: String = app.packageName
     override val isFrozen: Boolean = app.isFrozen
-
-    @Composable
-    override fun Icon(modifier: Modifier) {
-        AppIcon(
-            icon = rememberAppIconWithBackup(app.packageName, app.userId),
-            name = app.name,
-            modifier = modifier
-        )
-    }
 
     @Composable
     override fun Badge() {
@@ -110,19 +112,15 @@ class AppView(
 
 /** 备份过的文件夹。 */
 class DirView(
-    private val path: String,
+    app: AppInfo,
     override val isMissing: Boolean,
-) : TargetView() {
+) : TargetView(BackupTarget.DIR, app) {
 
+    private val path: String = app.packageName
     private val normalized: String = path.trimEnd('/').ifBlank { path }
 
     override val title: String = normalized.substringAfterLast('/').ifBlank { normalized }
     override val subtitle: String = path
-
-    @Composable
-    override fun Icon(modifier: Modifier) {
-        Box(modifier) { FolderIconBox() }
-    }
 }
 
 /**
@@ -131,18 +129,14 @@ class DirView(
  * @param subtitleText 副标题，由调用方算好（「已保存 12 个」这类），读不到就传 null
  */
 class SystemView(
-    private val target: BackupTarget,
+    target: BackupTarget,
+    app: AppInfo,
     private val subtitleText: String?,
-) : TargetView() {
+) : TargetView(target, app) {
 
     override val title: String = target.displayName
     override val subtitle: String = subtitleText.orEmpty()
     override val isMissing: Boolean = false
-
-    @Composable
-    override fun Icon(modifier: Modifier) {
-        Box(modifier) { SystemDataIconBox(target) }
-    }
 }
 
 /** 按目标类型造视图。 */
@@ -153,9 +147,9 @@ fun targetViewOf(
     subtitle: String? = null,
 ): TargetView = when (target) {
     BackupTarget.APP -> AppView(app, isMissing)
-    BackupTarget.DIR -> DirView(app.packageName, isMissing)
+    BackupTarget.DIR -> DirView(app, isMissing)
     BackupTarget.WIFI, BackupTarget.CONTACTS,
-    BackupTarget.CALLS -> SystemView(target, subtitle)
+    BackupTarget.CALLS -> SystemView(target, app, subtitle)
 }
 
 /**
@@ -171,4 +165,3 @@ fun BackupTarget.isMissing(app: AppInfo): Boolean = when (this) {
     BackupTarget.WIFI, BackupTarget.CONTACTS,
     BackupTarget.CALLS -> false
 }
-

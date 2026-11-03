@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -130,7 +129,7 @@ private fun ListContent(
 
         AppItemCard(
             icon = null,
-            iconContent = { view.Icon(Modifier.size(48.dp)) },
+            iconContent = { view.Icon() },
             frozen = view.isFrozen,
             dimmed = view.isMissing,
             title = view.title,

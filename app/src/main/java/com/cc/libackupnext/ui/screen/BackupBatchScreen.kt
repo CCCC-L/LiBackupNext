@@ -77,16 +77,13 @@ import com.cc.libackupnext.ui.dialog.rememberDoubleClickGuard
 import com.cc.libackupnext.ui.theme.LocalAppColors
 import com.cc.libackupnext.ui.theme.rememberRowSelectionColor
 import com.cc.libackupnext.ui.theme.rememberRowSwipeState
-import com.cc.libackupnext.ui.util.AppIcon
 import com.cc.libackupnext.ui.util.AppIconStore
 import com.cc.libackupnext.ui.util.AppListContainer
-import com.cc.libackupnext.ui.util.FolderIconBox
-import com.cc.libackupnext.ui.util.SystemDataIconBox
+import com.cc.libackupnext.ui.util.TargetIconBox
 import com.cc.libackupnext.ui.util.dimmedWhen
 import com.cc.libackupnext.ui.util.formatShortDateTime
 import com.cc.libackupnext.ui.util.isMissing
 import com.cc.libackupnext.ui.util.missingTitleColor
-import com.cc.libackupnext.ui.util.rememberAppIcon
 import com.cc.libackupnext.util.BackupNotifier
 import com.cc.libackupnext.util.ErrorLog
 import kotlinx.coroutines.launch
@@ -1022,17 +1019,8 @@ private fun BackupSelectRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(modifier = Modifier.dimmedWhen(missing)) {
-                when (target) {
-                    BackupTarget.DIR -> FolderIconBox(size = 40.dp, iconSize = 22.dp)
-                    BackupTarget.APP -> AppIcon(
-                        icon = rememberAppIcon(app.packageName, app.userId),
-                        name = app.name,
-                        modifier = Modifier.size(40.dp)
-                    )
-                    BackupTarget.WIFI, BackupTarget.CONTACTS,
-                    BackupTarget.CALLS ->
-                        SystemDataIconBox(target, size = 40.dp, iconSize = 22.dp)
-                }
+                // 批量页不查仓库里的图标，省一次「有没有 icon 快照」的查询
+                TargetIconBox(target, app, size = 40.dp, useBackupIcon = false)
             }
             Spacer(modifier = Modifier.width(12.dp))
 

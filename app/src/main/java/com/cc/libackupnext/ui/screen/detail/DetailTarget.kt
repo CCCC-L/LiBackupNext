@@ -1,7 +1,6 @@
 package com.cc.libackupnext.ui.screen.detail
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import com.cc.libackupnext.data.BackupTarget
@@ -49,7 +48,7 @@ sealed class DetailTarget(
     @Composable
     fun Icon(modifier: Modifier) {
         Box(modifier) {
-            view.Icon(Modifier.fillMaxSize())
+            view.Icon()
             // 成员扩展函数要 with(分发接收者) 才能调，BoxScope 是隐式的扩展接收者
             with(view) { IconOverlay() }
         }
@@ -84,11 +83,11 @@ class AppTarget(
 
 /** 备份过的文件夹。 */
 class DirTarget(
-    path: String,
+    app: AppInfo,
     isUninstalled: Boolean,
     onAction: (ItemAction) -> Unit,
     onBackup: () -> Unit,
-) : DetailTarget(DirView(path, isUninstalled), onAction, onBackup) {
+) : DetailTarget(DirView(app, isUninstalled), onAction, onBackup) {
 
     override val version: String? = null
 
@@ -97,11 +96,12 @@ class DirTarget(
 
 /** Wi-Fi / 联系人 / 通话记录：菜单里只有「打开系统对应的界面」。 */
 class SystemTarget(
-    private val target: BackupTarget,
+    target: BackupTarget,
+    app: AppInfo,
     subtitle: String?,
     onAction: (ItemAction) -> Unit,
     onBackup: () -> Unit,
-) : DetailTarget(SystemView(target, subtitle), onAction, onBackup) {
+) : DetailTarget(SystemView(target, app, subtitle), onAction, onBackup) {
 
     override val version: String? = null
 
@@ -135,8 +135,8 @@ fun detailTargetOf(
     subtitle: String? = null,
 ): DetailTarget = when (kind) {
     BackupTarget.APP -> AppTarget(app, isUninstalled, latestVersion, onAction, onBackup)
-    BackupTarget.DIR -> DirTarget(app.packageName, isUninstalled, onAction, onBackup)
+    BackupTarget.DIR -> DirTarget(app, isUninstalled, onAction, onBackup)
     BackupTarget.WIFI, BackupTarget.CONTACTS,
     BackupTarget.CALLS ->
-        SystemTarget(kind, subtitle, onAction, onBackup)
+        SystemTarget(kind, app, subtitle, onAction, onBackup)
 }
