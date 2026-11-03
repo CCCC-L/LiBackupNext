@@ -59,9 +59,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var loadJob: Job? = null
     private var sortJob: Job? = null
 
-    /** 上次列表加载完成的时间（elapsedRealtime），前台刷新用来判断是否刚拉过。 */
-    private var lastLoadAt = 0L
-
     // ==================== UI 状态 ====================
     var isSearching = MutableStateFlow(false)
     var searchQuery = MutableStateFlow("")
@@ -87,12 +84,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _systemDataCounts = MutableStateFlow<Map<SnapshotKind, Int>>(emptyMap())
     val systemDataCounts: StateFlow<Map<SnapshotKind, Int>> = _systemDataCounts.asStateFlow()
 
-    fun loadSystemDataCounts() {
-        viewModelScope.launch {
-            _systemDataCounts.value = RusticClient.systemDataCounts()
-        }
-    }
-
     // ==================== 滚动触发器 ====================
     private val _scrollToTopTrigger = MutableStateFlow(0)
     val scrollToTopTrigger: StateFlow<Int> = _scrollToTopTrigger.asStateFlow()
@@ -101,12 +92,54 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _scrollToTopTrigger.update { it + 1 }
     }
 
+    // ==================== 前台刷新 ====================
+    /** 上次「回前台刷新」的时间（elapsedRealtime），用来节流。 */
+    private var lastForegroundRefreshAt = 0L
+
+    /** 文件页的刷新信号：值变了就让列表重新判断哪些目录还在硬盘上。 */
+    private val _dirRefreshTick = MutableStateFlow(0)
+    val dirRefreshTick: StateFlow<Int> = _dirRefreshTick.asStateFlow()
+
+    /**
+     * 回到前台统一刷一遍：应用列表 / 目录存在性 / 「其他」页条数。
+     */
+    fun refreshOnForeground() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastForegroundRefreshAt < FOREGROUND_SKIP_INTERVAL_MS) return
+        lastForegroundRefreshAt = now
+
+        refreshApps()
+        refreshDirs()
+        refreshSystemData()
+    }
+
+    /** 应用列表：这期间可能装了新应用、卸了旧应用。 */
+    private fun refreshApps() {
+        // 已经有一次加载在跑（冷启动那次），别重复发一轮 IPC
+        if (loadJob?.isActive == true) return
+
+        val needsLoad = _allApps.value.isEmpty() || _loadError.value != null
+        loadList(scrollToTop = false, silent = !needsLoad)
+    }
+
+    /** 文件页的目录存在性：tick 变了，列表就重新判断哪些目录还在硬盘上。 */
+    fun refreshDirs() {
+        _dirRefreshTick.update { it + 1 }
+    }
+
+    /** 「其他」页条数：这几个数是别的应用随时会改的，不能只信进应用时那次。 */
+    fun refreshSystemData() {
+        viewModelScope.launch {
+            _systemDataCounts.value = RusticClient.systemDataCounts()
+        }
+    }
+
     // ==================== init ====================
     init {
         // 用户列表和应用列表互不依赖，并行加载
         loadUsers()
         loadList()
-        loadSystemDataCounts()
+        refreshSystemData()
     }
 
     // ==================== 用户 ====================
@@ -247,12 +280,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (isActive && !silent) _loadError.value = t.message ?: "读取应用列表失败"
             } finally {
                 // 被新的加载任务取代时不要覆盖它刚设置的 loading 状态
-                if (isActive) {
-                    lastLoadAt = SystemClock.elapsedRealtime()
-                    if (!silent) {
-                        _isLoading.value = false
-                        _isRefreshing.value = false
-                    }
+                if (isActive && !silent) {
+                    _isLoading.value = false
+                    _isRefreshing.value = false
                 }
             }
         }
@@ -260,23 +290,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 下拉刷新：保留滚动位置，只用顶部指示器。 */
     fun refresh() = loadList(scrollToTop = false, fromPullRefresh = true)
-
-    /**
-     * 回到前台，静默刷新应用列表，获取这期间的新装 / 卸载。
-     */
-    fun refreshOnForeground() {
-        // 已经有一次加载在跑（冷启动那次），别重复发一轮 IPC
-        if (loadJob?.isActive == true) return
-
-        val needsLoad = _allApps.value.isEmpty() || _loadError.value != null
-        // 刚加载完的一小段时间内跳过：进主页面那一帧也会收到 ON_RESUME
-        if (!needsLoad &&
-            SystemClock.elapsedRealtime() - lastLoadAt < FOREGROUND_SKIP_INTERVAL_MS
-        ) {
-            return
-        }
-        loadList(scrollToTop = false, silent = !needsLoad)
-    }
 
     // ==================== 备份概况 ====================
 

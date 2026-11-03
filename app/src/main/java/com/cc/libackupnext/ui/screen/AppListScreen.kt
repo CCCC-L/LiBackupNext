@@ -43,7 +43,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.cc.libackupnext.data.AppPrefs
 import com.cc.libackupnext.data.BackupTarget
-import com.cc.libackupnext.data.backupDirs
 import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.entity.dirAppInfo
 import com.cc.libackupnext.ui.AppBottomBar
@@ -91,13 +90,13 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
 
     // 底栏：应用 / 文件 / 设置。不持久化，每次进应用都先落在「应用」页
     var tab by remember { mutableStateOf(HomeTab.APPS) }
-    // 文件页要备份的目录：默认 4 个 + 用户自己加的
+    // 文件页要备份的目录：默认 4 个 + 用户自己加的，AppPrefs 读出来就是字母序
     var extraDirs by remember { mutableStateOf(AppPrefs.extraDirs) }
-    val fileDirs = remember(extraDirs) { backupDirs(extraDirs) }
+    val fileDirs = extraDirs.toList()
     val fileListState = rememberLazyListState()
     val othersListState = rememberLazyListState()
-    // 文件页的刷新信号：回到前台时递增，让它重新判断哪些目录还在硬盘上
-    var dirRefreshTick by remember { mutableStateOf(0) }
+    // 文件页的刷新信号：回到前台 / 主动刷新时递增，让它重新判断哪些目录还在硬盘上
+    val dirRefreshTick by viewModel.dirRefreshTick.collectAsState()
 
 
     val allApps by viewModel.allApps.collectAsState()
@@ -115,14 +114,17 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
         selectedApp = found ?: selectedApp?.takeIf { it.packageName == pkg }?.copy(userId = currentUserId)
     }
 
-    // 每次回到前台都静默重读一次应用列表：这期间可能装了新应用、卸了旧应用。
+    /**
+     * 回到前台时统一刷一遍。
+     *
+     * 三块数据（应用列表 / 目录存在性 / 「其他」页条数）的数据源不同，但触发时机一样，
+     * 所以统一收在 ViewModel 的 [MainViewModel.refreshOnForeground] 里。
+     */
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 viewModel.refreshOnForeground()
-                dirRefreshTick++
-                viewModel.loadSystemDataCounts()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -170,7 +172,7 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
     // 条数是别的应用随时会改的数据，不能只信进应用时那次
     LaunchedEffect(tab, route) {
         if (tab == HomeTab.OTHERS && route == AppRoute.LIST) {
-            viewModel.loadSystemDataCounts()
+            viewModel.refreshSystemData()
         }
     }
 
@@ -250,9 +252,9 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                     // 默认目录也在 extraDirs 里，所以移除逻辑只有一种：从集合里删掉
                     onRemoveDir = if (BackupTarget.of(current) == BackupTarget.DIR) {
                         {
-                            val next = AppPrefs.extraDirs - current.packageName
-                            AppPrefs.extraDirs = next
-                            extraDirs = next
+                            AppPrefs.extraDirs = AppPrefs.extraDirs - current.packageName
+                            // 读回来是排好序的
+                            extraDirs = AppPrefs.extraDirs
                             closeDetail()
                         }
                     } else {
@@ -313,14 +315,14 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                         onReload = when (tab) {
                             HomeTab.FILES -> {
                                 {
-                                    dirRefreshTick++
+                                    viewModel.refreshDirs()
                                     viewModel.loadList()
                                 }
                             }
 
                             HomeTab.OTHERS -> {
                                 {
-                                    viewModel.loadSystemDataCounts()
+                                    viewModel.refreshSystemData()
                                     viewModel.loadList(scrollToTop = false)
                                 }
                             }
@@ -348,15 +350,15 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                                     openDetail(dirAppInfo(path), fromBatch = false)
                                 },
                                 onAdd = { path ->
-                                    val next = AppPrefs.extraDirs + path
-                                    AppPrefs.extraDirs = next
-                                    extraDirs = next
+                                    AppPrefs.extraDirs = AppPrefs.extraDirs + path
+                                    // 读回来是排好序的
+                                    extraDirs = AppPrefs.extraDirs
                                 },
                                 modifier = Modifier.padding(paddingValues),
                                 isRefreshing = isRefreshing,
                                 onRefresh = {
                                     // 目录可能在别处被删了：重算一遍存在性，再刷新备份数
-                                    dirRefreshTick++
+                                    viewModel.refreshDirs()
                                     viewModel.refresh()
                                 }
                             )
@@ -377,7 +379,7 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                                 isRefreshing = isRefreshing,
                                 onRefresh = {
                                     viewModel.refresh()
-                                    viewModel.loadSystemDataCounts()
+                                    viewModel.refreshSystemData()
                                 },
                                 // 副标题是条数：已保存 12 个 / 共 123 个 / 共 86 条
                                 subtitleOf = { row ->
