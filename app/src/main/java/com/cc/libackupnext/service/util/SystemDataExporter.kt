@@ -4,13 +4,14 @@ import android.content.Context
 import android.database.Cursor
 import android.net.Uri
 import android.net.wifi.WifiConfiguration
+import android.net.wifi.WifiConfigurationHidden
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiManagerHidden
+import android.os.Build
 import android.os.Parcel
 import android.provider.BaseColumns
 import android.provider.CallLog
 import android.provider.ContactsContract
-import android.util.Base64
 import android.util.Log
 import com.cc.libackupnext.data.SnapshotKind
 import dev.rikka.tools.refine.Refine
@@ -27,9 +28,6 @@ import org.json.JSONObject
  * 导出的 JSON 会被当成一个普通文件进 rustic 快照（和 permissions.json 同构）。
  */
 internal object SystemDataExporter {
-
-    /** 导出格式版本。加字段不用动，改语义才要加。 */
-    private const val FORMAT_VERSION = 1
 
     private const val TAG = "SystemDataExporter"
 
@@ -93,37 +91,89 @@ internal object SystemDataExporter {
         return hidden.privilegedConfiguredNetworks.orEmpty()
     }
 
+    /**
+     * 全部已保存的网络，每个存成可读的 JSON。
+     *
+     * 只有静态 IP 那一段仍然走 Parcel + base64 —— `IpConfiguration` 的构造函数是包内私有的，
+     * 公开 API 拼不出来；但它有公开的 `CREATOR`，恢复时能原样读回来。
+     */
     private fun exportWifi(context: Context): JSONObject {
         val networks = JSONArray()
         for (config in wifiConfigs(context)) {
-            // WifiConfiguration 的字段大多是 @hide，逐个读要写一堆 stub；
-            // 它本身是 Parcelable，整包 marshall 成 base64 最省事，字段增删由系统自己处理。
-            val blob = runCatching { encodeConfig(config) }.getOrNull() ?: continue
-            networks.put(
-                JSONObject()
-                    .put("config", blob)
-                    // SSID 只用来给人看 / 去重，恢复时以 config 里的为准
-                    .put("ssid", config.SSID.orEmpty())
-            )
+            networks.put(exportWifiConfig(config))
         }
-        return JSONObject().put("version", FORMAT_VERSION).put("networks", networks)
+        return JSONObject().put("networks", networks)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun exportWifiConfig(config: WifiConfiguration): JSONObject {
+        val json = JSONObject()
+            .put("ssid", unquote(config.SSID))
+            .put("password", unquote(config.preSharedKey))
+            .put("hidden", config.hiddenSSID)
+            .put("key_mgmt", keyMgmtOf(config))
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            json.put("mac_random", config.macRandomizationSetting)
+            staticIpOf(config)?.let { json.put("ip", it) }
+        }
+
+        // WEP 的 key 不在 preSharedKey 里，单独存
+        val wepKeys = config.wepKeys?.filterNotNull()?.filter { it.isNotEmpty() }
+        if (!wepKeys.isNullOrEmpty()) {
+            json.put("wep_keys", JSONArray(wepKeys.map { unquote(it) }))
+            json.put("wep_tx_key", config.wepTxKeyIndex)
+        }
+
+        config.httpProxy?.let { proxy ->
+            json.put("proxy", JSONObject().apply {
+                proxy.pacFileUrl?.let { put("pac", it.toString()) }
+                proxy.host?.let { put("host", it) }
+                if (proxy.port > 0) put("port", proxy.port)
+                proxy.exclusionList?.takeIf { it.isNotEmpty() }
+                    ?.let { put("exclusions", JSONArray(it.toList())) }
+            })
+        }
+
+        return json
     }
 
     /**
-     * 把配置整包序列化成 base64。
+     * 静态 IP；DHCP 的网络返回 null。
      *
-     * 用 `writeParcelable` 而不是 `writeToParcel`：前者会连类名一起写，恢复时能用公开的
-     * `readParcelable` 读回来；`WifiConfiguration.CREATOR` 是 @hide 的，android.jar 里取不到。
+     * `getIpConfiguration` 是隐藏方法，靠 Refine 读；它带的 `IpConfiguration`
+     * 只有 `getStaticIpConfiguration` 是公开的。
      */
-    private fun encodeConfig(config: WifiConfiguration): String {
-        val parcel = Parcel.obtain()
-        return try {
-            parcel.writeParcelable(config, 0)
-            Base64.encodeToString(parcel.marshall(), Base64.NO_WRAP)
-        } finally {
-            parcel.recycle()
+    private fun staticIpOf(config: WifiConfiguration): JSONObject? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return null
+
+        val ipConfig = runCatching {
+            Refine.unsafeCast<WifiConfigurationHidden>(config).ipConfiguration
+        }.getOrNull() ?: return null
+
+        val static = ipConfig.staticIpConfiguration ?: return null
+        return JSONObject().apply {
+            static.ipAddress?.let { put("address", it.toString()) }
+            static.gateway?.let { put("gateway", it.hostAddress) }
+            static.dnsServers?.takeIf { it.isNotEmpty() }
+                ?.let { servers -> put("dns", JSONArray(servers.map { it.hostAddress })) }
+            static.domains?.takeIf { it.isNotBlank() }?.let { put("domains", it) }
         }
     }
+
+    /** `allowedKeyManagement` 是个 BitSet，存成「哪些位是 true」的数组。 */
+    private fun keyMgmtOf(config: WifiConfiguration): JSONArray {
+        val bits = config.allowedKeyManagement ?: return JSONArray()
+        val array = JSONArray()
+        for (index in 0 until bits.size()) {
+            if (bits.get(index)) array.put(index)
+        }
+        return array
+    }
+
+    /** `WifiConfiguration` 里的 SSID / 密码是带引号的，存之前去掉。 */
+    private fun unquote(value: String?): String =
+        value.orEmpty().removeSurrounding("\"").replace("\\\"", "\"")
 
     // ==================== 联系人 ====================
 
@@ -194,7 +244,7 @@ internal object SystemDataExporter {
                     .put("data", data)
             )
         }
-        return JSONObject().put("version", FORMAT_VERSION).put("contacts", contacts)
+        return JSONObject().put("contacts", contacts)
     }
 
     // ==================== 通话记录 ====================
@@ -204,7 +254,7 @@ internal object SystemDataExporter {
         query(context, CallLog.Calls.CONTENT_URI, VISIBLE_CALLS)?.use { cursor ->
             while (cursor.moveToNext()) calls.put(readRow(cursor, CALL_COLUMNS))
         }
-        return JSONObject().put("version", FORMAT_VERSION).put("calls", calls)
+        return JSONObject().put("calls", calls)
     }
 
     // ==================== 公共 ====================

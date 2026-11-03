@@ -4,12 +4,15 @@ import android.content.ContentProviderOperation
 import android.content.ContentValues
 import android.content.Context
 import android.net.wifi.WifiConfiguration
+import android.net.IpConfiguration
+import android.net.ProxyInfo
+import android.net.Uri
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiManagerHidden
+import android.os.Build
 import android.os.Parcel
 import android.provider.CallLog
 import android.provider.ContactsContract
-import android.util.Base64
 import android.util.Log
 import com.cc.libackupnext.data.SnapshotKind
 import dev.rikka.tools.refine.Refine
@@ -59,7 +62,7 @@ internal object SystemDataRestorer {
         // 同名（SSID）的网络已经存在就跳过 —— addNetwork 不做去重，会多出一条重复的
         val existing = hidden.privilegedConfiguredNetworks.orEmpty()
             .mapNotNull { it.SSID }
-            .toHashSet()
+            .mapTo(HashSet()) { unquote(it) }
 
         val networks = root.optJSONArray("networks") ?: JSONArray()
         var added = 0
@@ -67,13 +70,22 @@ internal object SystemDataRestorer {
         var failed = 0
 
         for (index in 0 until networks.length()) {
-            val config = decodeConfig(networks.getJSONObject(index).optString("config"))
-            if (config == null) {
+            val json = networks.getJSONObject(index)
+            val ssid = json.optString("ssid")
+            if (ssid.isBlank()) {
                 failed++
                 continue
             }
-            if (config.SSID != null && !existing.add(config.SSID)) {
+            if (!existing.add(ssid)) {
                 skipped++
+                continue
+            }
+
+            val config = buildWifiConfig(json)
+            if (config == null) {
+                // 企业网要 enterpriseConfig，公开 API 拼不全；数据坏了也一样
+                Log.w(TAG, "跳过无法恢复的 Wi-Fi：$ssid")
+                failed++
                 continue
             }
 
@@ -89,23 +101,109 @@ internal object SystemDataRestorer {
         return Result(added, skipped, failed)
     }
 
+    /**
+     * 按导出的字段重建一个 [WifiConfiguration]；重建不了（企业网）返回 null。
+     */
     @Suppress("DEPRECATION")
-    private fun decodeConfig(blob: String): WifiConfiguration? {
-        if (blob.isBlank()) return null
-        val bytes = Base64.decode(blob, Base64.NO_WRAP)
-        val parcel = Parcel.obtain()
-        return try {
-            parcel.unmarshall(bytes, 0, bytes.size)
-            parcel.setDataPosition(0)
-            // 导出用的是 writeParcelable（带类名），所以这里用公开的 readParcelable 读回来
-            parcel.readParcelable<WifiConfiguration>(WifiConfiguration::class.java.classLoader)
-        } catch (t: Throwable) {
-            Log.w(TAG, "解析 WifiConfiguration 失败", t)
-            null
-        } finally {
-            parcel.recycle()
+    private fun buildWifiConfig(json: JSONObject): WifiConfiguration? {
+        val keyMgmt = ArrayList<Int>()
+        json.optJSONArray("key_mgmt")?.let { array ->
+            for (index in 0 until array.length()) keyMgmt += array.optInt(index, -1)
+        }
+        if (keyMgmt.any { it in ENTERPRISE_KEY_MGMT }) return null
+
+        val config = WifiConfiguration()
+        config.SSID = quote(json.optString("ssid"))
+        config.hiddenSSID = json.optBoolean("hidden", false)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            config.macRandomizationSetting =
+                json.optInt("mac_random", WifiConfiguration.RANDOMIZATION_AUTO)
+        }
+
+        json.optString("password").takeIf { it.isNotEmpty() }?.let { password ->
+            config.preSharedKey = quote(password)
+        }
+
+        json.optJSONArray("wep_keys")?.let { keys ->
+            val slots = arrayOfNulls<String>(WIFI_WEP_KEY_COUNT)
+            for (index in 0 until minOf(keys.length(), WIFI_WEP_KEY_COUNT)) {
+                val key = keys.optString(index)
+                if (key.isNotEmpty()) slots[index] = quote(key)
+            }
+            config.wepKeys = slots
+            config.wepTxKeyIndex = json.optInt("wep_tx_key", 0)
+        }
+
+        keyMgmt.forEach { if (it >= 0) config.allowedKeyManagement.set(it) }
+
+        json.optJSONObject("proxy")?.let { proxy ->
+            config.httpProxy = buildProxy(proxy)
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            json.optJSONObject("ip")?.let { ip ->
+                // 只有 setter，没有公开 getter，不能写属性语法
+                buildIpConfiguration(ip)?.let { config.setIpConfiguration(it) }
+            }
+        }
+
+        return config
+    }
+
+    @Suppress("DEPRECATION")
+    private fun buildProxy(json: JSONObject): ProxyInfo? {
+        val pac = json.optString("pac").takeIf { it.isNotBlank() }
+        if (pac != null) return ProxyInfo.buildPacProxy(Uri.parse(pac))
+
+        val host = json.optString("host").takeIf { it.isNotBlank() } ?: return null
+        val port = json.optInt("port")
+        val exclusions = json.optJSONArray("exclusions")?.let { array ->
+            (0 until array.length()).map { array.optString(it) }
+        }
+
+        return if (exclusions.isNullOrEmpty()) {
+            ProxyInfo.buildDirectProxy(host, port)
+        } else {
+            ProxyInfo.buildDirectProxy(host, port, exclusions)
         }
     }
+
+    /**
+     * 按可读字段拼一个 [IpConfiguration]；拼不出来返回 null。
+     */
+    private fun buildIpConfiguration(json: JSONObject): IpConfiguration? {
+        val dns = json.optJSONArray("dns")?.let { array ->
+            (0 until array.length()).map { array.optString(it) }
+        }
+        // Java 方法不能用具名参数
+        return StaticIpFactory.build(
+            json.optString("address").takeIf { it.isNotBlank() },
+            json.optString("gateway").takeIf { it.isNotBlank() },
+            dns,
+            json.optString("domains").takeIf { it.isNotBlank() }
+        )
+    }
+
+    /** `WifiConfiguration` 里的 SSID / 密码都要带引号。 */
+    private fun quote(value: String): String = "\"" + value.replace("\"", "\\\"") + "\""
+
+    private fun unquote(value: String?): String =
+        value.orEmpty().removeSurrounding("\"").replace("\\\"", "\"")
+
+    /** 这些加密方式要 `enterpriseConfig`，公开 API 拼不出来，恢复时跳过。 */
+    private val ENTERPRISE_KEY_MGMT = setOf(
+        WifiConfiguration.KeyMgmt.WPA_EAP,
+        WifiConfiguration.KeyMgmt.IEEE8021X,
+        WifiConfiguration.KeyMgmt.WPA_EAP_SHA256,
+        WifiConfiguration.KeyMgmt.SUITE_B_192,
+        WifiConfiguration.KeyMgmt.FT_EAP,
+        WifiConfiguration.KeyMgmt.OSEN,
+        WifiConfiguration.KeyMgmt.WAPI_CERT,
+        WifiConfiguration.KeyMgmt.DPP
+    )
+
+    private const val WIFI_WEP_KEY_COUNT = 4
 
     // ==================== 联系人 ====================
 
