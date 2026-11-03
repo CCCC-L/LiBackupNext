@@ -5,6 +5,7 @@ import android.app.ActivityThread
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.content.pm.IPackageManager
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.content.pm.PackageManagerHidden
@@ -15,6 +16,7 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
+import android.os.ServiceManager
 import android.os.SystemClock
 import android.os.UserManagerHidden
 import android.system.Os
@@ -92,6 +94,7 @@ object AppManagerService {
         private lateinit var mUserManager: UserManagerHidden
         private lateinit var mPackageManager: PackageManager
         private lateinit var mPackageManagerHidden: PackageManagerHidden
+        private lateinit var mPackageManagerService: IPackageManager
         private var mActivityManager: ActivityManagerHidden? = null
 
         fun onBind() {
@@ -100,6 +103,7 @@ object AppManagerService {
                 Refine.unsafeCast(UserManagerHidden.get(mSystemContext.applicationContext))
             mPackageManager = mSystemContext.packageManager
             mPackageManagerHidden = Refine.unsafeCast(mPackageManager)
+            mPackageManagerService = IPackageManager.Stub.asInterface(ServiceManager.getService("package"))
             // 拿不到也不影响列表/图标，操作时再兜底走命令
             mActivityManager = runCatching {
                 Refine.unsafeCast<ActivityManagerHidden>(
@@ -113,11 +117,7 @@ object AppManagerService {
         }
 
         /**
-         * 只传元数据，不碰图标。
-         *
-         * 之前是在这里把每个应用的图标 load + 缩放 + WEBP 压缩完再写管道：
-         * 应用少时要等全部压缩结束（首屏几秒），应用多时几百个 Bitmap 很容易把
-         * root 进程撑爆，写端中途死掉 -> 读端 EOF -> 列表直接空白。
+         * 只传元数据，不传图标。
          */
         override fun getInstalledAppsAsUser(userId: Int): ParcelFileDescriptor? {
             return writeToPipe { out ->
@@ -316,7 +316,7 @@ object AppManagerService {
         /** 冻结 / 解冻：setApplicationEnabledSetting（隐藏 API，支持指定用户）。 */
         private fun setAppEnabled(packageName: String, userId: Int, newState: Int) {
             try {
-                mPackageManagerHidden.setApplicationEnabledSetting(packageName, newState, 0, userId)
+                mPackageManagerService.setApplicationEnabledSetting(packageName, newState, 0, userId, null)
                 return
             } catch (t: Throwable) {
                 Log.w(TAG, "setApplicationEnabledSetting failed", t)
