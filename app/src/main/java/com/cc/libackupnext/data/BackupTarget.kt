@@ -54,6 +54,35 @@ enum class BackupTarget(
         CALLS -> "通话记录信息"
     }
 
+    /** 详情页「帮助」里显示的内容，一行一段。 */
+    val helpLines: List<String> get() = when (this) {
+        APP -> listOf(
+            "apk：应用安装包（含 obb），支持分包应用 (Split APK)",
+            "user：位于 /data/user/ 下的数据",
+            "data：位于共享存储 /Android/data/ 下的数据",
+            "权限：已授予的运行时权限随 apk 一起备份，恢复时重新授予：「仅本次允许」这类临时授权不备份"
+        )
+
+        DIR -> listOf(
+            "备份：跳过.thumbnails 文件夹及.trashed 开头的文件/文件夹",
+            "恢复：覆盖同名文件，保留新增文件"
+        )
+
+        WIFI -> listOf(
+            "恢复：同名Wi-Fi 已存在就跳过，不会覆盖现有密码",
+            "注：备份时建议用其他软件也备份一次"
+        )
+
+        CONTACTS -> listOf(
+            "恢复：同名联系人的不同号会合并恢复",
+            "注：备份时建议用其他软件也备份一次"
+        )
+
+        CALLS -> listOf(
+            "注：备份时建议用其他软件也备份一次"
+        )
+    }
+
     /**
      * 这次备份要产出的内容。
      *

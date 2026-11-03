@@ -3,6 +3,8 @@ package com.cc.libackupnext.ui.dialog
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -11,37 +13,27 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 /**
- * 备份说明弹窗，应用详情页和批量页共用。
+ * 帮助弹窗，详情页和批量页共用。
  *
- * @param extraLines 追加在最上面的说明（批量页用它讲勾选操作）
+ * 内容由调用方给：详情页传 `target.helpLines`，批量页先列勾选操作、再拼上这一页
+ * 涉及的目标的说明。
+ *
+ * @param lines 一行一段
  */
 @Composable
 fun BackupHelpDialog(
-    extraLines: List<String> = emptyList(),
+    lines: List<String>,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("帮助") },
         text = {
-            Column {
-                extraLines.forEach { line ->
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                lines.forEachIndexed { index, line ->
+                    if (index > 0) Spacer(modifier = Modifier.height(8.dp))
                     Text(line)
-                    Spacer(modifier = Modifier.height(8.dp))
                 }
-                if (extraLines.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
-                Text("apk：应用安装包（含 obb），支持分包应用 (Split APK)")
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("user：位于 /data/user/ 下的数据")
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("data：位于共享存储 /Android/data/ 下的数据")
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    "权限：已授予的运行时权限随 apk 一起备份，恢复时重新授予；" +
-                            "「仅本次允许」这类临时授权不备份"
-                )
             }
         },
         confirmButton = {

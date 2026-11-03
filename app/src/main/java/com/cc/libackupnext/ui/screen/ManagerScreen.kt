@@ -591,6 +591,8 @@ fun AppBackupScreen(
                 middleIcon = Icons.AutoMirrored.Filled.HelpOutline,
                 onMiddleClick = { showHelpDialog = true },
                 showSortMenu = false,
+                // 详情页不排序，但帮助按钮要留着
+                showMiddleButton = true,
                 // 用户切换只跟应用有关，文件详情页不显示
                 showUserButton = target.isApp,
                 searchPlaceholder = "搜索备注",
@@ -725,9 +727,12 @@ fun AppBackupScreen(
         )
     }
 
-    // 帮助对话框
+    // 帮助对话框：内容随目标类型变（应用 / 文件 / Wi-Fi / 联系人 / 通话记录）
     if (showHelpDialog) {
-        BackupHelpDialog(onDismiss = { showHelpDialog = false })
+        BackupHelpDialog(
+            lines = target.helpLines,
+            onDismiss = { showHelpDialog = false }
+        )
     }
 
     managingEntry?.let { entry ->

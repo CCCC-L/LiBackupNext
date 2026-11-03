@@ -73,6 +73,8 @@ fun AppTopBar(
     middleIcon: ImageVector = Icons.Default.Sort,
     onMiddleClick: () -> Unit = { viewModel.isSortMenuExpanded.value = true },
     showSortMenu: Boolean = true,
+    /** 帮助按钮 */
+    showMiddleButton: Boolean = showSortMenu,
     /** 搜索框占位文案，子页面可以改成「搜索备注」。 */
     searchPlaceholder: String = "搜索应用名称或包名",
     /** 是否显示右上角的用户切换按钮（只有应用相关的需要显示）。 */
@@ -191,8 +193,8 @@ fun AppTopBar(
 
     // 中间按钮的位置动画 & 复合容器宽度动画
     val middleButtonEndPadding by rememberMiddleButtonEndPadding(isSearching)
-    // 没有排序按钮时右边只剩「更多」一个槽位（搜索态也是只剩一个）
-    val actionGroupWidth by rememberActionGroupWidth(isSearching || !showSortMenu)
+    // 没有中间按钮时右边只剩「更多」一个槽位（搜索态也是只剩一个）
+    val actionGroupWidth by rememberActionGroupWidth(isSearching || !showMiddleButton)
 
     val isDark = isSystemInDarkTheme()
     val menuColor = if (isDark) Color(0xFF2B2D31) else Color(0xFFF2F3F7)
@@ -390,8 +392,8 @@ fun AppTopBar(
                     }
                 }
 
-                // 中间按钮：位置随搜索状态变化；没有排序菜单时不显示（否则是个死按钮）
-                if (showSortMenu) {
+                // 中间按钮：位置随搜索状态变化；没有中间按钮的页面（设置页）不显示
+                if (showMiddleButton) {
                     IconButton(
                         onClick = onMiddleClick,
                         modifier = Modifier

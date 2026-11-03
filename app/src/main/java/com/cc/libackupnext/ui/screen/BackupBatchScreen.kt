@@ -844,11 +844,11 @@ fun BackupBatchScreen(
 
     if (showHelp) {
         BackupHelpDialog(
-            extraLines = listOf(
+            lines = listOf(
                 "选项：点击图标反选整行",
                 "多选：右滑某个应用进入多选，再右滑另一个应用会选中两者之间的全部应用",
-                "多选模式下点应用只切换选中、不进详情，顶部的 all / apk / user / data、底部的按钮 也只作用于选中的应用",
-            ),
+                "多选模式下点应用只切换选中、不进详情，顶部的复选框、底部的按钮也只作用于选中的应用",
+            ) + targets.flatMap { it.helpLines }.distinct(),
             onDismiss = { showHelp = false }
         )
     }
