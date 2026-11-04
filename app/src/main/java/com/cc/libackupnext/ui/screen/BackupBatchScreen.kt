@@ -207,15 +207,21 @@ fun BackupBatchScreen(
         anchorPackage = null
     }
 
+    // 倒序：应用行已经由 displayApps 排好，文件夹行要在这里单独反转
+    val isReverse by viewModel.isReverse.collectAsState()
+
     // 这一页的行：目标 + 展示数据。多目标页就是几个目标各自的行拼起来。
     // 管理页只显示仓库里有备份的。
-    val rows = remember(displayApps, overview, mode, targets) {
+    val rows = remember(displayApps, overview, mode, targets, isReverse) {
         targets.flatMap { target ->
-            target.targets(
+            val list = target.targets(
                 apps = displayApps,
                 create = mode == BackupBatchMode.CREATE,
                 hasBackup = { overview.containsKey(it) }
             ).map { TargetRow(target, it) }
+            // 应用行来自 displayApps（已经按 sortType + 倒序排过）；
+            // 文件夹行直接读 AppPrefs.extraDirs，得在这里单独反转。
+            if (isReverse && target == BackupTarget.DIR) list.asReversed() else list
         }
     }
 
@@ -723,6 +729,10 @@ fun BackupBatchScreen(
                 // 用户切换只跟应用有关，文件批量页不显示
                 // 只有应用页需要切用户
                 showUserButton = targets.any { it.isApp },
+                // 系统数据页是固定三行，没有可排序的内容
+                showSortMenu = tab != HomeTab.OTHERS,
+                // 文件夹页只留「倒序」；只有应用页需要四种排序方式
+                showSortTypes = targets.any { it.isApp },
                 // 排序菜单的第三项：应用页能按「版本变了」置顶，文件夹 / 系统数据页没有版本可比
                 sortMenuExtra = if (targets.any { it.isApp }) {
                     SortMenuExtra.PIN_DIFFERENT_VERSIONS

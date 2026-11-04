@@ -53,6 +53,7 @@ import com.cc.libackupnext.ui.AppBottomBar
 import com.cc.libackupnext.ui.AppTopBar
 import com.cc.libackupnext.ui.HomeTab
 import com.cc.libackupnext.ui.MainViewModel
+import com.cc.libackupnext.ui.SortMenuExtra
 import com.cc.libackupnext.ui.SortType
 import com.cc.libackupnext.ui.theme.pageTransitionSpec
 import com.cc.libackupnext.ui.util.countText
@@ -73,6 +74,7 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
     val displayApps by viewModel.displayApps.collectAsState()
     val backupSummaries by viewModel.backupSummaries.collectAsState()
     val sortType by viewModel.sortType.collectAsState()
+    val isReverse by viewModel.isReverse.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val loadError by viewModel.loadError.collectAsState()
@@ -127,6 +129,10 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
     val appWeight: () -> Float = {
         (1f - abs(pagerPosition - HomeTab.APPS.ordinal)).coerceIn(0f, 1f)
     }
+    // 系统数据页也没有排序按钮：和设置页一样，中间按钮跟着手指收起
+    val othersWeight: () -> Float = {
+        (1f - abs(pagerPosition - HomeTab.OTHERS.ordinal)).coerceIn(0f, 1f)
+    }
 
     // 点底栏切页签 → 滚到对应页。
     // 这段时间里不能用位置回写 tab：跨页动画会掠过中间页，标题会闪一路
@@ -152,6 +158,8 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                 val target = HomeTab.entries[page]
                 if (target != tab) {
                     if (isSearching) viewModel.toggleSearch()
+                    // 切到没有排序按钮的页时，别让展开的菜单留在状态里
+                    viewModel.isSortMenuExpanded.value = false
                     tab = target
                 }
             }
@@ -362,13 +370,20 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                         titleAlpha = { ((0.5f - settingsWeight()) / 0.5f).coerceIn(0f, 1f) },
                         // 用户切换只跟应用有关
                         showUserButton = tab == HomeTab.APPS,
-                        // 设置页没有可搜 / 可排序的东西
+                        // 设置页没有可搜的东西；系统数据页是固定三行，没有可排序的内容
                         showSearch = tab != HomeTab.SETTINGS,
-                        showSortMenu = tab != HomeTab.SETTINGS,
+                        showSortMenu = tab != HomeTab.SETTINGS && tab != HomeTab.OTHERS,
+                        // 文件夹页的排序菜单只剩「倒序」，且最后一项不该出现「显示系统应用」
+                        showSortTypes = tab == HomeTab.APPS,
+                        sortMenuExtra = if (tab == HomeTab.APPS) {
+                            SortMenuExtra.SYSTEM_APPS
+                        } else {
+                            SortMenuExtra.NONE
+                        },
                         // 连续权重：拖动时按钮宽度跟着手指走，而不是过半才补一段动画
                         searchWeight = { 1f - settingsWeight() },
                         userWeight = appWeight,
-                        middleWeight = { 1f - settingsWeight() },
+                        middleWeight = { 1f - maxOf(settingsWeight(), othersWeight()) },
                         searchPlaceholder = tab.searchHint,
                         pageBackground = pageBackground,
                         searchBarBackground = searchBarBackground,
@@ -431,6 +446,7 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                         when (pageTab) {
                             HomeTab.FILES -> FileListScreen(
                                 dirs = fileDirs,
+                                reverse = isReverse,
                                 refreshTick = dirRefreshTick,
                                 query = searchQueryText,
                                 summaries = backupSummaries,

@@ -77,6 +77,8 @@ fun AppTopBar(
     showSortMenu: Boolean = true,
     /** 排序菜单最后一项放什么：列表页是「显示系统应用」，批量页换成别的。 */
     sortMenuExtra: SortMenuExtra = SortMenuExtra.SYSTEM_APPS,
+    /** 是否显示四种排序方式：文件夹页只有「倒序」，不需要这些只针对应用的排序。 */
+    showSortTypes: Boolean = true,
     /** 帮助按钮 */
     showMiddleButton: Boolean = showSortMenu,
     /** 搜索框占位文案，子页面可以改成「搜索备注」。 */
@@ -499,7 +501,7 @@ fun AppTopBar(
                 }
             }
 
-            if (showSortMenu) SortMenu(viewModel, sortMenuExtra)
+            if (showSortMenu) SortMenu(viewModel, sortMenuExtra, showSortTypes)
             }
         }
     )
@@ -514,7 +516,7 @@ enum class SortMenuExtra {
     /** 应用批量页：「置顶不同版本」—— 备份时的版本和现在装的不一致，排最前面。 */
     PIN_DIFFERENT_VERSIONS,
 
-    /** 文件夹 / 系统数据批量页：没有这一项（既没有系统应用可过滤，也没有版本可比）。 */
+    /** 文件夹批量页：没有这一项（既没有系统应用可过滤，也没有版本可比）。系统数据页不显示排序按钮。 */
     NONE
 }
 
@@ -522,7 +524,9 @@ enum class SortMenuExtra {
 @Composable
 fun SortMenu(
     viewModel: MainViewModel,
-    extra: SortMenuExtra = SortMenuExtra.SYSTEM_APPS
+    extra: SortMenuExtra = SortMenuExtra.SYSTEM_APPS,
+    /** 传 false 时菜单只剩「倒序」（文件夹页没有应用那四种排序方式）。 */
+    showSortTypes: Boolean = true
 ) {
     val expanded by viewModel.isSortMenuExpanded.collectAsState()
     val sortType by viewModel.sortType.collectAsState()
@@ -539,51 +543,53 @@ fun SortMenu(
         shape = RoundedCornerShape(16.dp),
         containerColor = menuColor
     ) {
-        DropdownMenuItem(
-            text = { Text("应用名称") },
-            onClick = {
-                viewModel.sortType.value = SortType.NAME
-                viewModel.applyFiltersAndSort()  // 只本地重排，不请求
-            },
-            leadingIcon = { RadioButton(selected = sortType == SortType.NAME, onClick = null) }
-        )
-        DropdownMenuItem(
-            text = { Text("安装时间") },
-            onClick = {
-                viewModel.sortType.value = SortType.INSTALL_TIME
-                viewModel.applyFiltersAndSort()
-            },
-            leadingIcon = {
-                RadioButton(selected = sortType == SortType.INSTALL_TIME, onClick = null)
-            }
-        )
-        DropdownMenuItem(
-            text = { Text("更新时间") },
-            onClick = {
-                viewModel.sortType.value = SortType.UPDATE_TIME
-                viewModel.applyFiltersAndSort()
-            },
-            leadingIcon = {
-                RadioButton(selected = sortType == SortType.UPDATE_TIME, onClick = null)
-            }
-        )
+        if (showSortTypes) {
+            DropdownMenuItem(
+                text = { Text("应用名称") },
+                onClick = {
+                    viewModel.sortType.value = SortType.NAME
+                    viewModel.applyFiltersAndSort()  // 只本地重排，不请求
+                },
+                leadingIcon = { RadioButton(selected = sortType == SortType.NAME, onClick = null) }
+            )
+            DropdownMenuItem(
+                text = { Text("安装时间") },
+                onClick = {
+                    viewModel.sortType.value = SortType.INSTALL_TIME
+                    viewModel.applyFiltersAndSort()
+                },
+                leadingIcon = {
+                    RadioButton(selected = sortType == SortType.INSTALL_TIME, onClick = null)
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("更新时间") },
+                onClick = {
+                    viewModel.sortType.value = SortType.UPDATE_TIME
+                    viewModel.applyFiltersAndSort()
+                },
+                leadingIcon = {
+                    RadioButton(selected = sortType == SortType.UPDATE_TIME, onClick = null)
+                }
+            )
 
-        DropdownMenuItem(
-            text = { Text("备份时间") },
-            onClick = {
-                viewModel.sortType.value = SortType.BACKUP_TIME
-                viewModel.applyFiltersAndSort()
-            },
-            leadingIcon = {
-                RadioButton(selected = sortType == SortType.BACKUP_TIME, onClick = null)
-            }
-        )
+            DropdownMenuItem(
+                text = { Text("备份时间") },
+                onClick = {
+                    viewModel.sortType.value = SortType.BACKUP_TIME
+                    viewModel.applyFiltersAndSort()
+                },
+                leadingIcon = {
+                    RadioButton(selected = sortType == SortType.BACKUP_TIME, onClick = null)
+                }
+            )
 
-        HorizontalDivider(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            thickness = 1.dp,
-            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-        )
+            HorizontalDivider(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                thickness = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+            )
+        }
 
         DropdownMenuItem(
             text = { Text("倒序") },

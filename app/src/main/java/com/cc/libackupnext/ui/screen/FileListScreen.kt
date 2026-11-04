@@ -40,6 +40,8 @@ fun FileListScreen(
     onOpen: (String) -> Unit,
     onAdd: (String) -> Unit,
     modifier: Modifier = Modifier,
+    /** 倒序：顶栏排序菜单里唯一对文件夹列表生效的开关。 */
+    reverse: Boolean = false,
     /** 下拉刷新：重算目录存在性 + 刷新备份数，具体动作由调用方给 */
     isRefreshing: Boolean = false,
     onRefresh: (() -> Unit)? = null,
@@ -69,9 +71,9 @@ fun FileListScreen(
 
     // 目录被删掉之后：还有备份就留着（划线置灰提示「已不存在」），
     // 一个备份都没有就直接从列表消失 —— 和应用列表「只在备份里存在」的处理一致
-    val visibleDirs = remember(dirs, summaries, refreshTick, query) {
+    val visibleDirs = remember(dirs, summaries, refreshTick, query, reverse) {
         val keyword = query.trim()
-        dirs.filter { path ->
+        val filtered = dirs.filter { path ->
             val exists = File(path).isDirectory
             if (!exists && summaries[path] == null) return@filter false
             if (keyword.isEmpty()) return@filter true
@@ -79,6 +81,8 @@ fun FileListScreen(
             path.contains(keyword, ignoreCase = true) ||
                 path.trimEnd('/').substringAfterLast('/').contains(keyword, ignoreCase = true)
         }
+        // 先过滤再反转：搜索命中的那几条也要按倒序展示
+        if (reverse) filtered.asReversed() else filtered
     }
 
     TargetListScreen(
