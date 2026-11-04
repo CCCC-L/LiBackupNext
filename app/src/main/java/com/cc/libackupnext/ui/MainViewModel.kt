@@ -69,6 +69,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var isReverse = MutableStateFlow(AppPrefs.sortReverse)
     var showSystemApps = MutableStateFlow(AppPrefs.showSystemApps)
 
+    /**
+     * 批量页排序菜单的「置顶不同版本」：打开后把「备份时的版本 ≠ 当前安装的版本」
+     * 的应用排到最前面，方便一眼找出备份过之后又更新过的。
+     */
+    var pinDifferentVersions = MutableStateFlow(false)
+
     // ==================== 用户列表 ====================
     private val _users = MutableStateFlow<List<UserInfo>>(emptyList())
     val users: StateFlow<List<UserInfo>> = _users.asStateFlow()

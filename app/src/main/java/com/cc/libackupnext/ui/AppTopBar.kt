@@ -75,6 +75,8 @@ fun AppTopBar(
     middleIcon: ImageVector = Icons.Default.Sort,
     onMiddleClick: () -> Unit = { viewModel.isSortMenuExpanded.value = true },
     showSortMenu: Boolean = true,
+    /** 排序菜单最后一项放什么：列表页是「显示系统应用」，批量页换成别的。 */
+    sortMenuExtra: SortMenuExtra = SortMenuExtra.SYSTEM_APPS,
     /** 帮助按钮 */
     showMiddleButton: Boolean = showSortMenu,
     /** 搜索框占位文案，子页面可以改成「搜索备注」。 */
@@ -497,19 +499,36 @@ fun AppTopBar(
                 }
             }
 
-            if (showSortMenu) SortMenu(viewModel)
+            if (showSortMenu) SortMenu(viewModel, sortMenuExtra)
             }
         }
     )
 }
 
 
+/** 排序菜单最后一项放什么。三个页面能做的事不一样，用不着都显示。 */
+enum class SortMenuExtra {
+    /** 应用列表页：「显示系统应用」开关（持久化）。 */
+    SYSTEM_APPS,
+
+    /** 应用批量页：「置顶不同版本」—— 备份时的版本和现在装的不一致，排最前面。 */
+    PIN_DIFFERENT_VERSIONS,
+
+    /** 文件夹 / 系统数据批量页：没有这一项（既没有系统应用可过滤，也没有版本可比）。 */
+    NONE
+}
+
+
 @Composable
-fun SortMenu(viewModel: MainViewModel) {
+fun SortMenu(
+    viewModel: MainViewModel,
+    extra: SortMenuExtra = SortMenuExtra.SYSTEM_APPS
+) {
     val expanded by viewModel.isSortMenuExpanded.collectAsState()
     val sortType by viewModel.sortType.collectAsState()
     val isReverse by viewModel.isReverse.collectAsState()
     val showSystem by viewModel.showSystemApps.collectAsState()
+    val pinDifferent by viewModel.pinDifferentVersions.collectAsState()
 
     val isDark = isSystemInDarkTheme()
     val menuColor = if (isDark) Color(0xFF2B2D31) else Color(0xFFF2F3F7)
@@ -574,13 +593,25 @@ fun SortMenu(viewModel: MainViewModel) {
             },
             leadingIcon = { Checkbox(checked = isReverse, onCheckedChange = null) }
         )
-        DropdownMenuItem(
-            text = { Text("显示系统应用") },
-            onClick = {
-                viewModel.showSystemApps.value = !showSystem
-                viewModel.applyFiltersAndSort()  // 只本地过滤，不请求
-            },
-            leadingIcon = { Checkbox(checked = showSystem, onCheckedChange = null) }
-        )
+        when (extra) {
+            SortMenuExtra.SYSTEM_APPS -> DropdownMenuItem(
+                text = { Text("显示系统应用") },
+                onClick = {
+                    viewModel.showSystemApps.value = !showSystem
+                    viewModel.applyFiltersAndSort()  // 只本地过滤，不请求
+                },
+                leadingIcon = { Checkbox(checked = showSystem, onCheckedChange = null) }
+            )
+
+            // 批量页没有系统应用可过滤（列表本来就只有仓库里的那些），换成这个更有用。
+            // 重排由批量页自己做（visibleApps），这里只翻开关。
+            SortMenuExtra.PIN_DIFFERENT_VERSIONS -> DropdownMenuItem(
+                text = { Text("置顶不同版本") },
+                onClick = { viewModel.pinDifferentVersions.value = !pinDifferent },
+                leadingIcon = { Checkbox(checked = pinDifferent, onCheckedChange = null) }
+            )
+
+            SortMenuExtra.NONE -> Unit
+        }
     }
 }

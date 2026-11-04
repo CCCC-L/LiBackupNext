@@ -70,6 +70,7 @@ import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.ui.AppTopBar
 import com.cc.libackupnext.ui.HomeTab
 import com.cc.libackupnext.ui.MainViewModel
+import com.cc.libackupnext.ui.SortMenuExtra
 import com.cc.libackupnext.ui.dialog.BackupHelpDialog
 import com.cc.libackupnext.ui.dialog.BackupProgressDialog
 import com.cc.libackupnext.ui.dialog.ProgressSection
@@ -218,9 +219,12 @@ fun BackupBatchScreen(
     var searchOpen by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
 
-    val visibleApps = remember(apps, searchQuery) {
+    // 排序菜单的「置顶不同版本」：只影响这一页的显示顺序，不动主列表
+    val pinDifferent by viewModel.pinDifferentVersions.collectAsState()
+
+    val visibleApps = remember(apps, searchQuery, pinDifferent, overview) calc@{
         val query = searchQuery.trim()
-        if (query.isEmpty()) {
+        val filtered = if (query.isEmpty()) {
             apps
         } else {
             apps.filter {
@@ -228,6 +232,22 @@ fun BackupBatchScreen(
                         it.packageName.contains(query, ignoreCase = true)
             }
         }
+        if (!pinDifferent) return@calc filtered
+
+        // 备份时的版本和现在装的不一致 → 排最前面，方便找出「备份过之后又更新过」的应用。
+        filtered.sortedByDescending { app ->
+            if (app.onlyInBackup) {
+                false
+            } else {
+                val backedUp = overview[app.packageName]?.latest?.version
+                backedUp != null && backedUp != app.version
+            }
+        }
+    }
+
+    // 置顶开关一变直接回到顶部，
+    LaunchedEffect(pinDifferent) {
+        if (visibleApps.isNotEmpty()) listState.scrollToItem(0)
     }
 
     // displayApps 为空时（应用列表还没加载完）也要重跑一次，否则默认全选选不到东西
@@ -713,6 +733,12 @@ fun BackupBatchScreen(
                 // 用户切换只跟应用有关，文件批量页不显示
                 // 只有应用页需要切用户
                 showUserButton = targets.any { it.isApp },
+                // 排序菜单的第三项：应用页能按「版本变了」置顶，文件夹 / 系统数据页没有版本可比
+                sortMenuExtra = if (targets.any { it.isApp }) {
+                    SortMenuExtra.PIN_DIFFERENT_VERSIONS
+                } else {
+                    SortMenuExtra.NONE
+                },
                 searchOpen = searchOpen,
                 searchQueryText = searchQuery,
                 onToggleSearch = {
