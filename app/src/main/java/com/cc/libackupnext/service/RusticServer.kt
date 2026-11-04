@@ -355,8 +355,35 @@ object RusticServer {
 
                     emit(SnapshotKind.APK, "done")
                 }
-
                 val appUid: Int? = packageUid(context, packageName, userId)
+
+                // 恢复 权限 / appops / 电池白名单
+                byKind[SnapshotKind.PERMISSIONS]?.let { id ->
+                    emit(SnapshotKind.PERMISSIONS, "running")
+
+                    val uid = appUid ?: packageUid(context, packageName, userId)
+                    if (uid == null) {
+                        emit(SnapshotKind.PERMISSIONS, "failed")
+                        return "应用未安装，无法恢复数据"
+                    }
+
+                    val json = try {
+                        loadJsonFromRepo(repoPath, repoPassword, id, SnapshotKind.PERMISSIONS.key)
+                    } catch (e: IllegalStateException) {
+                        emit(SnapshotKind.PERMISSIONS, "failed")
+                        return e.message.orEmpty()
+                    } catch (e: IllegalArgumentException) {
+                        emit(SnapshotKind.PERMISSIONS, "skipped")
+                        return@let
+                    }
+
+                    val failed = appState.apply(json, packageName, uid)
+                    if (failed > 0) {
+                        Log.w(TAG, "恢复权限有 $failed 项失败：$packageName")
+                    }
+                    emit(SnapshotKind.PERMISSIONS, "done")
+                }
+
                 for (kind in APP_DATA_KINDS) {
                     val id = byKind[kind] ?: continue
 
@@ -402,47 +429,6 @@ object RusticServer {
                     emit(kind, "done")
                 }
 
-                // 权限 / appops / 电池白名单：解出 permissions.json，全量写回
-                byKind[SnapshotKind.PERMISSIONS]?.let { id ->
-                    emit(SnapshotKind.PERMISSIONS, "running")
-
-                    val uid = appUid ?: packageUid(context, packageName, userId)
-                    if (uid == null) {
-                        emit(SnapshotKind.PERMISSIONS, "skipped")
-                        return@let
-                    }
-
-                    val dir = File(context.cacheDir, "restore_permissions").apply {
-                        deleteRecursively()
-                        mkdirs()
-                    }
-                    val error =
-                        restoreTo(repoPath, repoPassword, id, dir.absolutePath, delete = false)
-                    val json = if (error.isBlank()) {
-                        runCatching {
-                            JSONObject(File(dir, "permissions.json").readText())
-                        }.getOrNull()
-                    } else {
-                        null
-                    }
-                    dir.deleteRecursively()
-
-                    if (json == null) {
-                        if (error.isNotBlank()) {
-                            emit(SnapshotKind.PERMISSIONS, "failed")
-                            return error
-                        }
-                        emit(SnapshotKind.PERMISSIONS, "skipped")
-                        return@let
-                    }
-
-                    val failed = appState.apply(json, packageName, uid)
-                    if (failed > 0) {
-                        Log.w(TAG, "恢复权限有 $failed 项失败：$packageName")
-                    }
-                    emit(SnapshotKind.PERMISSIONS, "done")
-                }
-
                 // 系统数据（Wi-Fi / 联系人 / 通话记录）：Wi-Fi 走 WifiManager，
                 // 另外两类走 provider 的外部通道，都不碰数据库文件
                 val failures = mutableListOf<String>()
@@ -450,28 +436,9 @@ object RusticServer {
                     val id = byKind[kind] ?: continue
                     emit(kind, "running")
 
-                    val dir = File(context.cacheDir, "restore_${kind.key}").apply {
-                        deleteRecursively()
-                        mkdirs()
-                    }
-                    val error =
-                        restoreTo(repoPath, repoPassword, id, dir.absolutePath, delete = false)
-                    // 快照里的文件名就是 <kind>.json（导出时就是这么写的），按名字找最稳
-                    val text = dir.listFiles()
-                        ?.let { files ->
-                            files.firstOrNull { it.name == "${kind.key}.json" }
-                                ?: files.firstOrNull { it.isFile }
-                        }
-                        ?.let { file -> runCatching { file.readText() }.getOrNull() }
-                    dir.deleteRecursively()
-
-                    if (text == null) {
-                        emit(kind, "failed")
-                        return error.ifBlank { "恢复出来的数据文件不存在" }
-                    }
-
                     val result = try {
-                        SystemDataRestorer.restore(context, kind, text)
+                        val json = loadJsonFromRepo(repoPath, repoPassword, id, kind.key)
+                        SystemDataRestorer.restore(context, kind, json)
                     } catch (t: Throwable) {
                         Log.e(TAG, "恢复 ${kind.key} 失败", t)
                         emit(kind, "failed")
@@ -494,6 +461,35 @@ object RusticServer {
                 Log.e(TAG, "restoreSnapshots failed", t)
                 "恢复异常：${t.message ?: t.javaClass.simpleName}"
             }
+        }
+
+        private fun loadJsonFromRepo(
+            repoPath: String,
+            repoPassword: String,
+            id: String,
+            kind: String
+        ): JSONObject {
+            val dir = File(context.cacheDir, "restore_${kind}").apply {
+                deleteRecursively()
+                mkdirs()
+            }
+            try {
+                val error =
+                    restoreTo(repoPath, repoPassword, id, dir.absolutePath, delete = false)
+                if (error.isNotBlank()) {
+                    throw IllegalStateException(error)
+                }
+
+                // 快照里的文件名就是 <kind>.json（导出时就是这么写的）
+                try {
+                    return JSONObject(File(dir, "${kind}.json").readText())
+                } catch (t: Throwable) {
+                    throw IllegalArgumentException()
+                }
+            } finally {
+                dir.deleteRecursively()
+            }
+
         }
 
         /**

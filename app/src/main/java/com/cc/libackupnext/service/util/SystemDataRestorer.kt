@@ -38,12 +38,11 @@ internal object SystemDataRestorer {
         val total: Int get() = added + skipped + failed
     }
 
-    fun restore(context: Context, kind: SnapshotKind, json: String): Result = try {
-        val root = JSONObject(json)
+    fun restore(context: Context, kind: SnapshotKind, json: JSONObject): Result = try {
         when (kind) {
-            SnapshotKind.WIFI -> restoreWifi(context, root)
-            SnapshotKind.CONTACTS -> restoreContacts(context, root)
-            SnapshotKind.CALLS -> restoreCalls(context, root)
+            SnapshotKind.WIFI -> restoreWifi(context, json)
+            SnapshotKind.CONTACTS -> restoreContacts(context, json)
+            SnapshotKind.CALLS -> restoreCalls(context, json)
             else -> Result(0, 0)
         }
     } catch (t: Throwable) {
