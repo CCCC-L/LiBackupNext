@@ -1100,6 +1100,11 @@ private fun BackupSelectRow(
     // 应用没装 / 文件夹被删：和列表页一样，图标置灰 + 标题划线
     val missing = target.isMissing(app)
 
+    // 备份时的版本和现在装的不一致：版本号标蓝，一眼看出「这个应用的备份是旧版本」。
+    // 没装的应用（missing）不算 —— 它的 version 本来就是从备份里读出来的，比不出差异。
+    val versionChanged = !missing &&
+            summary?.latest?.version?.let { it != app.version } == true
+
     // 右滑选中：跟手位移 + 松手弹回（动画参数在 theme/Animation.kt）
     val swipe = rememberRowSwipeState(onSwipe = onSwipeSelect)
 
@@ -1160,7 +1165,18 @@ private fun BackupSelectRow(
                             append(app.name)
                         }
                         append("  ")
-                        withStyle(SpanStyle(fontSize = 10.sp, fontWeight = FontWeight.Normal)) {
+                        withStyle(
+                            SpanStyle(
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Normal,
+                                // 版本不一致时高亮
+                                color = if (versionChanged) {
+                                    appColors.subtitleColor
+                                } else {
+                                    Color.Unspecified
+                                }
+                            )
+                        ) {
                             append(app.version)
                         }
                     },
