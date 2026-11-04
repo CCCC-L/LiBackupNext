@@ -87,7 +87,9 @@ import com.cc.libackupnext.ui.util.missingTitleColor
 import com.cc.libackupnext.ui.util.systemAppTitleColor
 import com.cc.libackupnext.util.BackupNotifier
 import com.cc.libackupnext.util.ErrorLog
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.UUID
 import kotlin.math.roundToInt
 
@@ -451,6 +453,8 @@ fun BackupBatchScreen(
      * 批量执行，逐个应用跑 [action]。
      *
      * 进度弹窗和应用详情页共用：显示当前应用的步骤，副标题是「3/10 应用名」。
+     *
+     * @param onFinished 整批跑完后调一次。用来做「一批只做一次」的收尾
      */
     fun runBatch(
         title: String,
@@ -458,6 +462,7 @@ fun BackupBatchScreen(
         isRestore: Boolean,
         list: List<Pair<AppInfo, Set<BackupGroup>>>,
         stepsOf: (AppInfo, Set<BackupGroup>) -> List<BackupStep>,
+        onFinished: (suspend (successCount: Int) -> Unit)? = null,
         action: suspend (AppInfo, Set<BackupGroup>, (BackupProgress) -> Unit) -> Result<Unit>
     ) {
         if (list.isEmpty()) {
@@ -488,37 +493,19 @@ fun BackupBatchScreen(
 
         scope.launch {
             var failed = 0
-            for ((app, kinds) in list) {
-                val appSteps = stepsOf(app, kinds)
-                progressSubtitle = if (total > 1) {
-                    "${finished + 1}/$total  ${app.name}"
-                } else {
-                    "开始:${app.packageName}"
-                }
-                // 每个应用追加一段，之前成功的记录保留在窗口里
-                progressSections = progressSections + ProgressSection(
-                    title = app.name,
-                    steps = appSteps
-                )
-                BackupNotifier.update(
-                    context = context,
-                    action = actionLabel,
-                    appName = app.name,
-                    packageName = app.packageName,
-                    userId = app.userId,
-                    appIndex = finished + 1,
-                    appTotal = total,
-                    stageLabel = "",
-                    stageIndex = 0,
-                    stageTotal = appSteps.size
-                )
-
-                action(app, kinds) { progress ->
-                    val last = progressSections.last()
-                    progressSections = progressSections.dropLast(1) +
-                            last.copy(steps = RusticClient.applyProgress(last.steps, progress))
-
-                    val stepIndex = appSteps.indexOfFirst { it.kind.key == progress.stage }
+            try {
+                for ((app, kinds) in list) {
+                    val appSteps = stepsOf(app, kinds)
+                    progressSubtitle = if (total > 1) {
+                        "${finished + 1}/$total  ${app.name}"
+                    } else {
+                        "开始:${app.packageName}"
+                    }
+                    // 每个应用追加一段，之前成功的记录保留在窗口里
+                    progressSections = progressSections + ProgressSection(
+                        title = app.name,
+                        steps = appSteps
+                    )
                     BackupNotifier.update(
                         context = context,
                         action = actionLabel,
@@ -527,19 +514,45 @@ fun BackupBatchScreen(
                         userId = app.userId,
                         appIndex = finished + 1,
                         appTotal = total,
-                        stageLabel = progress.stage,
-                        stageIndex = if (stepIndex >= 0) stepIndex + 1 else 1,
+                        stageLabel = "",
+                        stageIndex = 0,
                         stageTotal = appSteps.size
                     )
-                }.onFailure {
-                    failed++
-                    ErrorLog.add(progressTitle, "${app.name} 失败", it)
-                    progressError = it.message ?: "操作失败"
-                    val last = progressSections.last()
-                    progressSections = progressSections.dropLast(1) +
-                            last.copy(steps = RusticClient.markFailed(last.steps))
+
+                    action(app, kinds) { progress ->
+                        val last = progressSections.last()
+                        progressSections = progressSections.dropLast(1) +
+                                last.copy(steps = RusticClient.applyProgress(last.steps, progress))
+
+                        val stepIndex = appSteps.indexOfFirst { it.kind.key == progress.stage }
+                        BackupNotifier.update(
+                            context = context,
+                            action = actionLabel,
+                            appName = app.name,
+                            packageName = app.packageName,
+                            userId = app.userId,
+                            appIndex = finished + 1,
+                            appTotal = total,
+                            stageLabel = progress.stage,
+                            stageIndex = if (stepIndex >= 0) stepIndex + 1 else 1,
+                            stageTotal = appSteps.size
+                        )
+                    }.onFailure {
+                        failed++
+                        ErrorLog.add(progressTitle, "${app.name} 失败", it)
+                        progressError = it.message ?: "操作失败"
+                        val last = progressSections.last()
+                        progressSections = progressSections.dropLast(1) +
+                                last.copy(steps = RusticClient.markFailed(last.steps))
+                    }
+                    finished++
                 }
-                finished++
+            } finally {
+                // 宿主销毁（转屏 / 切深色模式）会把 scope 一起取消，
+                // 已经备份成功的那些应用仍然需要这份 apk，收尾不能跟着丢
+                if (onFinished != null) {
+                    withContext(NonCancellable) { onFinished(total - failed) }
+                }
             }
             running = false
             progressSubtitle = if (failed == 0) {
@@ -572,7 +585,10 @@ fun BackupBatchScreen(
             doneTitle = "备份成功",
             isRestore = false,
             list = targets(),
-            stepsOf = { _, kinds -> RusticClient.backupSteps(kinds) }
+            stepsOf = { _, kinds -> RusticClient.backupSteps(kinds) },
+            onFinished = { successCount ->
+                if (successCount > 0) RusticClient.exportSelfApk()
+            }
         ) { app, kinds, onProgress ->
             // 图标有没有备份过，概况里已经带了，不用每个应用再查一次仓库
             RusticClient.backup(
@@ -612,16 +628,21 @@ fun BackupBatchScreen(
     }
 
     fun startOverwrite() {
+        val batchId = UUID.randomUUID().toString()
+
         runBatch(
             title = "正在覆盖备份",
             doneTitle = "覆盖成功",
             isRestore = false,
             list = targets(),
-            stepsOf = { _, kinds -> RusticClient.backupSteps(kinds) }
+            stepsOf = { _, kinds -> RusticClient.backupSteps(kinds) },
+            onFinished = { successCount ->
+                if (successCount > 0) RusticClient.exportSelfApk()
+            }
         ) { app, kinds, onProgress ->
             val entry = entryOf(app.packageName)
                 ?: return@runBatch Result.failure(IllegalStateException("没有可覆盖的备份"))
-            RusticClient.overwrite(app, entry, kinds, onProgress)
+            RusticClient.overwrite(app, entry, kinds, onProgress, batchId)
         }
     }
 

@@ -677,18 +677,23 @@ object RusticClient {
                 parentIds = parentIds
             )
         }
-        if (result.isSuccess) afterBackup()
+        // 批量备份（batchId 有值）留到整批结束后由调用方统一做一次 —— 目标始终是同一个
+        if (result.isSuccess && batchId == null) exportSelfApk()
         return result
     }
 
     /**
      * 覆盖备份：沿用旧快照的 label / tag / 备注，新的写成功了再删掉旧的。
+     *
+     * @param batchId 批量覆盖的批次标识：同一批里每个应用传同一个值，仓库只打开一次。
+     *   和 [backup] 一样，传了它就由调用方在整批结束后统一导出自身安装包。
      */
     suspend fun overwrite(
         app: AppInfo,
         entry: BackupEntry,
         groups: Set<BackupGroup>,
-        onProgress: (BackupProgress) -> Unit = {}
+        onProgress: (BackupProgress) -> Unit = {},
+        batchId: String? = null
     ): Result<Unit> {
         val selected = entry.selectedSnapshots(groups)
         if (selected.isEmpty()) {
@@ -710,10 +715,13 @@ object RusticClient {
                 request = request(app, groupsToBackup),
                 overrides = overrides,
                 deleteIds = selected.map { it.id },
-                onProgress = onProgress
+                onProgress = onProgress,
+                batchId = batchId
             )
         }
-        if (result.isSuccess) afterBackup()
+        // 覆盖备份也是备份：本程序可能已经升级过，仓库里那份得跟着换。
+        // 批量覆盖（batchId 有值）同样留到整批结束后统一做一次。
+        if (result.isSuccess && batchId == null) exportSelfApk()
         return result
     }
 
@@ -741,20 +749,22 @@ object RusticClient {
         }
     }
 
-    /** 备份成功后的收尾：按设置复制自身安装包。 */
-    private suspend fun afterBackup() {
-        copySelfApkIfNeeded()
-    }
-
-    /** 备份自身：把 LiBackupNext 的安装包复制到仓库根目录，方便从仓库里装回来。 */
-    private suspend fun copySelfApkIfNeeded() = withContext(Dispatchers.IO) {
+    /**
+     * 把本程序自己的安装包复制到仓库根目录，方便从仓库里直接装回来。
+     *
+     * 只在「备份」类操作里调：普通备份和覆盖备份都算，恢复 / 删除不调。什么时候调：
+     * - 单个应用备份 / 覆盖成功 → [backup] / [overwrite] 内部立刻调一次；
+     * - 批量备份 / 覆盖 → 整批结束后由调用方调一次（见 `BackupBatchScreen.runBatch`）。
+     *
+     * 受 [AppPrefs.backupSelf] 控制；仓库路径为空时直接返回。
+     */
+    suspend fun exportSelfApk() = withContext(Dispatchers.IO) {
         if (!AppPrefs.backupSelf) return@withContext
         val dir = repoPath
         if (dir.isBlank()) return@withContext
 
         runCatching {
-            val app = App.application
-            val source = app.applicationInfo.sourceDir
+            val source = App.application.applicationInfo.sourceDir
             val dest = "$dir/app.apk"
             val result = Shell.cmd("cp -f \"$source\" \"$dest\"").exec()
             if (result.isSuccess) {
