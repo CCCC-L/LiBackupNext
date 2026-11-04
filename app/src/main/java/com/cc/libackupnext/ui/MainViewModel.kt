@@ -370,9 +370,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         list = when (sortType.value) {
             SortType.NAME -> list.sortedBy { it.name.lowercase() }
-            SortType.INSTALL_TIME -> list.sortedBy { it.installTime }
-            SortType.UPDATE_TIME -> list.sortedBy { it.updateTime }
-            // 备份时间默认「最近的在前」，勾了倒序才是最早的在前
+            SortType.INSTALL_TIME -> list.sortedByDescending { it.installTime }
+            SortType.UPDATE_TIME -> list.sortedByDescending { it.updateTime }
             SortType.BACKUP_TIME -> list.sortedByDescending {
                 _backupSummaries.value[it.packageName]?.latest?.time ?: 0L
             }

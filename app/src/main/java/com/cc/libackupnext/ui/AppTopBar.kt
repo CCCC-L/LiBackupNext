@@ -537,9 +537,12 @@ fun SortMenu(
     val isDark = isSystemInDarkTheme()
     val menuColor = if (isDark) Color(0xFF2B2D31) else Color(0xFFF2F3F7)
 
+    // 和「更多」菜单一致：选完任何一项就收起，不用再点一下菜单外面
+    val closeMenu = { viewModel.isSortMenuExpanded.value = false }
+
     DropdownMenu(
         expanded = expanded,
-        onDismissRequest = { viewModel.isSortMenuExpanded.value = false },
+        onDismissRequest = closeMenu,
         shape = RoundedCornerShape(16.dp),
         containerColor = menuColor
     ) {
@@ -549,6 +552,7 @@ fun SortMenu(
                 onClick = {
                     viewModel.sortType.value = SortType.NAME
                     viewModel.applyFiltersAndSort()  // 只本地重排，不请求
+                    closeMenu()
                 },
                 leadingIcon = { RadioButton(selected = sortType == SortType.NAME, onClick = null) }
             )
@@ -557,6 +561,7 @@ fun SortMenu(
                 onClick = {
                     viewModel.sortType.value = SortType.INSTALL_TIME
                     viewModel.applyFiltersAndSort()
+                    closeMenu()
                 },
                 leadingIcon = {
                     RadioButton(selected = sortType == SortType.INSTALL_TIME, onClick = null)
@@ -567,6 +572,7 @@ fun SortMenu(
                 onClick = {
                     viewModel.sortType.value = SortType.UPDATE_TIME
                     viewModel.applyFiltersAndSort()
+                    closeMenu()
                 },
                 leadingIcon = {
                     RadioButton(selected = sortType == SortType.UPDATE_TIME, onClick = null)
@@ -578,6 +584,7 @@ fun SortMenu(
                 onClick = {
                     viewModel.sortType.value = SortType.BACKUP_TIME
                     viewModel.applyFiltersAndSort()
+                    closeMenu()
                 },
                 leadingIcon = {
                     RadioButton(selected = sortType == SortType.BACKUP_TIME, onClick = null)
@@ -596,6 +603,7 @@ fun SortMenu(
             onClick = {
                 viewModel.isReverse.value = !isReverse
                 viewModel.applyFiltersAndSort()
+                closeMenu()
             },
             leadingIcon = { Checkbox(checked = isReverse, onCheckedChange = null) }
         )
@@ -605,6 +613,7 @@ fun SortMenu(
                 onClick = {
                     viewModel.showSystemApps.value = !showSystem
                     viewModel.applyFiltersAndSort()  // 只本地过滤，不请求
+                    closeMenu()
                 },
                 leadingIcon = { Checkbox(checked = showSystem, onCheckedChange = null) }
             )
@@ -613,7 +622,10 @@ fun SortMenu(
             // 重排由批量页自己做（visibleApps），这里只翻开关。
             SortMenuExtra.PIN_DIFFERENT_VERSIONS -> DropdownMenuItem(
                 text = { Text("置顶不同版本") },
-                onClick = { viewModel.pinDifferentVersions.value = !pinDifferent },
+                onClick = {
+                    viewModel.pinDifferentVersions.value = !pinDifferent
+                    closeMenu()
+                },
                 leadingIcon = { Checkbox(checked = pinDifferent, onCheckedChange = null) }
             )
 

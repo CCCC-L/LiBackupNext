@@ -54,10 +54,9 @@ import com.cc.libackupnext.ui.AppTopBar
 import com.cc.libackupnext.ui.HomeTab
 import com.cc.libackupnext.ui.MainViewModel
 import com.cc.libackupnext.ui.SortMenuExtra
-import com.cc.libackupnext.ui.SortType
 import com.cc.libackupnext.ui.theme.pageTransitionSpec
 import com.cc.libackupnext.ui.util.countText
-import com.cc.libackupnext.ui.util.formatShortDateTime
+import com.cc.libackupnext.ui.util.sortTimeLabel
 import com.cc.libackupnext.ui.util.systemCount
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.abs
@@ -526,15 +525,13 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                                     modifier = Modifier.padding(paddingValues),
                                     isRefreshing = isRefreshing,
                                     onRefresh = { viewModel.refresh() },
-                                    // 按备份时间排序时，再下面显示备份时间；没备份就不显示
+                                    // 跟着排序方式显示对应时间：安装/更新/备份；按名称排不显示
                                     extraBottomText = { app ->
-                                        if (sortType == SortType.BACKUP_TIME) {
+                                        sortTimeLabel(
+                                            sortType,
+                                            app,
                                             backupSummaries[app.packageName]?.latest?.time
-                                                ?.takeIf { it > 0 }
-                                                ?.let { "备份于 ${formatShortDateTime(it)}" }
-                                        } else {
-                                            null
-                                        }
+                                        )
                                     }
                                 )
                             }

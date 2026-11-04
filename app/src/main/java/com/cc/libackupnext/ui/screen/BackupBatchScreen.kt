@@ -71,6 +71,7 @@ import com.cc.libackupnext.ui.AppTopBar
 import com.cc.libackupnext.ui.HomeTab
 import com.cc.libackupnext.ui.MainViewModel
 import com.cc.libackupnext.ui.SortMenuExtra
+import com.cc.libackupnext.ui.SortType
 import com.cc.libackupnext.ui.dialog.BackupHelpDialog
 import com.cc.libackupnext.ui.dialog.BackupProgressDialog
 import com.cc.libackupnext.ui.dialog.ProgressSection
@@ -83,6 +84,7 @@ import com.cc.libackupnext.ui.util.AppListContainer
 import com.cc.libackupnext.ui.util.TargetIconBox
 import com.cc.libackupnext.ui.util.dimmedWhen
 import com.cc.libackupnext.ui.util.formatShortDateTime
+import com.cc.libackupnext.ui.util.sortTimeLabel
 import com.cc.libackupnext.ui.util.isMissing
 import com.cc.libackupnext.ui.util.missingTitleColor
 import com.cc.libackupnext.ui.util.systemAppTitleColor
@@ -237,6 +239,7 @@ fun BackupBatchScreen(
 
     // 排序菜单的「置顶不同版本」：只影响这一页的显示顺序，不动主列表
     val pinDifferent by viewModel.pinDifferentVersions.collectAsState()
+    val sortType by viewModel.sortType.collectAsState()
 
     val visibleApps = remember(apps, searchQuery, pinDifferent, overview) calc@{
         val query = searchQuery.trim()
@@ -867,6 +870,7 @@ fun BackupBatchScreen(
                     summary = overview[app.packageName],
                     entry = entryOf(app.packageName),
                     showBackupTime = mode == BackupBatchMode.MANAGE,
+                    sortType = sortType,
                     kinds = kindsOf(app.packageName),
                     availableKinds = availableKindsOf(app.packageName),
                     // 列头只在单目标页显示；每行的勾选框永远按它自己的 target 画
@@ -1079,6 +1083,8 @@ private fun BackupSelectRow(
     /** 要展示的那条备份（详情页里选过的优先）。 */
     entry: BackupEntry?,
     showBackupTime: Boolean,
+    /** 当前排序方式：新建页跟着它显示安装 / 更新 / 备份时间。 */
+    sortType: SortType,
     kinds: Set<BackupGroup>,
     availableKinds: Set<BackupGroup>,
     /** 这一页要画哪几列勾选框。 */
@@ -1201,14 +1207,17 @@ private fun BackupSelectRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
                 )
+                // 新建页：时间跟着排序方式变；按名称排序 / 时间戳无效 / 没备份就不显示这一行
                 if (target.isApp && !showBackupTime) {
-                    Spacer(modifier = Modifier.height(1.dp))
-                    Text(
-                        text = "更新于 ${formatShortDateTime(app.updateTime)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1
-                    )
+                    sortTimeLabel(sortType, app, summary?.latest?.time)?.let { label ->
+                        Spacer(modifier = Modifier.height(1.dp))
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
+                        )
+                    }
                 }
                 if (showBackupTime && entry != null) {
                     Spacer(modifier = Modifier.height(1.dp))

@@ -36,7 +36,7 @@ data class TargetRow(val target: BackupTarget, val item: AppInfo)
  * 图标、标题、副标题、要不要置灰都由 [com.cc.libackupnext.ui.util.TargetView] 决定，
  * 这里只负责排版、备份数、下拉刷新和点击。
  *
- * @param extraBottomText 第三行下面的小字（应用页按备份时间排序时显示时间）
+ * @param extraBottomText 第三行下面的小字（应用页按安装/更新/备份时间排序时显示对应时间）
  * @param extraAction 右下角浮着的按钮（文件页的「添加文件夹」），不需要就传 null
  * @param onRefresh 下拉刷新的动作，由调用方给：应用页重拉应用列表，文件页重算目录 + 备份数。
  *   传 null 表示这一页不支持下拉
