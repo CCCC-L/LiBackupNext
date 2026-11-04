@@ -100,6 +100,16 @@ private val KindColumnWidth = 34.dp
 /** 勾选框本体尺寸（默认 48dp 太大，表格式排布用小的）。 */
 private val KindCheckboxSize = 28.dp
 
+/**
+ * 备份里的版本和当前装的版本是否不一致（备份过之后应用又更新过）。
+ * 只在备份里、本机没装的目标没有「当前版本」可比，一律不算。
+ */
+private fun AppInfo.isVersionChanged(summary: AppBackupSummary?): Boolean {
+    if (onlyInBackup) return false
+    val backedUp = summary?.latest?.version ?: return false
+    return backedUp != version
+}
+
 /** 这一页的两种用途。 */
 enum class BackupBatchMode {
     /** 新建应用备份：列出所有已安装应用。 */
@@ -235,14 +245,7 @@ fun BackupBatchScreen(
         if (!pinDifferent) return@calc filtered
 
         // 备份时的版本和现在装的不一致 → 排最前面，方便找出「备份过之后又更新过」的应用。
-        filtered.sortedByDescending { app ->
-            if (app.onlyInBackup) {
-                false
-            } else {
-                val backedUp = overview[app.packageName]?.latest?.version
-                backedUp != null && backedUp != app.version
-            }
-        }
+        filtered.sortedByDescending { it.isVersionChanged(overview[it.packageName]) }
     }
 
     // 置顶开关一变直接回到顶部，
@@ -405,22 +408,12 @@ fun BackupBatchScreen(
         multiSelected = if (allSelected) multiSelected - visible else multiSelected + visible
     }
 
-    /**
-     * 多选：只勾选「有备份」或「没备份」的那些。
-     *
-     * 主要给新建备份页用：已备份的拿来覆盖，没备份的拿来补。
-     */
-    fun selectByBackup(backedUp: Boolean) {
-        val matched = visibleApps
-            .filter { overview.containsKey(it.packageName) == backedUp }
-            .mapTo(HashSet()) { it.packageName }
+    /** 多选：按条件从当前可见列表里挑出一批，结果为空时只提示、不进多选模式。 */
+    fun selectMatched(emptyMessage: String, predicate: (AppInfo) -> Boolean) {
+        val matched = visibleApps.filter(predicate).mapTo(HashSet()) { it.packageName }
 
         if (matched.isEmpty()) {
-            Toast.makeText(
-                context,
-                if (backedUp) "没有已备份的" else "没有未备份的",
-                Toast.LENGTH_SHORT
-            ).show()
+            Toast.makeText(context, emptyMessage, Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -430,29 +423,26 @@ fun BackupBatchScreen(
     }
 
     /**
+     * 多选：只勾选「有备份」或「没备份」的那些。
+     *
+     * 主要给新建备份页用：已备份的拿来覆盖，没备份的拿来补。
+     */
+    fun selectByBackup(backedUp: Boolean) {
+        selectMatched(if (backedUp) "没有已备份的" else "没有未备份的") {
+            overview.containsKey(it.packageName) == backedUp
+        }
+    }
+
+    /**
      * 多选：只勾选「有备份，但备份时的版本和现在装的不一样」的那些。
      *
      * 用来快速找出「备份过之后又更新过」的应用：这些应用的备份还是旧版本。
      * 版本取最近一次备份的 tag（[BackupEntry.version]），备份时就是 AppInfo.version 原样写进去的。
      */
     fun selectUpdated() {
-        val matched = visibleApps
-            .filter { app ->
-                // 只在备份里、本机没装的，没有「已安装版本」可比
-                if (app.onlyInBackup) return@filter false
-                val backedUp = overview[app.packageName]?.latest?.version
-                backedUp != null && backedUp != app.version
-            }
-            .mapTo(HashSet()) { it.packageName }
-
-        if (matched.isEmpty()) {
-            Toast.makeText(context, "没有已更新的应用", Toast.LENGTH_SHORT).show()
-            return
+        selectMatched("没有已更新的应用") {
+            it.isVersionChanged(overview[it.packageName])
         }
-
-        multiSelect = true
-        anchorPackage = null
-        multiSelected = matched
     }
 
     /** 多选：当前可见的应用取反。 */
@@ -783,9 +773,9 @@ fun BackupBatchScreen(
                             selectByBackup(backedUp = false)
                         }
                     )
-                    // 只有应用的新建备份页才有「版本更新」这回事：
-                    // 文件夹 / 系统数据没有版本，管理页是拿来删和恢复的
-                    if (mode == BackupBatchMode.CREATE && targets.any { it.isApp }) {
+                    // 只有应用页才有「版本更新」这回事：文件夹 / 系统数据没有版本可比。
+                    // 新建和管理都放 —— 管理页同样需要快速挑出「备份是旧版本」的那批去删或恢复。
+                    if (targets.any { it.isApp }) {
                         DropdownMenuItem(
                             text = { Text("选中已更新的应用") },
                             onClick = {
@@ -1102,8 +1092,7 @@ private fun BackupSelectRow(
 
     // 备份时的版本和现在装的不一致：版本号标蓝，一眼看出「这个应用的备份是旧版本」。
     // 没装的应用（missing）不算 —— 它的 version 本来就是从备份里读出来的，比不出差异。
-    val versionChanged = !missing &&
-            summary?.latest?.version?.let { it != app.version } == true
+    val versionChanged = !missing && app.isVersionChanged(summary)
 
     // 右滑选中：跟手位移 + 松手弹回（动画参数在 theme/Animation.kt）
     val swipe = rememberRowSwipeState(onSwipe = onSwipeSelect)
@@ -1202,10 +1191,19 @@ private fun BackupSelectRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
                 )
+                if (target.isApp && !showBackupTime) {
+                    Spacer(modifier = Modifier.height(1.dp))
+                    Text(
+                        text = "更新于 ${formatShortDateTime(app.updateTime)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
                 if (showBackupTime && entry != null) {
                     Spacer(modifier = Modifier.height(1.dp))
                     Text(
-                        text = formatShortDateTime(entry.time),
+                        text = "备份于 ${formatShortDateTime(entry.time)}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1
