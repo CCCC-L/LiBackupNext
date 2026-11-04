@@ -2,6 +2,8 @@ package com.cc.libackupnext.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -336,15 +338,25 @@ fun AppTopBar(
                                         }
                                         innerTextField()
                                     }
-                                    IconButton(
-                                        onClick = { toggleSearch() },
-                                        modifier = Modifier.size(40.dp)
+                                    Box(
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clickable(
+                                                interactionSource = remember {
+                                                    MutableInteractionSource()
+                                                },
+                                                indication = null,
+                                                onClick = { toggleSearch() }
+                                            ),
+                                        contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
                                             Icons.Default.Close,
                                             contentDescription = "关闭搜索",
                                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(20.dp)
+                                            modifier = Modifier
+                                                .size(20.dp)
+                                                .alpha(if (isSearching) 1f else 0f)
                                         )
                                     }
                                 }
@@ -372,7 +384,13 @@ fun AppTopBar(
                 }
             } else {
             // ===== 搜索按钮：使用独立擦除动画 =====
-            Box(modifier = Modifier.eraseToRight(searchErase, fade = searchWeight != null)) {
+            Box(
+                modifier = Modifier.eraseToRight(
+                    searchErase,
+                    fade = searchWeight != null,
+                    fly = searchWeight == null
+                )
+            ) {
                 IconButton(
                     onClick = { toggleSearch() },
                     modifier = Modifier.requiredWidth(IconSlotWidth)
@@ -382,7 +400,13 @@ fun AppTopBar(
             }
 
             // ===== 用户按钮：和搜索按钮同一套擦除动画 =====
-            Box(modifier = Modifier.eraseToRight(userErase, fade = userWeight != null)) {
+            Box(
+                modifier = Modifier.eraseToRight(
+                    userErase,
+                    fade = userWeight != null,
+                    fly = userWeight == null
+                )
+            ) {
                 IconButton(
                     onClick = {
                         viewModel.loadUsers()
@@ -458,7 +482,11 @@ fun AppTopBar(
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
                         .padding(end = middleButtonEndPadding)
-                        .eraseToRight(middleErase, fade = middleWeight != null)
+                        .eraseToRight(
+                            middleErase,
+                            fade = middleWeight != null,
+                            fly = middleWeight == null
+                        )
                 ) {
                     IconButton(
                         onClick = onMiddleClick,

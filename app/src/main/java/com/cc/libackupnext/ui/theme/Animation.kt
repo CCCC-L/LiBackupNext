@@ -18,7 +18,6 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.gestures.DraggableState
-import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.Stable
@@ -30,12 +29,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 
 // ---- 动画时长常量（集中管理，方便统一调整） ----
-private const val ERASE_DURATION_MS = 120L
+private const val ERASE_DURATION_MS = 200L
 private const val POSITION_DURATION_MS = 200L
 private const val SEARCH_BAR_DURATION_MS = 200
 private const val SEARCH_BAR_EXIT_DELAY_MS = 100
@@ -76,18 +77,42 @@ fun rememberEraseProgress(visible: Boolean): State<Float> =
     )
 
 /**
- * 图标擦除效果的 Modifier：
- * - 宽度随 progress 从 [IconSlotWidth] 收缩到 0
- * - [clipToBounds] 让内容从右侧被裁掉（PPT 擦除效果）
+ * 0f —— 不做右移，和搜索框的展开一直同步到最后一帧。
+ */
+private const val ERASE_FLY_FRACTION = 0f
+
+/**
+ * 图标「擦除」动画的 Modifier：
+ * - 宽度随 progress 从 [IconSlotWidth] 收缩到 0 —— 这是「擦除」
+ * - 内容同时向右平移一个槽位 —— 这是「飞出」，移出去的部分被 [clipToBounds] 裁掉
  * - 内部 IconButton 需要用 `Modifier.requiredWidth(IconSlotWidth)` 保持原始宽度
+ *
+ * progress 从 0 长到 1 就是反过来的「飞入 + 擦入」，出现动画不用另写一份。
  *
  * @param fade 擦除的同时淡出。跟手渐变（拖动切页签）时必须开：宽度会在中间值停留很久，
  *   只裁不淡会长时间露出半个图标。定时动画（120ms）用默认的 false 就行。
+ * @param fly 要不要跟着向右飞。跟手拖动时传 false —— 宽度会停在中间值，
+ *   飞出会让图标在中途就被完全裁掉，只剩一段空白。
  */
-fun Modifier.eraseToRight(progress: Float, fade: Boolean = false): Modifier =
+fun Modifier.eraseToRight(
+    progress: Float,
+    fade: Boolean = false,
+    fly: Boolean = true
+): Modifier =
     (if (fade) alpha(progress) else this)
-        .width(IconSlotWidth * progress)
         .clipToBounds()
+        .layout { measurable, constraints ->
+            val slot = IconSlotWidth.roundToPx()
+            val width = (slot * progress).roundToInt().coerceIn(0, slot)
+            // 子项始终按原始槽位宽测量（调用方已经用 requiredWidth 顶住了，这里再兜一层）
+            val placeable = measurable.measure(
+                constraints.copy(minWidth = slot, maxWidth = slot)
+            )
+            layout(width, placeable.height) {
+                val dx = if (fly) ((slot - width) * ERASE_FLY_FRACTION).roundToInt() else 0
+                placeable.place(dx, 0)
+            }
+        }
 
 // ================================================================
 //  图标位置移动动画（排序按钮在进入/退出搜索时，向右滑到"更多"位置）
