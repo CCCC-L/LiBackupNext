@@ -383,7 +383,7 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                         // 连续权重：拖动时按钮宽度跟着手指走，而不是过半才补一段动画
                         searchWeight = { 1f - settingsWeight() },
                         userWeight = appWeight,
-                        middleWeight = { 1f - maxOf(settingsWeight(), othersWeight()) },
+                        middleWeight = { 1f - (settingsWeight() + othersWeight()).coerceIn(0f, 1f) },
                         searchPlaceholder = tab.searchHint,
                         pageBackground = pageBackground,
                         searchBarBackground = searchBarBackground,
