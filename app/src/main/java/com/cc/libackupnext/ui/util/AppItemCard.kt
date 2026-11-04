@@ -111,12 +111,11 @@ fun AppItemCard(
                     overflow = TextOverflow.Ellipsis
                 )
                 Spacer(modifier = Modifier.height(2.dp))
+                // 备注可能带换行：不限行数，完整展开（主列表这里恒为「N个备份」一行）
                 Text(
                     text = bottomText,
                     style = MaterialTheme.typography.labelSmall,
-                    color = bottomTextColor,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    color = bottomTextColor
                 )
                 if (extraBottomText != null) {
                     Spacer(modifier = Modifier.height(1.dp))
