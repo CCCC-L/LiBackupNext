@@ -28,6 +28,21 @@ data class AppInfo(
 /** 文件备份的伪应用：packageName 就是目录的绝对路径。 */
 val AppInfo.isDirectory: Boolean get() = packageName.startsWith('/')
 
+/**
+ * 备份里的版本和当前装的版本是否不一致（备份过之后应用又更新过）。
+ * 任一侧拿不到版本都算「比不出来」，返回 fals
+ *
+ * @param backupVersion 某条备份传 `BackupEntry.version`，概况传 `AppBackupSummary.latest.version`
+ * @param installed 目标当前是否存在；默认按 `onlyInBackup` 推，详情页有更准的页面状态时显式传
+ */
+fun AppInfo.isVersionChangedFrom(
+    backupVersion: String?,
+    installed: Boolean = !onlyInBackup
+): Boolean = installed &&
+        version.isNotBlank() &&
+        !backupVersion.isNullOrBlank() &&
+        backupVersion != version
+
 /** 把一个目录包装成 [AppInfo]，好复用应用详情页 / 批量页。 */
 fun dirAppInfo(path: String): AppInfo {
     val normalized = path.trimEnd('/').ifBlank { path }

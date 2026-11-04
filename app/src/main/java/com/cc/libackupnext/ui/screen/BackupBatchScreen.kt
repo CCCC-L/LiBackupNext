@@ -65,6 +65,7 @@ import com.cc.libackupnext.data.BackupStep
 import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.data.kind
 import com.cc.libackupnext.entity.AppInfo
+import com.cc.libackupnext.entity.isVersionChangedFrom
 import com.cc.libackupnext.service.BackupProgress
 import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.ui.AppTopBar
@@ -101,16 +102,6 @@ private val KindColumnWidth = 34.dp
 
 /** 勾选框本体尺寸（默认 48dp 太大，表格式排布用小的）。 */
 private val KindCheckboxSize = 28.dp
-
-/**
- * 备份里的版本和当前装的版本是否不一致（备份过之后应用又更新过）。
- * 只在备份里、本机没装的目标没有「当前版本」可比，一律不算。
- */
-private fun AppInfo.isVersionChanged(summary: AppBackupSummary?): Boolean {
-    if (onlyInBackup) return false
-    val backedUp = summary?.latest?.version ?: return false
-    return backedUp != version
-}
 
 /** 这一页的两种用途。 */
 enum class BackupBatchMode {
@@ -254,7 +245,9 @@ fun BackupBatchScreen(
         if (!pinDifferent) return@calc filtered
 
         // 备份时的版本和现在装的不一致 → 排最前面，方便找出「备份过之后又更新过」的应用。
-        filtered.sortedByDescending { it.isVersionChanged(overview[it.packageName]) }
+        filtered.sortedByDescending {
+            it.isVersionChangedFrom(overview[it.packageName]?.latest?.version)
+        }
     }
 
     // 置顶开关一变直接回到顶部，
@@ -450,7 +443,7 @@ fun BackupBatchScreen(
      */
     fun selectUpdated() {
         selectMatched("没有已更新的应用") {
-            it.isVersionChanged(overview[it.packageName])
+            it.isVersionChangedFrom(overview[it.packageName]?.latest?.version)
         }
     }
 
@@ -1106,9 +1099,11 @@ private fun BackupSelectRow(
     // 应用没装 / 文件夹被删：和列表页一样，图标置灰 + 标题划线
     val missing = target.isMissing(app)
 
-    // 备份时的版本和现在装的不一致：版本号标蓝，一眼看出「这个应用的备份是旧版本」。
-    // 没装的应用（missing）不算 —— 它的 version 本来就是从备份里读出来的，比不出差异。
-    val versionChanged = !missing && app.isVersionChanged(summary)
+    // 备份版本只取一次：下面判变化、显示「> 备份版本」都用它
+    val backupVersion = summary?.latest?.version
+
+    // 备份时的版本和现在装的不一致：版本号标蓝。
+    val versionChanged = app.isVersionChangedFrom(backupVersion, !missing)
 
     // 右滑选中：跟手位移 + 松手弹回（动画参数在 theme/Animation.kt）
     val swipe = rememberRowSwipeState(onSwipe = onSwipeSelect)
@@ -1169,21 +1164,6 @@ private fun BackupSelectRow(
                         withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
                             append(app.name)
                         }
-                        append("  ")
-                        withStyle(
-                            SpanStyle(
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Normal,
-                                // 版本不一致时高亮
-                                color = if (versionChanged) {
-                                    appColors.subtitleColor
-                                } else {
-                                    Color.Unspecified
-                                }
-                            )
-                        ) {
-                            append(app.version)
-                        }
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = systemAppTitleColor(target.isApp && app.isSystem)
@@ -1192,6 +1172,22 @@ private fun BackupSelectRow(
                     overflow = TextOverflow.Ellipsis,
                     textDecoration = if (missing) TextDecoration.LineThrough else null
                 )
+
+                Spacer(modifier = Modifier.height(1.dp))
+                Text(
+                    text = buildAnnotatedString {
+                        append(app.version)
+                        if (showBackupTime && target.isApp && versionChanged) {
+                            withStyle(SpanStyle(color = colors.subtitleColor)) {
+                                append(" > $backupVersion")
+                            }
+                        }
+
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = systemAppTitleColor(target.isApp && app.isSystem) ?: missingTitleColor(missing),
+                )
+
                 Spacer(modifier = Modifier.height(1.dp))
                 Text(
                     text = app.packageName,

@@ -46,6 +46,7 @@ import com.cc.libackupnext.data.BackupGroup
 import com.cc.libackupnext.data.BackupStep
 import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.entity.AppInfo
+import com.cc.libackupnext.entity.isVersionChangedFrom
 import com.cc.libackupnext.service.AppManagerService
 import com.cc.libackupnext.service.BackupProgress
 import com.cc.libackupnext.service.RusticClient
@@ -739,6 +740,7 @@ fun AppBackupScreen(
         BackupManageDialog(
             entry = entry,
             target = target,
+            isVersionChanged = displayApp.isVersionChangedFrom(entry.version, isInstalled),
             canOverwrite = RusticClient.canOverwrite(isInstalled),
             checkedKinds = managingKinds,
             onCheckedChange = { kind, checked ->

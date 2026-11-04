@@ -410,10 +410,7 @@ object RusticClient {
                 packageName = overview.packageName,
                 count = overview.count,
                 latest = BackupEntry(
-                    title = listOfNotNull(
-                        appNames[overview.packageName] ?: overview.packageName,
-                        version
-                    ).filter { it.isNotBlank() }.joinToString(" "),
+                    title = appNames[overview.packageName] ?: overview.packageName,
                     time = overview.time,
                     description = overview.description,
                     version = version,
@@ -963,9 +960,7 @@ object RusticClient {
             .map { (time, group) ->
                 val version = group.firstNotNullOfOrNull { SnapshotMeta.version(it.tags) }
                 BackupEntry(
-                    title = listOfNotNull(appName, version)
-                        .filter { it.isNotBlank() }
-                        .joinToString(" "),
+                    title = appName,
                     time = time,
                     description = group.firstNotNullOfOrNull { it.description },
                     version = version,

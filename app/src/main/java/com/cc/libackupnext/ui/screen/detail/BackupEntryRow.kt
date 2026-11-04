@@ -19,7 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.data.BackupEntry
 import com.cc.libackupnext.ui.util.AppItemCard
-import com.cc.libackupnext.ui.util.formatDateTime
+import com.cc.libackupnext.ui.util.formatShortDateTime
 
 /**
  * 一条备份记录。
@@ -40,8 +40,8 @@ fun BackupEntryRow(
     onManage: () -> Unit,
 ) {
     AppItemCard(
-        title = entry.title,
-        subtitle = listOfNotNull(entry.userName, formatDateTime(entry.time))
+        title = "${entry.title} ${entry.version}",
+        subtitle = listOfNotNull(entry.userName, formatShortDateTime(entry.time))
             .joinToString(" · "),
         bottomText = entry.description ?: "无备注",
         onClick = onClick,

@@ -16,12 +16,20 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Color.Companion
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.cc.libackupnext.data.BackupEntry
 import com.cc.libackupnext.data.BackupGroup
 import com.cc.libackupnext.data.BackupTarget
+import com.cc.libackupnext.ui.theme.AppColors
+import com.cc.libackupnext.ui.theme.LocalAppColors
 import com.cc.libackupnext.ui.util.formatSize
 
 /**
@@ -37,6 +45,8 @@ import com.cc.libackupnext.ui.util.formatSize
 fun BackupManageDialog(
     entry: BackupEntry,
     target: BackupTarget,
+    /** 这条备份的版本和当前装的版本不一致：标题里的版本号标蓝提示。 */
+    isVersionChanged: Boolean,
     canOverwrite: Boolean,
     checkedKinds: Set<BackupGroup>,
     onCheckedChange: (BackupGroup, Boolean) -> Unit,
@@ -45,6 +55,8 @@ fun BackupManageDialog(
     onDelete: () -> Unit,
     onRestore: () -> Unit,
 ) {
+    val appColors = LocalAppColors.current
+
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(24.dp),
@@ -53,7 +65,20 @@ fun BackupManageDialog(
         ) {
             Column(modifier = Modifier.padding(20.dp)) {
                 Text(
-                    text = entry.title,
+//                    text = entry.title,
+                    text = buildAnnotatedString {
+                        withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
+                            append(entry.title)
+                        }
+                        append(" ")
+                        withStyle(SpanStyle(
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                        )) {
+                            append((entry.version))
+                        }
+
+                    },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
