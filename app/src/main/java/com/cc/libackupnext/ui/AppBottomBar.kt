@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Apps
@@ -127,7 +126,7 @@ fun AppBottomBar(
             .fillMaxWidth()
             .navigationBarsPadding()
             .padding(start = 25.dp, top = 8.dp, end = 25.dp, bottom = 25.dp),
-        shape = RoundedCornerShape(20.dp),
+        shape = MaterialTheme.shapes.large,
         color = containerColor,
         shadowElevation = 2.dp
     ) {
@@ -144,7 +143,7 @@ fun AppBottomBar(
                     .offset(x = slotWidth * current)
                     .width(slotWidth)
                     .height(BOTTOM_ITEM_HEIGHT)
-                    .clip(RoundedCornerShape(14.dp))
+                    .clip(MaterialTheme.shapes.medium)
                     .background(highlight)
             )
 
@@ -166,7 +165,7 @@ fun AppBottomBar(
                     Row(
                         modifier = Modifier
                             .weight(1f)
-                            .clip(RoundedCornerShape(14.dp))
+                            .clip(MaterialTheme.shapes.medium)
                             .clickable { if (item != selected) onSelect(item) }
                             .padding(vertical = 10.dp),
                         horizontalArrangement = Arrangement.Center,

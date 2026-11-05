@@ -3,7 +3,6 @@ package com.cc.libackupnext.ui.util
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.Folder
@@ -82,7 +81,7 @@ private fun VectorIconBox(
     Box(
         modifier = modifier
             .size(size)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(MaterialTheme.shapes.medium)
             .background(accent.copy(alpha = 0.12f)),
         contentAlignment = Alignment.Center
     ) {

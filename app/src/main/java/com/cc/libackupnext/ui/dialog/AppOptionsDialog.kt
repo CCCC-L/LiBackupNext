@@ -1,6 +1,5 @@
 package com.cc.libackupnext.ui.dialog
 
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
@@ -80,7 +79,7 @@ fun AppOptionsMenu(
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(16.dp),
+        shape = MaterialTheme.shapes.large,
         containerColor = menuColor
     ) {
         actions.forEach { action ->

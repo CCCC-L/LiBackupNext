@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
@@ -881,7 +880,7 @@ fun BackupBatchScreen(
                         if (doubleClickGuard.consume("create")) startCreate()
                     },
                     enabled = actionableCount > 0 && !running,
-                    shape = RoundedCornerShape(16.dp),
+                    shape = MaterialTheme.shapes.large,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 12.dp)
@@ -901,7 +900,7 @@ fun BackupBatchScreen(
                             if (doubleClickGuard.consume("delete")) startDelete()
                         },
                         enabled = actionableCount > 0 && !running,
-                        shape = RoundedCornerShape(14.dp),
+                        shape = MaterialTheme.shapes.medium,
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                         modifier = Modifier
                             .weight(0.9f)
@@ -918,7 +917,7 @@ fun BackupBatchScreen(
                             if (doubleClickGuard.consume("overwrite")) startOverwrite()
                         },
                         enabled = actionableCount > 0 && !running,
-                        shape = RoundedCornerShape(14.dp),
+                        shape = MaterialTheme.shapes.medium,
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                         modifier = Modifier
                             .weight(1.1f)
@@ -931,7 +930,7 @@ fun BackupBatchScreen(
                             if (doubleClickGuard.consume("restore")) startRestore()
                         },
                         enabled = actionableCount > 0 && !running,
-                        shape = RoundedCornerShape(14.dp),
+                        shape = MaterialTheme.shapes.medium,
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                         modifier = Modifier
                             .weight(1.4f)

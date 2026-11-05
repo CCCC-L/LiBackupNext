@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Shape
@@ -24,6 +25,10 @@ fun <T> AppListContainer(
     key: ((index: Int, item: T) -> Any)? = null,
     itemContent: @Composable (index: Int, item: T, shape: Shape) -> Unit
 ) {
+    // MaterialTheme.shapes 要在 Composable 上下文读取：LazyColumn 的 content lambda 不是
+    val shapes = MaterialTheme.shapes
+    val largeCorner = shapes.extraLarge.topStart
+    val smallCorner = shapes.extraSmall.topStart
     LazyColumn(
         modifier = modifier,
         state = state,
@@ -38,16 +43,16 @@ fun <T> AppListContainer(
             val isLast = index == items.lastIndex
 
             val shape = when {
-                isFirst && isLast -> RoundedCornerShape(24.dp)
+                isFirst && isLast -> shapes.extraLarge
                 isFirst -> RoundedCornerShape(
-                    topStart = 24.dp, topEnd = 24.dp,
-                    bottomStart = 6.dp, bottomEnd = 6.dp
+                    topStart = largeCorner, topEnd = largeCorner,
+                    bottomStart = smallCorner, bottomEnd = smallCorner
                 )
                 isLast -> RoundedCornerShape(
-                    topStart = 6.dp, topEnd = 6.dp,
-                    bottomStart = 24.dp, bottomEnd = 24.dp
+                    topStart = smallCorner, topEnd = smallCorner,
+                    bottomStart = largeCorner, bottomEnd = largeCorner
                 )
-                else -> RoundedCornerShape(6.dp)
+                else -> shapes.extraSmall
             }
 
             itemContent(index, item, shape)

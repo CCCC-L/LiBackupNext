@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.AlertDialog
@@ -104,7 +103,7 @@ private fun BackupOptionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
+            .clip(MaterialTheme.shapes.small)
             .clickable { onCheckedChange(!checked) }
             .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -113,12 +112,12 @@ private fun BackupOptionRow(
         Box(
             modifier = Modifier
                 .size(18.dp)
-                .clip(RoundedCornerShape(4.dp))
+                .clip(MaterialTheme.shapes.extraSmall)
                 .background(if (checked) accent else Color.Transparent)
                 .border(
                     width = 1.5.dp,
                     color = if (checked) accent else MaterialTheme.colorScheme.outline,
-                    shape = RoundedCornerShape(4.dp)
+                    shape = MaterialTheme.shapes.extraSmall
                 ),
             contentAlignment = Alignment.Center
         ) {

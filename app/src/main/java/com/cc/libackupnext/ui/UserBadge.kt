@@ -2,7 +2,6 @@ package com.cc.libackupnext.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -42,7 +41,8 @@ fun UserBadge(
         modifier = modifier
             .background(
                 color = background,
-                shape = RoundedCornerShape(if (compact) 4.dp else 8.dp)
+                shape = if (compact) MaterialTheme.shapes.extraSmall
+                else MaterialTheme.shapes.small
             )
             .padding(
                 horizontal = if (compact) 3.dp else 8.dp,

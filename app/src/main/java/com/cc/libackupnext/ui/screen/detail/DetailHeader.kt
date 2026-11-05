@@ -11,8 +11,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -36,6 +36,7 @@ import com.cc.libackupnext.ui.util.dimmedWhen
  *
  * 目标是应用、文件夹还是以后的 Wi-Fi，全由 [DetailTarget] 描述，这里只负责排版。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun DetailHeader(
     target: DetailTarget,
@@ -61,7 +62,7 @@ fun DetailHeader(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
+                    .clip(MaterialTheme.shapes.large)
                     .clickable(enabled = canInteract && hasActions) { showOptions = true }
                     .dimmedWhen(target.isUninstalled)
                     .padding(horizontal = 6.dp, vertical = 6.dp),
@@ -123,10 +124,7 @@ fun DetailHeader(
                 modifier = Modifier.size(44.dp),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(22.dp),
-                    strokeWidth = 2.dp
-                )
+                LoadingIndicator(modifier = Modifier.size(28.dp))
             }
         } else {
             FilledTonalButton(

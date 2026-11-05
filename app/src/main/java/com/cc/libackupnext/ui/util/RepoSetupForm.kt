@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -51,7 +50,7 @@ fun RepoSetupForm(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(enabled = enabled, onClick = onPickFolder),
-            shape = RoundedCornerShape(12.dp),
+            shape = MaterialTheme.shapes.medium,
             color = if (enabled) colors.surfaceContainerHigh else colors.fieldDisabledBackground
         ) {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
@@ -97,7 +96,7 @@ fun RepoSetupForm(
             Spacer(modifier = Modifier.height(6.dp))
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(10.dp),
+                shape = MaterialTheme.shapes.small,
                 color = colors.warningBackground
             ) {
                 Row(

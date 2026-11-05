@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -320,7 +319,7 @@ fun AppTopBar(
                                         .height(52.dp)
                                         .background(
                                             searchBarBackground,
-                                            RoundedCornerShape(16.dp)
+                                            MaterialTheme.shapes.large
                                         )
                                         .padding(start = 16.dp, end = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically
@@ -421,7 +420,7 @@ fun AppTopBar(
                 DropdownMenu(
                     expanded = isUserMenuExpanded,
                     onDismissRequest = { viewModel.isUserMenuExpanded.value = false },
-                    shape = RoundedCornerShape(16.dp),
+                    shape = MaterialTheme.shapes.large,
                     containerColor = menuColor
                 ) {
                     if (users.isEmpty()) {
@@ -472,7 +471,7 @@ fun AppTopBar(
                     DropdownMenu(
                         expanded = isMoreMenuExpanded,
                         onDismissRequest = { viewModel.isMoreMenuExpanded.value = false },
-                        shape = RoundedCornerShape(16.dp),
+                        shape = MaterialTheme.shapes.large,
                         containerColor = menuColor
                     ) {
                         moreMenuContent { viewModel.isMoreMenuExpanded.value = false }
@@ -540,7 +539,7 @@ fun SortMenu(
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = closeMenu,
-        shape = RoundedCornerShape(16.dp),
+        shape = MaterialTheme.shapes.large,
         containerColor = menuColor
     ) {
         if (showSortTypes) {

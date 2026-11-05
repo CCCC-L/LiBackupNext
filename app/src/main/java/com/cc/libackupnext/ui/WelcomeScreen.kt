@@ -15,12 +15,12 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -41,6 +41,7 @@ import com.cc.libackupnext.ui.theme.rootGrantedButtonBackground
 import com.cc.libackupnext.ui.theme.rootGrantedButtonContent
 import com.cc.libackupnext.ui.util.RepoSetupForm
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun WelcomeScreen(
     hasRoot: Boolean,
@@ -131,7 +132,7 @@ fun WelcomeScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 12.dp),
-                    shape = RoundedCornerShape(20.dp),
+                    shape = MaterialTheme.shapes.large,
                     color = rootCardBackground
                 ) {
                     Row(
@@ -162,7 +163,7 @@ fun WelcomeScreen(
                         Button(
                             onClick = onRequestRoot,
                             enabled = !hasRoot && !isRequesting,
-                            shape = RoundedCornerShape(24.dp),
+                            shape = MaterialTheme.shapes.extraLarge,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = accentColor,
                                 contentColor = onAccentColor,
@@ -172,12 +173,11 @@ fun WelcomeScreen(
                             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)
                         ) {
                             if (isRequesting) {
-                                CircularProgressIndicator(
+                                LoadingIndicator(
                                     modifier = Modifier
                                         .width(18.dp)
                                         .height(18.dp),
-                                    color = onAccentColor,
-                                    strokeWidth = 2.dp
+                                    color = onAccentColor
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                             }
@@ -198,7 +198,7 @@ fun WelcomeScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 12.dp),
-                    shape = RoundedCornerShape(20.dp),
+                    shape = MaterialTheme.shapes.large,
                     color = cardBackground
                 ) {
                     Column(modifier = Modifier.padding(20.dp)) {
@@ -226,7 +226,7 @@ fun WelcomeScreen(
                             onClick = onInitRusticRepo,
                             enabled = canInitRepo,
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
+                            shape = MaterialTheme.shapes.medium,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = accentColor,
                                 contentColor = onAccentColor
@@ -234,12 +234,11 @@ fun WelcomeScreen(
                             contentPadding = PaddingValues(vertical = 12.dp)
                         ) {
                             if (isInitializing) {
-                                CircularProgressIndicator(
+                                LoadingIndicator(
                                     modifier = Modifier
                                         .width(18.dp)
                                         .height(18.dp),
-                                    color = onAccentColor,
-                                    strokeWidth = 2.dp
+                                    color = onAccentColor
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
@@ -278,7 +277,7 @@ fun WelcomeScreen(
                         .fillMaxWidth()
                         .padding(vertical = 12.dp)
                         .height(56.dp),
-                    shape = RoundedCornerShape(16.dp),
+                    shape = MaterialTheme.shapes.large,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = accentColor,
                         contentColor = onAccentColor
