@@ -25,6 +25,9 @@ object AppPrefs {
     private const val KEY_PAUSED_APPS = "paused_apps"
     private const val KEY_EXTRA_DIRS = "extra_dirs"
     private const val KEY_CHECK_UPDATE_ON_LAUNCH = "check_update_on_launch"
+    private const val KEY_COLOR_SEED = "color_seed"
+    private const val KEY_COLOR_STYLE = "color_style"
+    private const val KEY_COLOR_SPEC = "color_spec"
 
     private val prefs: SharedPreferences by lazy {
         App.application.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -74,6 +77,23 @@ object AppPrefs {
     var checkUpdateOnLaunch: Boolean
         get() = prefs.getBoolean(KEY_CHECK_UPDATE_ON_LAUNCH, true)
         set(value) = prefs.edit { putBoolean(KEY_CHECK_UPDATE_ON_LAUNCH, value) }
+
+    // ==================== 外观（动态配色） ====================
+
+    /** 种子色："system" 跟随系统壁纸，否则是 6 位 RRGGBB。 */
+    var colorSeed: String
+        get() = prefs.getString(KEY_COLOR_SEED, "system").orEmpty()
+        set(value) = prefs.edit { putString(KEY_COLOR_SEED, value) }
+
+    /** PaletteStyle 的名字，例如 TonalSpot / Vibrant。 */
+    var colorStyle: String
+        get() = prefs.getString(KEY_COLOR_STYLE, "TonalSpot").orEmpty()
+        set(value) = prefs.edit { putString(KEY_COLOR_STYLE, value) }
+
+    /** ColorSpec.SpecVersion 的名字：SPEC_2025 / SPEC_2021。 */
+    var colorSpec: String
+        get() = prefs.getString(KEY_COLOR_SPEC, "SPEC_2025").orEmpty()
+        set(value) = prefs.edit { putString(KEY_COLOR_SPEC, value) }
 
     // ==================== 列表排序 ====================
 

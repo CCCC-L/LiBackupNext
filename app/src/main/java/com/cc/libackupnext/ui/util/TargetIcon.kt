@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -19,7 +20,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.entity.AppInfo
-import com.cc.libackupnext.ui.theme.LocalAppColors
 
 /** 固定目标的矢量图标：Wi-Fi / 联系人 / 通话记录。 */
 private val SystemDataIcons: Map<BackupTarget, ImageVector> = mapOf(
@@ -78,7 +78,7 @@ private fun VectorIconBox(
     description: String? = null,
     iconSize: Dp = size * 0.54f,
 ) {
-    val accent = LocalAppColors.current.accentColor
+    val accent = MaterialTheme.colorScheme.primary
     Box(
         modifier = modifier
             .size(size)

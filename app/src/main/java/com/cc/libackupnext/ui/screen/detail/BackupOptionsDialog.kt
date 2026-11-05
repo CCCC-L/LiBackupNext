@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import com.cc.libackupnext.ui.theme.dialogContainer
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -44,6 +45,7 @@ fun BackupOptionsDialog(
     onConfirm: () -> Unit,
 ) {
     AlertDialog(
+        containerColor = MaterialTheme.colorScheme.dialogContainer,
         onDismissRequest = onDismiss,
         title = {
             Text(

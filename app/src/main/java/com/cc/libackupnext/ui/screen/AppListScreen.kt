@@ -6,9 +6,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +15,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -31,14 +30,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -204,11 +201,8 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    val isDark = isSystemInDarkTheme()
-    val pageBackground =
-        if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else Color(0xFFEAEEF7)
-    val searchBarBackground =
-        if (isDark) MaterialTheme.colorScheme.surfaceContainerHighest else Color(0xFFE2E7F1)
+    val pageBackground = MaterialTheme.colorScheme.surfaceContainerLow
+    val searchBarBackground = MaterialTheme.colorScheme.surfaceContainerHighest
 
     // LazyColumn 状态，用于滚动控制
     val listState = rememberLazyListState()
@@ -550,11 +544,7 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                                 if (isSearching) viewModel.toggleSearch()
                                 tab = it
                             },
-                            containerColor = if (isDark) {
-                                MaterialTheme.colorScheme.surfaceContainerHigh
-                            } else {
-                                Color(0xFFF2F3F7)
-                            },
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                             // 选中块跟着页面滑：拖动 / 惯性滚动时都读这个连续位置
                             position = { pagerPosition }
                         )

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- TonalSpot + SPEC_2025 的暗色 surface，和亮色版本成对。 -->
+  <color name="window_background">#FF0C0E12</color>
+</resources>

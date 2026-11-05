@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-  <style name="Theme.LiBackupNext" parent="android:Theme.Material.Light.NoActionBar" />
+  <!-- 只影响启动窗口和系统栏初始状态，界面颜色全部由 Compose 的 ColorScheme 决定。
+       DayNight 让系统自动切亮/暗，避免暗色模式下启动窗口白闪。
+       平台没有 Theme.DeviceDefault.DayNight.NoActionBar，所以手动去掉 ActionBar。 -->
+  <style name="Theme.LiBackupNext" parent="@android:style/Theme.DeviceDefault.DayNight">
+    <item name="android:windowActionBar">false</item>
+    <item name="android:windowNoTitle">true</item>
+    <item name="android:windowBackground">@color/window_background</item>
+    <item name="android:statusBarColor">@android:color/transparent</item>
+    <item name="android:navigationBarColor">@android:color/transparent</item>
+  </style>
 </resources>

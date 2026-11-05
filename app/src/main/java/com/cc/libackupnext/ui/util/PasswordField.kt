@@ -26,12 +26,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import com.cc.libackupnext.ui.theme.LocalAppColors
 
 /**
  * 密码输入框：内容默认打码，按住右侧的小眼睛临时显示明文，松手恢复。
- *
- * 背景色默认用 [LocalAppColors] 里的 fieldBackground（#F2F3F7 / 暗色 #2A2B30）。
  */
 @Composable
 fun PasswordField(
@@ -40,7 +37,7 @@ fun PasswordField(
     label: String,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    containerColor: Color = LocalAppColors.current.fieldBackground,
+    containerColor: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
     disabledContainerColor: Color = containerColor,
     focusedBorderColor: Color = MaterialTheme.colorScheme.primary
 ) {

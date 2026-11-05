@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import com.cc.libackupnext.ui.theme.dialogContainer
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -19,6 +20,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun PruneProgressDialog() {
     AlertDialog(
+        containerColor = MaterialTheme.colorScheme.dialogContainer,
         onDismissRequest = { },
         title = { Text("正在整理仓库") },
         text = {

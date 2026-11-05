@@ -5,7 +5,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
-import com.cc.libackupnext.ui.theme.LocalAppColors
+import com.cc.libackupnext.ui.theme.systemAppTitleColor
 
 /**
  * 「目标已经不存在」的统一表现：内容淡到 45%，标题划线并变灰。
@@ -28,4 +28,4 @@ fun missingTitleColor(missing: Boolean): Color =
 /** 系统应用的标题色（红）；不是系统应用返回 null，调用方走默认色。 */
 @Composable
 fun systemAppTitleColor(isSystem: Boolean): Color? =
-    if (isSystem) LocalAppColors.current.systemAppTitleColor else null
+    if (isSystem) MaterialTheme.colorScheme.systemAppTitleColor else null

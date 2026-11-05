@@ -1,6 +1,5 @@
 package com.cc.libackupnext.ui.dialog
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -75,8 +74,7 @@ fun AppOptionsMenu(
     onDismiss: () -> Unit,
     onAction: (ItemAction) -> Unit,
 ) {
-    val isDark = isSystemInDarkTheme()
-    val menuColor = if (isDark) Color(0xFF2B2D31) else Color(0xFFF2F3F7)
+    val menuColor = MaterialTheme.colorScheme.surfaceContainerHigh
     val dangerColor = MaterialTheme.colorScheme.error
 
     DropdownMenu(

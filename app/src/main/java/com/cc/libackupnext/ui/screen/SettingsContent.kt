@@ -23,6 +23,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import com.cc.libackupnext.ui.theme.dialogContainer
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -296,6 +297,8 @@ fun SettingsContent(
             }
         }
 
+        AppearanceSection()
+
         SectionTitle("其他")
 
         Surface(
@@ -374,6 +377,7 @@ fun SettingsContent(
 
     if (showCleanConfirm) {
         AlertDialog(
+            containerColor = MaterialTheme.colorScheme.dialogContainer,
             onDismissRequest = { showCleanConfirm = false },
             title = { Text("整理仓库") },
             text = {
@@ -444,6 +448,7 @@ fun SettingsContent(
 
     if (showDialog) {
         AlertDialog(
+            containerColor = MaterialTheme.colorScheme.dialogContainer,
             onDismissRequest = { if (!isInitializing) showDialog = false },
             title = { Text("选择并初始化仓库") },
             text = {
@@ -483,6 +488,7 @@ fun SettingsContent(
 
     if (isInitializing) {
         AlertDialog(
+            containerColor = MaterialTheme.colorScheme.dialogContainer,
             onDismissRequest = { },
             title = { Text("初始化仓库") },
             text = {
@@ -501,6 +507,7 @@ fun SettingsContent(
 
     initError?.let { message ->
         AlertDialog(
+            containerColor = MaterialTheme.colorScheme.dialogContainer,
             onDismissRequest = { initError = null },
             title = { Text("初始化失败") },
             text = { Text(message) },
@@ -514,7 +521,7 @@ fun SettingsContent(
 }
 
 @Composable
-private fun SectionTitle(text: String) {
+internal fun SectionTitle(text: String) {
     Text(
         text = text,
         style = MaterialTheme.typography.labelMedium,

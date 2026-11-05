@@ -4,7 +4,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -238,8 +237,7 @@ fun AppTopBar(
         actionGroupWidthAnimated
     }
 
-    val isDark = isSystemInDarkTheme()
-    val menuColor = if (isDark) Color(0xFF2B2D31) else Color(0xFFF2F3F7)
+    val menuColor = MaterialTheme.colorScheme.surfaceContainerHigh
 
     TopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(containerColor = pageBackground),
@@ -534,8 +532,7 @@ fun SortMenu(
     val showSystem by viewModel.showSystemApps.collectAsState()
     val pinDifferent by viewModel.pinDifferentVersions.collectAsState()
 
-    val isDark = isSystemInDarkTheme()
-    val menuColor = if (isDark) Color(0xFF2B2D31) else Color(0xFFF2F3F7)
+    val menuColor = MaterialTheme.colorScheme.surfaceContainerHigh
 
     // 和「更多」菜单一致：选完任何一项就收起，不用再点一下菜单外面
     val closeMenu = { viewModel.isSortMenuExpanded.value = false }

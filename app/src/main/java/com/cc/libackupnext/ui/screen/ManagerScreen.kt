@@ -11,7 +11,6 @@ import android.provider.DocumentsContract
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -23,6 +22,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import com.cc.libackupnext.ui.theme.dialogContainer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -36,7 +36,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -65,7 +64,7 @@ import com.cc.libackupnext.ui.screen.detail.ConfirmDeleteAllDialog
 import com.cc.libackupnext.ui.screen.detail.DetailHeader
 import com.cc.libackupnext.ui.screen.detail.NoteEditDialog
 import com.cc.libackupnext.ui.screen.detail.detailTargetOf
-import com.cc.libackupnext.ui.theme.LocalAppColors
+import com.cc.libackupnext.ui.theme.heighLightColor
 import com.cc.libackupnext.ui.util.AppIconStore
 import com.cc.libackupnext.ui.util.AppListContainer
 import com.cc.libackupnext.ui.util.countText
@@ -104,11 +103,8 @@ fun AppBackupScreen(
     // 系统返回键回到上一页，而不是退出应用
     BackHandler(onBack = onBack)
 
-    val isDark = isSystemInDarkTheme()
-    val pageBackground =
-        if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else Color(0xFFEAEEF7)
-    val searchBarBackground =
-        if (isDark) MaterialTheme.colorScheme.surfaceContainerHighest else Color(0xFFE2E7F1)
+    val pageBackground = MaterialTheme.colorScheme.surfaceContainerLow
+    val searchBarBackground = MaterialTheme.colorScheme.surfaceContainerHighest
 
     // 帮助对话框显示状态
     var showHelpDialog by remember { mutableStateOf(false) }
@@ -197,8 +193,8 @@ fun AppBackupScreen(
     var detailQuery by remember { mutableStateOf("") }
 
     // 列表行统一用这套颜色（在列表外读一次，避免 lazy item 里读到不同的值）
-    val subtitleColor = LocalAppColors.current.subtitleColor
-    val bottomTextColor = LocalAppColors.current.bottomTextColor
+    val subtitleColor = MaterialTheme.colorScheme.heighLightColor
+    val bottomTextColor = MaterialTheme.colorScheme.onSurfaceVariant
 
     // 应用信息页的搜索只过滤备注
     val visibleEntries = remember(entries, detailQuery) {
@@ -701,6 +697,7 @@ fun AppBackupScreen(
     // 移除文件夹确认：有备份时说明会一起删掉
     if (confirmRemoveDir) {
         AlertDialog(
+            containerColor = MaterialTheme.colorScheme.dialogContainer,
             onDismissRequest = { confirmRemoveDir = false },
             title = { Text("移除该文件夹") },
             text = {

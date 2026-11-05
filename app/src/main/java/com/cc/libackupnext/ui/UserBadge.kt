@@ -1,13 +1,12 @@
 package com.cc.libackupnext.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -29,9 +28,8 @@ fun UserBadge(
     modifier: Modifier = Modifier,
     compact: Boolean = false
 ) {
-    val isDark = isSystemInDarkTheme()
-    val background = if (isDark) Color(0xFF2F3D4C) else Color(0xFFD5E4F7)
-    val content = if (isDark) Color(0xFFB3C0D3) else Color(0xFF455363)
+    val background = MaterialTheme.colorScheme.secondaryContainer
+    val content = MaterialTheme.colorScheme.onSecondaryContainer
 
     Text(
         text = "用户:$userId",

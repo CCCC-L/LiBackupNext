@@ -2,7 +2,6 @@ package com.cc.libackupnext.ui.dialog
 
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,7 +16,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -30,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.cc.libackupnext.data.ReleaseBlock
 import com.cc.libackupnext.data.ReleaseInfo
+import com.cc.libackupnext.ui.theme.dialogContainer
 
 /** 行内标记：**粗体**、`代码`。其余原样显示，不处理链接。 */
 private val INLINE = Regex("""\*\*(.+?)\*\*|`([^`]+)`""")
@@ -42,12 +41,7 @@ fun UpdateDialog(
 ) {
     val context = LocalContext.current
     val maxContentHeight = LocalConfiguration.current.screenHeightDp.dp * 0.6f
-    // 浅色跟项目页面背景统一（各页面都是硬编码的 #EAEEF7），暗色沿用 AlertDialog 默认不动
-    val containerColor = if (isSystemInDarkTheme()) {
-        MaterialTheme.colorScheme.surfaceContainerHigh
-    } else {
-        Color(0xFFEAEEF7)
-    }
+    val containerColor = MaterialTheme.colorScheme.dialogContainer
 
     AlertDialog(
         onDismissRequest = onDismiss,

@@ -1,39 +1,45 @@
 package com.cc.libackupnext.ui.theme
 
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun AppManagerTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
+    /** 临时 A/B 开关：true 回到系统壁纸配色（路线 A），false 用 MaterialKolor 生成。 */
+    useSystemScheme: Boolean = false,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-        darkTheme -> darkColorScheme()
-        else -> lightColorScheme()
-    }
+    val context = LocalContext.current
+    // 读 ThemeSettings 的 mutableStateOf：设置页改配置后这里立刻重组换色
+    val seedKey = ThemeSettings.seedKey
+    val style = ThemeSettings.style
+    val specVersion = ThemeSettings.specVersion
+    val seedColor = remember(seedKey, context) { resolveSeedColor(seedKey, context) }
 
-    // 根据主题选择对应的自定义颜色
-    val appColors = if (darkTheme) DarkAppColors else LightAppColors
-
-    // 通过 CompositionLocalProvider 注入到整棵组件树
-    CompositionLocalProvider(LocalAppColors provides appColors) {
-        MaterialTheme(
-            colorScheme = colorScheme,
-            content = content
+    val colorScheme = if (useSystemScheme) {
+        if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+    } else {
+        rememberAppColorScheme(
+            darkTheme = darkTheme,
+            seedColor = seedColor,
+            style = style,
+            specVersion = specVersion,
         )
     }
+
+    // 组件全部直接读 MaterialTheme.colorScheme；语义别名见 ColorRoles.kt
+    // Expressive 主题入口：默认启用 MotionScheme.expressive()，后续换 Expressive 组件时不用再动主题。
+    // 只传 colorScheme —— 配色仍由 rememberAppColorScheme / 系统动态取色决定，不受影响。
+    MaterialExpressiveTheme(
+        colorScheme = colorScheme,
+        content = content
+    )
 }

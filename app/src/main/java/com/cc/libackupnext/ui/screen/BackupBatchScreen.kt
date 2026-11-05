@@ -6,7 +6,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -46,7 +45,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
@@ -57,7 +55,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.cc.libackupnext.data.AppBackupSummary
 import com.cc.libackupnext.data.BackupEntry
 import com.cc.libackupnext.data.BackupGroup
@@ -77,17 +74,18 @@ import com.cc.libackupnext.ui.dialog.BackupHelpDialog
 import com.cc.libackupnext.ui.dialog.BackupProgressDialog
 import com.cc.libackupnext.ui.dialog.ProgressSection
 import com.cc.libackupnext.ui.dialog.rememberDoubleClickGuard
-import com.cc.libackupnext.ui.theme.LocalAppColors
 import com.cc.libackupnext.ui.theme.rememberRowSelectionColor
 import com.cc.libackupnext.ui.theme.rememberRowSwipeState
+import com.cc.libackupnext.ui.theme.rowSelectedBackground
+import com.cc.libackupnext.ui.theme.heighLightColor
 import com.cc.libackupnext.ui.util.AppIconStore
 import com.cc.libackupnext.ui.util.AppListContainer
 import com.cc.libackupnext.ui.util.TargetIconBox
 import com.cc.libackupnext.ui.util.dimmedWhen
 import com.cc.libackupnext.ui.util.formatShortDateTime
-import com.cc.libackupnext.ui.util.sortTimeLabel
 import com.cc.libackupnext.ui.util.isMissing
 import com.cc.libackupnext.ui.util.missingTitleColor
+import com.cc.libackupnext.ui.util.sortTimeLabel
 import com.cc.libackupnext.ui.util.systemAppTitleColor
 import com.cc.libackupnext.util.BackupNotifier
 import com.cc.libackupnext.util.ErrorLog
@@ -675,11 +673,8 @@ fun BackupBatchScreen(
         }
     }
 
-    val isDark = isSystemInDarkTheme()
-    val pageBackground =
-        if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else Color(0xFFEAEEF7)
-    val searchBarBackground =
-        if (isDark) MaterialTheme.colorScheme.surfaceContainerHighest else Color(0xFFE2E7F1)
+    val pageBackground = MaterialTheme.colorScheme.surfaceContainerLow
+    val searchBarBackground = MaterialTheme.colorScheme.surfaceContainerHighest
 
     // 多选模式优先响应返回：先退出多选，再退页面
     BackHandler(enabled = multiSelect && !running) { exitMultiSelect() }
@@ -1094,7 +1089,7 @@ private fun BackupSelectRow(
     onOpenDetail: () -> Unit,
     onSwipeSelect: () -> Unit
 ) {
-    val appColors = LocalAppColors.current
+    val colors = MaterialTheme.colorScheme
 
     // 应用没装 / 文件夹被删：和列表页一样，图标置灰 + 标题划线
     val missing = target.isMissing(app)
@@ -1111,7 +1106,7 @@ private fun BackupSelectRow(
     // 多选选中时整行蓝底
     val rowColor by rememberRowSelectionColor(
         selected = multiSelect && selected,
-        selectedColor = appColors.rowSelectedBackground,
+        selectedColor = colors.rowSelectedBackground,
         normalColor = MaterialTheme.colorScheme.surface
     )
 
@@ -1178,7 +1173,7 @@ private fun BackupSelectRow(
                     text = buildAnnotatedString {
                         append(app.version)
                         if (showBackupTime && target.isApp && versionChanged) {
-                            withStyle(SpanStyle(color = colors.subtitleColor)) {
+                            withStyle(SpanStyle(color = colors.heighLightColor)) {
                                 append(" > $backupVersion")
                             }
                         }

@@ -3,7 +3,6 @@ package com.cc.libackupnext.ui
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -32,10 +31,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.cc.libackupnext.ui.theme.LocalAppColors
+import com.cc.libackupnext.ui.theme.dialogContainer
+import com.cc.libackupnext.ui.theme.rootCardGrantedBackground
+import com.cc.libackupnext.ui.theme.rootCardGrantedTextColor
+import com.cc.libackupnext.ui.theme.rootCardGrantedTextVariant
+import com.cc.libackupnext.ui.theme.rootGrantedButtonBackground
+import com.cc.libackupnext.ui.theme.rootGrantedButtonContent
 import com.cc.libackupnext.ui.util.RepoSetupForm
 
 @Composable
@@ -55,20 +58,20 @@ fun WelcomeScreen(
     onDismissError: () -> Unit
 ) {
     val context = LocalContext.current
-    val appColors = LocalAppColors.current
+    val colors = MaterialTheme.colorScheme
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
 
     // 从主题里读取所有颜色
-    val pageBackground = appColors.pageBackground
-    val cardBackground = appColors.cardBackground
+    val pageBackground = colors.surfaceContainerLow
+    val cardBackground = colors.surfaceContainer
     val rootCardBackground =
-        if (hasRoot) appColors.rootCardGrantedBackground else cardBackground
+        if (hasRoot) colors.rootCardGrantedBackground else cardBackground
     val onRootCardColor =
-        if (hasRoot) appColors.rootCardGrantedTextColor else MaterialTheme.colorScheme.onSurface
+        if (hasRoot) colors.rootCardGrantedTextColor else colors.onSurface
     val onRootCardVariant =
-        if (hasRoot) appColors.rootCardGrantedTextVariant else MaterialTheme.colorScheme.onSurfaceVariant
-    val accentColor = appColors.accentColor
-    val onAccentColor = appColors.onAccentColor
+        if (hasRoot) colors.rootCardGrantedTextVariant else colors.onSurfaceVariant
+    val accentColor = colors.primary
+    val onAccentColor = colors.onPrimary
 
     // Rustic 区域是否可用：仅在已获得 Root 后
     val rusticEnabled = hasRoot
@@ -163,8 +166,8 @@ fun WelcomeScreen(
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = accentColor,
                                 contentColor = onAccentColor,
-                                disabledContainerColor = appColors.rootGrantedButtonBackground,
-                                disabledContentColor = appColors.rootGrantedButtonContent
+                                disabledContainerColor = colors.rootGrantedButtonBackground,
+                                disabledContentColor = colors.rootGrantedButtonContent
                             ),
                             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)
                         ) {
@@ -294,6 +297,7 @@ fun WelcomeScreen(
     // 初始化失败：把 rustic 的原始错误完整展示出来
     initError?.let { message ->
         AlertDialog(
+            containerColor = MaterialTheme.colorScheme.dialogContainer,
             onDismissRequest = onDismissError,
             title = { Text("初始化失败") },
             text = {

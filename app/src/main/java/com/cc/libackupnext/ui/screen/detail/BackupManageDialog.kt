@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
+import com.cc.libackupnext.ui.theme.dialogContainer
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -17,7 +18,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Color.Companion
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -28,8 +28,7 @@ import androidx.compose.ui.window.Dialog
 import com.cc.libackupnext.data.BackupEntry
 import com.cc.libackupnext.data.BackupGroup
 import com.cc.libackupnext.data.BackupTarget
-import com.cc.libackupnext.ui.theme.AppColors
-import com.cc.libackupnext.ui.theme.LocalAppColors
+import com.cc.libackupnext.ui.theme.heighLightColor
 import com.cc.libackupnext.ui.util.formatSize
 
 /**
@@ -55,17 +54,13 @@ fun BackupManageDialog(
     onDelete: () -> Unit,
     onRestore: () -> Unit,
 ) {
-    val appColors = LocalAppColors.current
-
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            tonalElevation = 6.dp
+            color = MaterialTheme.colorScheme.dialogContainer
         ) {
             Column(modifier = Modifier.padding(20.dp)) {
                 Text(
-//                    text = entry.title,
                     text = buildAnnotatedString {
                         withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
                             append(entry.title)
@@ -74,6 +69,7 @@ fun BackupManageDialog(
                         withStyle(SpanStyle(
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium,
+                            color = if (isVersionChanged) MaterialTheme.colorScheme.heighLightColor else Color.Unspecified
                         )) {
                             append((entry.version))
                         }

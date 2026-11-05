@@ -18,7 +18,11 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.cc.libackupnext.ui.theme.LocalAppColors
+import com.cc.libackupnext.ui.theme.fieldDisabledBackground
+import com.cc.libackupnext.ui.theme.fieldDisabledLabelColor
+import com.cc.libackupnext.ui.theme.fieldDisabledTextColor
+import com.cc.libackupnext.ui.theme.warningBackground
+import com.cc.libackupnext.ui.theme.warningTextColor
 
 /**
  * 仓库配置表单：目录选择 + 密码输入 + 「请牢记密码」提示。
@@ -39,7 +43,7 @@ fun RepoSetupForm(
     pathTextStyle: TextStyle = MaterialTheme.typography.bodyLarge,
     showPasswordWarning: Boolean = true
 ) {
-    val appColors = LocalAppColors.current
+    val colors = MaterialTheme.colorScheme
 
     Column(modifier = modifier.fillMaxWidth()) {
         // 地址栏：点击整块触发文件夹选择
@@ -48,7 +52,7 @@ fun RepoSetupForm(
                 .fillMaxWidth()
                 .clickable(enabled = enabled, onClick = onPickFolder),
             shape = RoundedCornerShape(12.dp),
-            color = if (enabled) appColors.fieldBackground else appColors.fieldDisabledBackground
+            color = if (enabled) colors.surfaceContainerHigh else colors.fieldDisabledBackground
         ) {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
                 Text(
@@ -57,7 +61,7 @@ fun RepoSetupForm(
                     color = if (enabled) {
                         MaterialTheme.colorScheme.onSurfaceVariant
                     } else {
-                        appColors.fieldDisabledLabelColor
+                        colors.fieldDisabledLabelColor
                     }
                 )
                 Spacer(modifier = Modifier.height(2.dp))
@@ -65,7 +69,7 @@ fun RepoSetupForm(
                     text = path.ifBlank { placeholder },
                     style = pathTextStyle,
                     color = when {
-                        !enabled -> appColors.fieldDisabledTextColor
+                        !enabled -> colors.fieldDisabledTextColor
                         path.isBlank() -> MaterialTheme.colorScheme.onSurfaceVariant
                         else -> MaterialTheme.colorScheme.onSurface
                     },
@@ -84,9 +88,9 @@ fun RepoSetupForm(
             label = "rustic 密码",
             enabled = enabled,
             modifier = Modifier.fillMaxWidth(),
-            containerColor = appColors.fieldBackground,
-            disabledContainerColor = appColors.fieldDisabledBackground,
-            focusedBorderColor = appColors.accentColor
+            containerColor = colors.surfaceContainerHigh,
+            disabledContainerColor = colors.fieldDisabledBackground,
+            focusedBorderColor = colors.primary
         )
 
         if (showPasswordWarning) {
@@ -94,7 +98,7 @@ fun RepoSetupForm(
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(10.dp),
-                color = appColors.warningBackground
+                color = colors.warningBackground
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -103,7 +107,7 @@ fun RepoSetupForm(
                     Text(
                         text = "请牢记仓库密码，否则无法恢复仓库备份。",
                         style = MaterialTheme.typography.bodySmall,
-                        color = appColors.warningTextColor,
+                        color = colors.warningTextColor,
                         fontWeight = FontWeight.Medium
                     )
                 }
