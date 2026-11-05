@@ -24,6 +24,7 @@ object AppPrefs {
     private const val KEY_FETCH_ICON_FROM_REPO = "fetch_icon_from_repo"
     private const val KEY_PAUSED_APPS = "paused_apps"
     private const val KEY_EXTRA_DIRS = "extra_dirs"
+    private const val KEY_CHECK_UPDATE_ON_LAUNCH = "check_update_on_launch"
 
     private val prefs: SharedPreferences by lazy {
         App.application.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -66,6 +67,13 @@ object AppPrefs {
     }
 
     fun hasRepository(): Boolean = repoPath.isNotBlank()
+
+    // ==================== 更新检查 ====================
+
+    /** 每次启动应用时查询 GitHub 最新 Release；默认开启。 */
+    var checkUpdateOnLaunch: Boolean
+        get() = prefs.getBoolean(KEY_CHECK_UPDATE_ON_LAUNCH, true)
+        set(value) = prefs.edit { putBoolean(KEY_CHECK_UPDATE_ON_LAUNCH, value) }
 
     // ==================== 列表排序 ====================
 

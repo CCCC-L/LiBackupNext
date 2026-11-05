@@ -91,6 +91,7 @@ fun SettingsContent(
     }
     var backupSelf by remember { mutableStateOf(AppPrefs.backupSelf) }
     var fetchIconFromRepo by remember { mutableStateOf(AppPrefs.fetchIconFromRepo) }
+    var checkUpdateOnLaunch by remember { mutableStateOf(AppPrefs.checkUpdateOnLaunch) }
 
     // 选目录 + 初始化仓库的弹窗状态
     var showDialog by remember { mutableStateOf(false) }
@@ -302,36 +303,71 @@ fun SettingsContent(
             shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surface
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "从仓库中获取图标",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "从仓库中获取没有安装应用的图标\n推荐关闭",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+            Column {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "从仓库中获取图标",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "从仓库中获取没有安装应用的图标\n推荐关闭",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = fetchIconFromRepo,
+                        onCheckedChange = {
+                            fetchIconFromRepo = it
+                            AppPrefs.fetchIconFromRepo = it
+                            // 关掉时把已经取到的图标也清掉，列表重新加载
+                            AppIconStore.clearAll()
+                            onSettingChanged()
+                        }
                     )
                 }
-                Switch(
-                    checked = fetchIconFromRepo,
-                    onCheckedChange = {
-                        fetchIconFromRepo = it
-                        AppPrefs.fetchIconFromRepo = it
-                        // 关掉时把已经取到的图标也清掉，列表重新加载
-                        AppIconStore.clearAll()
-                        onSettingChanged()
-                    }
+
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
                 )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "启动时检查更新",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "当前版本 ${BuildConfig.APP_VERSION}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                    Switch(
+                        checked = checkUpdateOnLaunch,
+                        onCheckedChange = {
+                            checkUpdateOnLaunch = it
+                            AppPrefs.checkUpdateOnLaunch = it
+                        }
+                    )
+                }
             }
         }
     }

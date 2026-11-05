@@ -28,8 +28,11 @@ import androidx.core.content.ContextCompat
 import com.cc.libackupnext.data.AppPrefs
 import com.cc.libackupnext.service.AppManagerService
 import com.cc.libackupnext.service.RootManager
+import com.cc.libackupnext.data.ReleaseInfo
 import com.cc.libackupnext.service.RusticClient
+import com.cc.libackupnext.service.UpdateChecker
 import com.cc.libackupnext.ui.WelcomeScreen
+import com.cc.libackupnext.ui.dialog.UpdateDialog
 import com.cc.libackupnext.ui.screen.AppListScreen
 import com.cc.libackupnext.ui.theme.AppManagerTheme
 import com.cc.libackupnext.util.RepoPath
@@ -65,6 +68,15 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AppRoot() {
     val context = LocalContext.current
+
+    // 启动时检查更新：单独一个 effect，不阻塞 root 授权流程。
+    // 开关关掉 / 无网络 / GitHub 限流一律静默，只有确实查到新版本才弹窗。
+    var updateInfo by remember { mutableStateOf<ReleaseInfo?>(null) }
+    LaunchedEffect(Unit) {
+        if (AppPrefs.checkUpdateOnLaunch) {
+            UpdateChecker.check().getOrNull()?.let { updateInfo = it }
+        }
+    }
 
     // 备份 / 恢复的进度通知需要通知权限（Android 13+）
     val notificationPermission = rememberLauncherForActivityResult(
@@ -206,5 +218,10 @@ private fun AppRoot() {
             initError = initError,
             onDismissError = { initError = null }
         )
+    }
+
+    // 更新弹窗挂在最外层：欢迎页 / 主页面都能弹，关掉就不再出现（下次启动再查）
+    updateInfo?.let { info ->
+        UpdateDialog(info = info, onDismiss = { updateInfo = null })
     }
 }

@@ -29,6 +29,10 @@ fun cargoCrateVersion(text: String, crate: String): String {
 val rusticCoreVersion = cargoCrateVersion(cargoTomlText.getOrElse(""), "rustic_core")
 val rusticBackendVersion = cargoCrateVersion(cargoTomlText.getOrElse(""), "rustic_backend")
 
+// 更新检查要比对的版本号，和 versionName 同一个来源（CI 用 -PversionName 覆盖）
+val appVersionName = providers.gradleProperty("versionName").orNull
+    ?.takeIf { it.isNotBlank() } ?: "1.0.0"
+
 android {
     namespace = "com.cc.libackupnext"
     compileSdk {
@@ -42,14 +46,15 @@ android {
         targetSdk = 37
         // CI 用 -PversionName / -PversionCode 覆盖；本地不传就是 1 / 1.0
         versionCode = providers.gradleProperty("versionCode").orNull?.toIntOrNull() ?: 1
-        versionName = providers.gradleProperty("versionName").orNull
-            ?.takeIf { it.isNotBlank() } ?: "1.0"
+        versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // 设置页展示用（值来自 Cargo.toml）
         buildConfigField("String", "RUSTIC_CORE_VERSION", "\"$rusticCoreVersion\"")
         buildConfigField("String", "RUSTIC_BACKEND_VERSION", "\"$rusticBackendVersion\"")
+        // 启动时检查更新用：GitHub release 的 tag_name 就是这个值
+        buildConfigField("String", "APP_VERSION", "\"$appVersionName\"")
     }
 
     buildTypes {
