@@ -760,31 +760,6 @@ fun BackupBatchScreen(
                 // 两个批量页互相切换，不再显示「新建 / 管理」入口
                 moreMenuContent = { onDismiss ->
                     DropdownMenuItem(
-                        text = { Text("选中已备份的") },
-                        onClick = {
-                            onDismiss()
-                            selectByBackup(backedUp = true)
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("选中未备份的") },
-                        onClick = {
-                            onDismiss()
-                            selectByBackup(backedUp = false)
-                        }
-                    )
-                    // 只有应用页才有「版本更新」这回事：文件夹 / 系统数据没有版本可比。
-                    // 新建和管理都放 —— 管理页同样需要快速挑出「备份是旧版本」的那批去删或恢复。
-                    if (targets.any { it.isApp }) {
-                        DropdownMenuItem(
-                            text = { Text("选中已更新的应用") },
-                            onClick = {
-                                onDismiss()
-                                selectUpdated()
-                            }
-                        )
-                    }
-                    DropdownMenuItem(
                         text = {
                             Text(
                                 if (mode == BackupBatchMode.CREATE) {
@@ -799,6 +774,34 @@ fun BackupBatchScreen(
                             onSwitchMode()
                         }
                     )
+
+                    DropdownMenuItem(
+                        text = { Text("选中已备份的") },
+                        onClick = {
+                            onDismiss()
+                            selectByBackup(backedUp = true)
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("选中未备份的") },
+                        onClick = {
+                            onDismiss()
+                            selectByBackup(backedUp = false)
+                        }
+                    )
+
+                    // 只有应用页才有「版本更新」这回事：文件夹 / 系统数据没有版本可比。
+                    // 新建和管理都放 —— 管理页同样需要快速挑出「备份是旧版本」的那批去删或恢复。
+                    if (targets.any { it.isApp }) {
+                        DropdownMenuItem(
+                            text = { Text("选中已更新的应用") },
+                            onClick = {
+                                onDismiss()
+                                selectUpdated()
+                            }
+                        )
+                    }
+
                     DropdownMenuItem(
                         text = { Text("帮助") },
                         onClick = {
