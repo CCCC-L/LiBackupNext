@@ -20,10 +20,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
-import com.cc.libackupnext.ui.theme.dialogContainer
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -45,7 +44,9 @@ import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.BuildConfig
 import com.cc.libackupnext.data.AppPrefs
 import com.cc.libackupnext.service.RusticClient
+import com.cc.libackupnext.ui.PageContentPadding
 import com.cc.libackupnext.ui.dialog.PruneProgressDialog
+import com.cc.libackupnext.ui.theme.dialogContainer
 import com.cc.libackupnext.ui.util.AppIconStore
 import com.cc.libackupnext.ui.util.RepoSetupForm
 import com.cc.libackupnext.ui.util.formatSize
@@ -149,7 +150,7 @@ fun SettingsContent(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(PageContentPadding)
     ) {
         SectionTitle("Rustic")
 

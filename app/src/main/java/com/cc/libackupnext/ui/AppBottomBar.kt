@@ -5,15 +5,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.calculateEndPadding
-import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -38,9 +34,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.data.BackupTarget
 import kotlin.math.abs
@@ -93,8 +89,46 @@ enum class HomeTab(
     val isTargetList: Boolean get() = targets.isNotEmpty()
 }
 
-/** 每个页签的高度：图标 22dp + 上下各 10dp 内边距。 */
-private val BOTTOM_ITEM_HEIGHT = 42.dp
+/** 底栏外层：左右缩进、上、下间距。 */
+private val BOTTOM_BAR_HORIZONTAL_PADDING = 25.dp
+private val BOTTOM_BAR_TOP_PADDING = 8.dp
+private val BOTTOM_BAR_BOTTOM_PADDING = 25.dp
+
+/** 底栏内容区（选中块那一层）的上下内边距。 */
+private val BOTTOM_BAR_INNER_PADDING = 6.dp
+
+/** 页面内容在底栏之上再留的余量。 */
+private val BOTTOM_BAR_EXTRA_SPACE = 10.dp
+
+/** 每个页签的高度：选中块和可点击行共用，改这一处即可整体变高 / 变矮。 */
+private val BOTTOM_ITEM_HEIGHT = 45.dp
+
+/** 悬浮底栏占高（不含系统导航栏）：外层上下 + 内容上下 + 页签高度。 */
+private val BOTTOM_BAR_HEIGHT: Dp = BOTTOM_BAR_TOP_PADDING +
+        BOTTOM_BAR_INNER_PADDING * 2 +
+        BOTTOM_ITEM_HEIGHT +
+        BOTTOM_BAR_BOTTOM_PADDING
+
+/**
+ * 页面内容底部要留出的空间 = 底栏占高 + [BOTTOM_BAR_EXTRA_SPACE]。
+ */
+val BottomBarContentSpace: Dp = BOTTOM_BAR_HEIGHT + BOTTOM_BAR_EXTRA_SPACE
+
+/** 页面内容的左右内边距。 */
+val PageContentHorizontalPadding: Dp = 16.dp
+
+/** 页面内容的顶部内边距。 */
+val PageContentTopPadding: Dp = 8.dp
+
+/**
+ * 列表页、文件页、设置页共用的内容内边距：底部专门给悬浮底栏让位。
+ */
+val PageContentPadding: PaddingValues = PaddingValues(
+    start = PageContentHorizontalPadding,
+    end = PageContentHorizontalPadding,
+    top = PageContentTopPadding,
+    bottom = BottomBarContentSpace
+)
 
 /**
  * M3E 风格底栏：悬浮的圆角胶囊，选中项展开成「图标 + 文字」的药丸。
@@ -125,7 +159,12 @@ fun AppBottomBar(
         modifier = modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(start = 25.dp, top = 8.dp, end = 25.dp, bottom = 25.dp),
+            .padding(
+                start = BOTTOM_BAR_HORIZONTAL_PADDING,
+                top = BOTTOM_BAR_TOP_PADDING,
+                end = BOTTOM_BAR_HORIZONTAL_PADDING,
+                bottom = BOTTOM_BAR_BOTTOM_PADDING
+            ),
         shape = MaterialTheme.shapes.large,
         color = containerColor,
         shadowElevation = 2.dp
@@ -133,7 +172,10 @@ fun AppBottomBar(
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 6.dp, vertical = 6.dp)
+                .padding(
+                    horizontal = BOTTOM_BAR_INNER_PADDING,
+                    vertical = BOTTOM_BAR_INNER_PADDING
+                )
         ) {
             val slotWidth = maxWidth / items.size
 
@@ -165,9 +207,9 @@ fun AppBottomBar(
                     Row(
                         modifier = Modifier
                             .weight(1f)
+                            .height(BOTTOM_ITEM_HEIGHT)
                             .clip(MaterialTheme.shapes.medium)
-                            .clickable { if (item != selected) onSelect(item) }
-                            .padding(vertical = 10.dp),
+                            .clickable { if (item != selected) onSelect(item) },
                         horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically
                     ) {

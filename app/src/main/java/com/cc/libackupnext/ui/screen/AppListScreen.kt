@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -36,7 +35,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -58,6 +62,12 @@ import com.cc.libackupnext.ui.util.systemCount
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.abs
 import kotlin.math.roundToInt
+
+/**
+ * nestedScroll 里「往下滑列表」的方向系数：内容向下滚（手指向上滑）时 available.y 为负。
+ * 若设备上底栏的显隐方向相反，只改这一个数（1f / -1f）。
+ */
+private const val SCROLL_DOWN_SIGN = -1f
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -207,33 +217,32 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
     // LazyColumn 状态，用于滚动控制
     val listState = rememberLazyListState()
 
-    // 往下滑列表时把底栏收起来（向下移出），往上滑或到顶再出来。
-    // 设置页不是列表，没有滚动状态可跟，底栏一直显示。
-    val activeListState = when (tab) {
-        HomeTab.APPS -> listState
-        HomeTab.FILES -> fileListState
-        HomeTab.OTHERS -> othersListState
-        HomeTab.SETTINGS -> null
-    }
-    var lastScrollPos by remember { mutableStateOf(0) }
+    // 底栏显隐
+    val hideThreshold = with(LocalDensity.current) { 24.dp.toPx() }
     var barVisible by remember { mutableStateOf(true) }
-    LaunchedEffect(activeListState) {
-        val state = activeListState
-        if (state == null) {
-            barVisible = true
-            return@LaunchedEffect
-        }
-        snapshotFlow {
-            state.firstVisibleItemIndex * 100_000 + state.firstVisibleItemScrollOffset
-        }.collect { pos ->
-            if (pos > lastScrollPos + 24) {
-                barVisible = false
-            } else if (pos < lastScrollPos) {
-                barVisible = true
+    val barScrollConnection = remember(tab, hideThreshold) {
+        object : NestedScrollConnection {
+            private var accumulated = 0f
+
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                accumulated += available.y * SCROLL_DOWN_SIGN
+                when {
+                    accumulated >= hideThreshold -> {
+                        barVisible = false
+                        accumulated = 0f
+                    }
+
+                    accumulated <= -hideThreshold -> {
+                        barVisible = true
+                        accumulated = 0f
+                    }
+                }
+                return Offset.Zero
             }
-            lastScrollPos = pos
         }
     }
+    // 切页时把底栏叫回来，并让累计量归零（connection 以 tab 为 key 重建）
+    LaunchedEffect(tab) { barVisible = true }
 
     // 切到「其他」页、或者从详情页退回来时重新数一遍：
     // 条数是别的应用随时会改的数据，不能只信进应用时那次
@@ -425,7 +434,11 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                     )
                 }
             ) { paddingValues ->
-                Box(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .nestedScroll(barScrollConnection)
+                ) {
                     // 页签用 Pager：拖动时当前页跟着手指走，相邻页同时露出来
                     HorizontalPager(
                         state = pagerState,
@@ -486,11 +499,9 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                             )
 
                             HomeTab.SETTINGS -> SettingsContent(
-                                // 底部给悬浮底栏留空间，最后一项能滚到它上面
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .padding(paddingValues)
-                                    .padding(bottom = 88.dp),
+                                    .padding(paddingValues),
                                 onSettingChanged = {
                                     viewModel.loadList(scrollToTop = false)
                                 }
@@ -544,7 +555,7 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                                 if (isSearching) viewModel.toggleSearch()
                                 tab = it
                             },
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            containerColor = pageBackground,
                             // 选中块跟着页面滑：拖动 / 惯性滚动时都读这个连续位置
                             position = { pagerPosition }
                         )

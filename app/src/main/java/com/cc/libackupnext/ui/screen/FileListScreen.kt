@@ -91,7 +91,6 @@ fun FileListScreen(
         listState = listState,
         onOpen = { onOpen(it.packageName) },
         modifier = modifier,
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 88.dp),
         isRefreshing = isRefreshing,
         onRefresh = onRefresh,
         // 右下角圆形按钮：打开系统文件夹选择器

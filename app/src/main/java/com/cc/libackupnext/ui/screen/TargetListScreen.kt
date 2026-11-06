@@ -14,10 +14,12 @@ import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.data.AppBackupSummary
 import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.entity.AppInfo
+import com.cc.libackupnext.ui.BottomBarContentSpace
+import com.cc.libackupnext.ui.PageContentHorizontalPadding
+import com.cc.libackupnext.ui.PageContentPadding
 import com.cc.libackupnext.ui.util.AppItemCard
 import com.cc.libackupnext.ui.util.AppListContainer
 import com.cc.libackupnext.ui.util.isMissing
@@ -52,12 +54,7 @@ fun TargetListScreen(
     listState: LazyListState,
     onOpen: (AppInfo) -> Unit,
     modifier: Modifier = Modifier,
-    contentPadding: PaddingValues = PaddingValues(
-        start = 16.dp,
-        end = 16.dp,
-        top = 8.dp,
-        bottom = 96.dp
-    ),
+    contentPadding: PaddingValues = PageContentPadding,
     extraBottomText: (AppInfo) -> String? = { null },
     extraAction: (@Composable () -> Unit)? = null,
     isRefreshing: Boolean = false,
@@ -99,7 +96,11 @@ fun TargetListScreen(
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(end = 16.dp, bottom = 96.dp)
+                    // 和页面底部留白一致，别让悬浮按钮被底栏压住
+                    .padding(
+                        end = PageContentHorizontalPadding,
+                        bottom = BottomBarContentSpace
+                    )
             ) {
                 extraAction()
             }
