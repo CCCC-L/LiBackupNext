@@ -15,6 +15,7 @@ import com.cc.libackupnext.service.util.fixupTree
 import com.cc.libackupnext.service.util.installApks
 import com.cc.libackupnext.service.util.mediaPath
 import com.cc.libackupnext.service.util.packageUid
+import com.cc.libackupnext.util.AppLog
 import com.topjohnwu.superuser.ipc.RootService
 import org.json.JSONArray
 import org.json.JSONObject
@@ -133,6 +134,9 @@ object RusticServer {
     /** 设置 rustic 的本地缓存目录（root 服务启动时调一次），空串表示关闭缓存。 */
     private external fun nativeSetCacheDir(path: String): Int
 
+    /** 告诉 Rust panic hook 往哪个目录写 rust-panic.txt（panic=abort 前留痕）。 */
+    private external fun nativeSetLogDir(path: String): Int
+
     /**
      * 把仓库地址和密码写进 Rust 侧的静态凭据，顺便清掉三个仓库缓存。
      *
@@ -153,28 +157,40 @@ object RusticServer {
         private var nativeError: String? = null
 
         fun onBind() {
+            AppLog.i(TAG, "root 服务绑定，加载 native 库")
             nativeError = runCatching { loadNativeLibrary() }
                 .exceptionOrNull()
                 ?.let { t ->
-                    Log.e(TAG, "load librustic_bridge.so failed", t)
+                    AppLog.e(TAG, "load librustic_bridge.so failed", t)
                     "无法加载 rustic 本地库：${t.message ?: t.javaClass.simpleName}"
                 }
 
-            // 给 rustic 一个本地缓存目录，索引/tree 不用每次重读
+            // 缓存目录 + Rust panic 的落盘目录，都在 root 服务启动时设一次
             if (nativeError == null) {
                 runCatching {
                     val cacheDir = File(context.cacheDir, "rustic")
                     cacheDir.mkdirs()
                     nativeSetCacheDir(cacheDir.absolutePath)
-                }.onFailure { Log.w(TAG, "set rustic cache dir failed", it) }
+
+                    val logDir = File(context.filesDir, "logs")
+                    logDir.mkdirs()
+                    nativeSetLogDir(logDir.absolutePath)
+                    AppLog.i(TAG, "rustic 缓存目录与 panic 日志目录已注入")
+                }.onFailure { AppLog.w(TAG, "set rustic cache/log dir failed", it) }
             }
         }
+
+        /** 从请求 JSON 里取主进程透传的操作 id，让两侧日志能串成一条链。 */
+        private fun opOf(request: String): String? = runCatching {
+            JSONObject(request).optString("op").takeIf { it.isNotBlank() }
+        }.getOrNull()
 
         /** 主进程在绑定 / 初始化成功 / 改密码 / 清配置时调一次，凭据只进 Rust 静态配置。 */
         override fun setRepo(path: String, password: String) {
             if (nativeError != null) return
+            AppLog.i(TAG, "setRepo：注入仓库凭据（不含密码内容）")
             runCatching { nativeSetRepo(path, password) }
-                .onFailure { Log.e(TAG, "nativeSetRepo failed", it) }
+                .onFailure { AppLog.e(TAG, "nativeSetRepo failed", it) }
         }
 
         /**
@@ -240,7 +256,7 @@ object RusticServer {
             }
             JSONObject().put("ok", true).put("counts", counts).toString()
         } catch (t: Throwable) {
-            Log.e(TAG, "统计系统数据失败", t)
+            AppLog.e(TAG, "统计系统数据失败", t)
             JSONObject().put("ok", false)
                 .put("error", t.message ?: "统计失败")
                 .toString()
@@ -257,12 +273,15 @@ object RusticServer {
                 else -> "系统拒绝了这次操作"
             }
         } catch (t: Throwable) {
-            Log.e(TAG, "切换 Wi-Fi 失败", t)
+            AppLog.e(TAG, "切换 Wi-Fi 失败", t)
             t.message ?: "切换 Wi-Fi 失败"
         }
 
         override fun restoreSnapshots(request: String, callback: IBackupProgressCallback?): String {
             nativeError?.let { return it }
+            val op = opOf(request)
+            val startedAt = System.currentTimeMillis()
+            AppLog.i(TAG, "root restore 开始", op = op)
 
             fun emit(stage: String, state: String) {
                 val json = JSONObject().put("stage", stage).put("state", state)
@@ -371,7 +390,8 @@ object RusticServer {
 
                     val failed = appState.apply(json, packageName, uid)
                     if (failed > 0) {
-                        Log.w(TAG, "恢复权限有 $failed 项失败：$packageName")
+                        // 部分失败不会让整个恢复报错，但必须留痕：这是典型的「功能异常」
+                        AppLog.w(TAG, "恢复权限有 $failed 项失败：$packageName", op = opOf(request))
                     }
                     emit(SnapshotKind.PERMISSIONS, "done")
                 }
@@ -431,7 +451,7 @@ object RusticServer {
                         val json = loadJsonFromRepo(id, kind.key)
                         SystemDataRestorer.restore(context, kind, json)
                     } catch (t: Throwable) {
-                        Log.e(TAG, "恢复 ${kind.key} 失败", t)
+                        AppLog.e(TAG, "恢复 ${kind.key} 失败", t, opOf(request))
                         emit(kind, "failed")
                         return t.message ?: "恢复失败"
                     }
@@ -447,9 +467,15 @@ object RusticServer {
                 }
 
                 // 部分写入失败不当作整次恢复失败，返回失败的内容
-                failures.joinToString("；")
+                val outcome = failures.joinToString("；")
+                AppLog.i(
+                    TAG,
+                    "root restore 完成 耗时=${System.currentTimeMillis() - startedAt}ms 失败项=${failures.size}",
+                    op = op
+                )
+                outcome
             } catch (t: Throwable) {
-                Log.e(TAG, "restoreSnapshots failed", t)
+                AppLog.e(TAG, "restoreSnapshots failed", t, op)
                 "恢复异常：${t.message ?: t.javaClass.simpleName}"
             }
         }
@@ -543,6 +569,8 @@ object RusticServer {
             failText: String = "操作失败"
         ): String {
             nativeError?.let { return it }
+            val op = opOf(request)
+            val startedAt = System.currentTimeMillis()
 
             return try {
                 val shared = SharedMemory.create(SHARED_MEMORY_NAME, BUFFER_SIZE)
@@ -552,6 +580,11 @@ object RusticServer {
 
                     val code = native(buffer)
                     val response = runCatching { readFrameAt(buffer, 0) }.getOrNull()
+                    AppLog.i(
+                        TAG,
+                        "$failText native 返回 code=$code 耗时=${System.currentTimeMillis() - startedAt}ms",
+                        op = op
+                    )
 
                     if (code == 0 && (response == null || response.optBoolean("ok", true))) {
                         ""
@@ -562,7 +595,7 @@ object RusticServer {
                     shared.close()
                 }
             } catch (t: Throwable) {
-                Log.e(TAG, "${failText}异常", t)
+                AppLog.e(TAG, "${failText}异常", t, op)
                 "${failText}异常：${t.message ?: t.javaClass.simpleName}"
             }
         }
@@ -580,6 +613,8 @@ object RusticServer {
             nativeError?.let { error ->
                 return JSONObject().put("ok", false).put("error", error).toString()
             }
+            val op = opOf(request)
+            val startedAt = System.currentTimeMillis()
 
             return try {
                 val shared = SharedMemory.create(SHARED_MEMORY_NAME, BUFFER_SIZE)
@@ -589,6 +624,11 @@ object RusticServer {
 
                     val code = native(buffer)
                     val response = runCatching { readFrameAt(buffer, 0) }.getOrNull()
+                    AppLog.i(
+                        TAG,
+                        "$failText native 返回 code=$code 耗时=${System.currentTimeMillis() - startedAt}ms",
+                        op = op
+                    )
 
                     response?.toString() ?: JSONObject()
                         .put("ok", false)
@@ -598,7 +638,7 @@ object RusticServer {
                     shared.close()
                 }
             } catch (t: Throwable) {
-                Log.e(TAG, "${failText}异常", t)
+                AppLog.e(TAG, "${failText}异常", t, op)
                 JSONObject()
                     .put("ok", false)
                     .put("error", "${failText}异常：${t.message ?: t.javaClass.simpleName}")
@@ -608,6 +648,9 @@ object RusticServer {
 
         override fun backup(request: String, callback: IBackupProgressCallback?): String {
             nativeError?.let { return it }
+            val op = opOf(request)
+            val startedAt = System.currentTimeMillis()
+            AppLog.i(TAG, "root backup 开始：构建 rustic 请求", op = op)
 
             return try {
                 val built = JSONObject(
@@ -625,6 +668,11 @@ object RusticServer {
                     poller.start()
                     try {
                         val code = nativeBackup(buffer)
+                        AppLog.i(
+                            TAG,
+                            "nativeBackup 返回 code=$code 耗时=${System.currentTimeMillis() - startedAt}ms",
+                            op = op
+                        )
 
                         val response = runCatching { readFrameAt(buffer, 0) }.getOrNull()
                         if (code == 0 && (response == null || response.optBoolean("ok", true))) {
@@ -641,7 +689,7 @@ object RusticServer {
                     shared.close()
                 }
             } catch (t: Throwable) {
-                Log.e(TAG, "backup failed", t)
+                AppLog.e(TAG, "backup failed", t, op)
                 "备份异常：${t.message ?: t.javaClass.simpleName}"
             }
         }

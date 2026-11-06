@@ -7,7 +7,7 @@ import android.content.pm.ServiceInfo
 import android.os.IBinder
 import androidx.core.content.IntentCompat
 import com.cc.libackupnext.util.BackupNotifier
-import com.cc.libackupnext.util.ErrorLog
+import com.cc.libackupnext.util.AppLog
 import android.util.Log
 import com.cc.libackupnext.util.KeepAwake
 
@@ -72,7 +72,7 @@ class ProgressService : Service() {
             Log.w("ProgressService", "startForeground update failed", it)
             if (!reportedUpdateFailure) {
                 reportedUpdateFailure = true
-                ErrorLog.add("通知", "更新前台通知失败", it)
+                AppLog.e("通知", "更新前台通知失败", it)
             }
         }
     }

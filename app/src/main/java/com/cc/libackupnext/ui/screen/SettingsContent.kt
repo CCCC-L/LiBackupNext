@@ -50,10 +50,13 @@ import com.cc.libackupnext.ui.theme.dialogContainer
 import com.cc.libackupnext.ui.util.AppIconStore
 import com.cc.libackupnext.ui.util.RepoSetupForm
 import com.cc.libackupnext.ui.util.formatSize
-import com.cc.libackupnext.util.ErrorLog
+import com.cc.libackupnext.util.AppLog
 import com.cc.libackupnext.util.KeepAwake
+import com.cc.libackupnext.util.LogReport
 import com.cc.libackupnext.util.RepoPath
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 设置页的内容：Rustic 仓库信息 + 备份行为。
@@ -95,6 +98,28 @@ fun SettingsContent(
     var backupSelf by remember { mutableStateOf(AppPrefs.backupSelf) }
     var fetchIconFromRepo by remember { mutableStateOf(AppPrefs.fetchIconFromRepo) }
     var checkUpdateOnLaunch by remember { mutableStateOf(AppPrefs.checkUpdateOnLaunch) }
+    var verboseLog by remember { mutableStateOf(AppPrefs.verboseLog) }
+    var exporting by remember { mutableStateOf(false) }
+
+    // 系统文件选择器：用户自己选目录和文件名，不需要任何权限
+    val exportLogs = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(LogReport.MIME_TYPE)
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        exporting = true
+        scope.launch(Dispatchers.IO) {
+            val result = LogReport.writeTo(context, uri)
+            withContext(Dispatchers.Main) {
+                exporting = false
+                Toast.makeText(
+                    context,
+                    if (result.isSuccess) "日志已导出" else
+                        "导出失败：${result.exceptionOrNull()?.message ?: "未知错误"}",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
 
     // 选目录 + 初始化仓库的弹窗状态
     var showDialog by remember { mutableStateOf(false) }
@@ -139,7 +164,7 @@ fun SettingsContent(
                     onSettingChanged()
                 }
                 .onFailure {
-                    ErrorLog.add("仓库", "初始化失败", it)
+                    AppLog.e("仓库", "初始化失败", it)
                     initError = it.message ?: "未知错误"
                 }
             isInitializing = false
@@ -300,6 +325,75 @@ fun SettingsContent(
         }
 
         AppearanceSection()
+
+        SectionTitle("日志")
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surface
+        ) {
+            Column {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !exporting) {
+                            exportLogs.launch(LogReport.suggestedFileName())
+                        }
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (exporting) "正在导出日志…" else "导出日志",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "用系统文件选择器保存到指定位置，含设备 / 系统 / 版本信息、操作索引与崩溃报告",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "详细日志",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "打开后 DEBUG 级日志也写入文件，复现问题时再开",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = verboseLog,
+                        onCheckedChange = {
+                            verboseLog = it
+                            AppPrefs.verboseLog = it
+                            AppLog.setVerbose(it)
+                        }
+                    )
+                }
+            }
+        }
 
         SectionTitle("其他")
 

@@ -19,7 +19,7 @@ import com.cc.libackupnext.data.SnapshotOverride
 import com.cc.libackupnext.data.kind
 import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.service.util.SystemDataExporter
-import com.cc.libackupnext.util.ErrorLog
+import com.cc.libackupnext.util.AppLog
 import com.topjohnwu.superuser.Shell
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -73,6 +73,8 @@ object RusticClient {
         credentialLock.withLock {
             val binder = service.asBinder()
             if (injectedBinder !== binder || injectedVersion != credentialVersion) {
+                // 只记「注入了凭据」，绝不能把密码写进日志
+                AppLog.i(TAG, "绑定 root 服务，注入仓库凭据")
                 service.setRepo(repoPath, repoPassword)
                 injectedBinder = binder
                 injectedVersion = credentialVersion
@@ -84,7 +86,7 @@ object RusticClient {
     /** 提前绑定 root 服务，避免点初始化时再等 su 握手。 */
     suspend fun warmUp() {
         runCatching { getService() }
-            .onFailure { Log.w(TAG, "warmUp failed", it) }
+            .onFailure { AppLog.w(TAG, "warmUp 失败（root 服务暂不可用）", it) }
     }
 
     /**
@@ -94,6 +96,7 @@ object RusticClient {
      * 启动时先断一次，确保进程里跑的是当前 APK 的代码。
      */
     fun restart() {
+        AppLog.i(TAG, "主动断开 root 服务，等待重连")
         manager.release()
         invalidateCredentials()
     }
@@ -111,7 +114,7 @@ object RusticClient {
         try {
             val json = JSONObject(getService().overview(EMPTY_REQUEST))
             if (!json.optBoolean("ok", false)) {
-                ErrorLog.add(
+                AppLog.e(
                     "备份概况",
                     json.optString("error").ifBlank { "读取备份概况失败" }
                 )
@@ -162,7 +165,7 @@ object RusticClient {
                 }
             }
         } catch (t: Throwable) {
-            ErrorLog.e(TAG, "repoOverview failed", t)
+            AppLog.e(TAG, "repoOverview failed", t)
             emptyList()
         }
     }
@@ -205,7 +208,7 @@ object RusticClient {
             }
             Result.success(snapshots)
         } catch (t: Throwable) {
-            ErrorLog.e(TAG, "listSnapshots failed", t)
+            AppLog.e(TAG, "listSnapshots failed", t)
             Result.failure(t)
         }
     }
@@ -222,7 +225,7 @@ object RusticClient {
             if (error.isNullOrBlank()) Result.success(Unit)
             else Result.failure(IllegalStateException(error))
         } catch (t: Throwable) {
-            ErrorLog.e(TAG, "deleteSnapshots failed", t)
+            AppLog.e(TAG, "deleteSnapshots failed", t)
             Result.failure(t)
         }
     }
@@ -241,6 +244,8 @@ object RusticClient {
         parentIds: Map<SnapshotKind, String>? = null,
         onProgress: (BackupProgress) -> Unit
     ): Result<Unit> = withContext(Dispatchers.IO) {
+        val op = AppLog.startOperation("backup", request.packageName)
+        val startedAt = System.currentTimeMillis()
         try {
             val callback = object : IBackupProgressCallback.Stub() {
                 override fun onProgress(progress: String) {
@@ -270,6 +275,8 @@ object RusticClient {
                 ?: false
 
             val payload = JSONObject().apply {
+                // 透传到 :root，两侧日志用同一个 op 串起来
+                put("op", op)
                 put("packageName", request.packageName)
                 put("appName", request.appName)
                 put("version", request.version)
@@ -308,6 +315,7 @@ object RusticClient {
 
             val error = getService().backup(payload.toString(), callback)
             if (!error.isNullOrBlank()) {
+                AppLog.finishOperation(op, "backup", request.packageName, startedAt, "failed: $error")
                 return@withContext Result.failure(IllegalStateException(error))
             }
 
@@ -318,13 +326,19 @@ object RusticClient {
                 }
                 val deleteError = getService().deleteSnapshots(deleteRequest.toString())
                 if (!deleteError.isNullOrBlank()) {
+                    AppLog.finishOperation(
+                        op, "backup", request.packageName, startedAt,
+                        "failed: 删除旧快照 $deleteError"
+                    )
                     return@withContext Result.failure(IllegalStateException(deleteError))
                 }
             }
 
+            AppLog.finishOperation(op, "backup", request.packageName, startedAt, "ok")
             Result.success(Unit)
         } catch (t: Throwable) {
-            ErrorLog.e(TAG, "backup failed", t)
+            AppLog.e(TAG, "backup failed", t, op)
+            AppLog.finishOperation(op, "backup", request.packageName, startedAt, "failed: ${t.message}")
             Result.failure(t)
         }
     }
@@ -354,18 +368,23 @@ object RusticClient {
         }
 
         return withContext(Dispatchers.IO) {
+            val op = AppLog.startOperation("initRepo", path)
+            val startedAt = System.currentTimeMillis()
             try {
                 val error = getService().initRepo(path, password)
                 if (error.isNullOrBlank()) {
                     AppPrefs.saveRepository(path, password)
                     // 成功才让下一次 getService() 把新凭据注入到 root / Rust 侧
                     invalidateCredentials()
+                    AppLog.finishOperation(op, "initRepo", path, startedAt, "ok")
                     Result.success(Unit)
                 } else {
+                    AppLog.finishOperation(op, "initRepo", path, startedAt, "failed: $error")
                     Result.failure(IllegalStateException(error))
                 }
             } catch (t: Throwable) {
-                ErrorLog.e(TAG, "initRepository failed", t)
+                AppLog.e(TAG, "initRepository failed", t, op)
+                AppLog.finishOperation(op, "initRepo", path, startedAt, "failed: ${t.message}")
                 Result.failure(t)
             }
         }
@@ -549,7 +568,7 @@ object RusticClient {
             }
             Result.success(json.optInt("removed"))
         } catch (t: Throwable) {
-            ErrorLog.e(TAG, "cleanOrphanIcons failed", t)
+            AppLog.e(TAG, "cleanOrphanIcons failed", t)
             Result.failure(t)
         }
     }
@@ -588,7 +607,7 @@ object RusticClient {
 
             Result.success(removedIcons)
         } catch (t: Throwable) {
-            ErrorLog.e(TAG, "prune failed", t)
+            AppLog.e(TAG, "prune failed", t)
             Result.failure(t)
         }
     }
@@ -611,7 +630,7 @@ object RusticClient {
                 )
             }
         } catch (t: Throwable) {
-            ErrorLog.e(TAG, "prune estimate failed", t)
+            AppLog.e(TAG, "prune estimate failed", t)
             Result.failure(t)
         }
     }
@@ -634,7 +653,7 @@ object RusticClient {
                     Result.failure(IllegalStateException(error))
                 }
             } catch (t: Throwable) {
-                ErrorLog.e(TAG, "updateEntryDescription failed", t)
+                AppLog.e(TAG, "updateEntryDescription failed", t)
                 Result.failure(t)
             }
         }
@@ -776,7 +795,7 @@ object RusticClient {
             } else {
                 Log.w(TAG, "copySelfApk failed: ${result.err.joinToString()}")
             }
-        }.onFailure { Log.w(TAG, "copySelfApk failed", it) }
+        }.onFailure { AppLog.w(TAG, "copySelfApk 失败（不影响备份主流程）", it) }
     }
 
     /**
@@ -827,8 +846,11 @@ object RusticClient {
         }
 
         return withContext(Dispatchers.IO) {
+            val op = AppLog.startOperation("restore", app.packageName)
+            val startedAt = System.currentTimeMillis()
             try {
                 val request = JSONObject().apply {
+                    put("op", op)
                     put("userId", app.userId)
                     put("packageName", app.packageName)
                     put("delete", true)
@@ -861,12 +883,18 @@ object RusticClient {
 
                 val error = getService().restoreSnapshots(request.toString(), callback)
                 if (!error.isNullOrBlank()) {
+                    AppLog.finishOperation(op, "restore", app.packageName, startedAt, "failed: $error")
                     return@withContext Result.failure(IllegalStateException(error))
                 }
 
+                AppLog.finishOperation(
+                    op, "restore", app.packageName, startedAt,
+                    "ok items=${selected.size}"
+                )
                 Result.success(Unit)
             } catch (t: Throwable) {
-                ErrorLog.e(TAG, "restore failed", t)
+                AppLog.e(TAG, "restore failed", t, op)
+                AppLog.finishOperation(op, "restore", app.packageName, startedAt, "failed: ${t.message}")
                 Result.failure(t)
             }
         }

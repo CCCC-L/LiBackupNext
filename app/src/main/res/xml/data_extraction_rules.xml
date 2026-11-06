@@ -4,12 +4,15 @@
 
   云备份：排除 SharedPreferences（里面有仓库地址和密码）。
   设备迁移：同样排除，避免密码跟着换机流程走。
+  日志文件含包名 / 路径 / logcat 内容，两个场景都不带走。
 -->
 <data-extraction-rules>
   <cloud-backup>
     <exclude domain="sharedpref" path="." />
+    <exclude domain="file" path="logs/" />
   </cloud-backup>
   <device-transfer>
     <exclude domain="sharedpref" path="." />
+    <exclude domain="file" path="logs/" />
   </device-transfer>
 </data-extraction-rules>

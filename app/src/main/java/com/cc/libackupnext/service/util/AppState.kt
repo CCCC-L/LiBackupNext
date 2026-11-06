@@ -11,8 +11,8 @@ import android.os.IDeviceIdleController
 import android.os.ServiceManager
 import android.os.UserHandle
 import android.util.Log
+import com.cc.libackupnext.util.AppLog
 import com.android.internal.app.IAppOpsService
-import com.cc.libackupnext.util.ErrorLog
 import com.topjohnwu.superuser.Shell
 import dev.rikka.tools.refine.Refine
 import org.json.JSONArray
@@ -111,7 +111,10 @@ internal class AppState(private val context: Context) {
         } else {
             JSONObject().put("package", packageJson).put("uid", uidJson)
         }
-    }.onFailure { Log.w(TAG, "collectAppOps 失败", it) }.getOrNull()
+    }.onFailure {
+        // 权限/appops 读不到会被静默当成「没有」，恢复后表现就是功能异常
+        AppLog.w(TAG, "collectAppOps 失败（该项会被当作空）", it)
+    }.getOrNull()
 
     private val usageStats by lazy {
         Refine.unsafeCast<UsageStatsManagerHidden>(
@@ -345,6 +348,6 @@ internal fun fixupTree(
         val detail = result?.err?.joinToString(" ").orEmpty()
             .ifBlank { "退出码 ${result?.code ?: -1}" }
         Log.w(TAG, "fixup failed: $path ($detail)")
-        ErrorLog.add("恢复", "修改文件归属失败：$path（$detail）", IllegalStateException(detail))
+        AppLog.e("恢复", "修改文件归属失败：$path（$detail）", IllegalStateException(detail))
     }
 }

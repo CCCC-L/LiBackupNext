@@ -13,6 +13,7 @@ import android.provider.BaseColumns
 import android.provider.CallLog
 import android.provider.ContactsContract
 import android.util.Log
+import com.cc.libackupnext.util.AppLog
 import com.cc.libackupnext.data.SnapshotKind
 import dev.rikka.tools.refine.Refine
 import org.json.JSONArray
@@ -59,7 +60,8 @@ internal object SystemDataExporter {
             else -> null
         }?.toString()
     } catch (t: Throwable) {
-        Log.e(TAG, "导出 ${kind.key} 失败", t)
+        // 导出失败会被标成「跳过」，属于典型的功能异常，必须留痕
+        AppLog.e(TAG, "导出 ${kind.key} 失败（该项会被跳过）", t)
         null
     }
 

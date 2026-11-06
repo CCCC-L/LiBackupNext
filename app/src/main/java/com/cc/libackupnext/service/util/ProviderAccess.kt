@@ -16,6 +16,7 @@ import android.os.IBinder
 import android.os.Process
 import android.os.ServiceManager
 import android.util.Log
+import com.cc.libackupnext.util.AppLog
 
 /**
  * 系统数据（Wi-Fi / 联系人 / 通话记录）访问 provider 的入口。
@@ -38,7 +39,7 @@ internal object ProviderAccess {
 
     private val activityManager: IActivityManager? by lazy {
         runCatching { IActivityManager.Stub.asInterface(ServiceManager.getService("activity")) }
-            .onFailure { Log.e(TAG, "拿不到 ActivityManager", it) }
+            .onFailure { AppLog.e(TAG, "拿不到 ActivityManager（系统数据读写会失败）", it) }
             .getOrNull()
     }
 

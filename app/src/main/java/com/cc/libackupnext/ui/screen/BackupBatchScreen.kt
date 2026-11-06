@@ -87,7 +87,7 @@ import com.cc.libackupnext.ui.util.missingTitleColor
 import com.cc.libackupnext.ui.util.sortTimeLabel
 import com.cc.libackupnext.ui.util.systemAppTitleColor
 import com.cc.libackupnext.util.BackupNotifier
-import com.cc.libackupnext.util.ErrorLog
+import com.cc.libackupnext.util.AppLog
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -548,7 +548,7 @@ fun BackupBatchScreen(
                         )
                     }.onFailure {
                         failed++
-                        ErrorLog.add(progressTitle, "${app.name} 失败", it)
+                        AppLog.e(progressTitle, "${app.name} 失败", it)
                         progressError = it.message ?: "操作失败"
                         val last = progressSections.last()
                         progressSections = progressSections.dropLast(1) +

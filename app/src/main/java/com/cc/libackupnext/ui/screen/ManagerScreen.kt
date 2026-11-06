@@ -70,7 +70,7 @@ import com.cc.libackupnext.ui.util.AppListContainer
 import com.cc.libackupnext.ui.util.countText
 import com.cc.libackupnext.ui.util.systemCount
 import com.cc.libackupnext.util.BackupNotifier
-import com.cc.libackupnext.util.ErrorLog
+import com.cc.libackupnext.util.AppLog
 import com.cc.libackupnext.util.KeepAwake
 import com.topjohnwu.superuser.Shell
 import kotlinx.coroutines.Dispatchers
@@ -353,7 +353,7 @@ fun AppBackupScreen(
             BackupNotifier.finish(context, "备份", if (result.isFailure) 1 else 0, 1)
             if (result.isFailure) {
                 backupError = result.exceptionOrNull()?.message ?: "备份失败"
-                ErrorLog.add("备份", backupError.orEmpty(), result.exceptionOrNull())
+                AppLog.e("备份", backupError.orEmpty(), result.exceptionOrNull())
                 backupSteps.update { RusticClient.markFailed(it) }
             } else {
                 reloadKey++
@@ -399,7 +399,7 @@ fun AppBackupScreen(
                         viewModel.refreshBackupInfo()
                     }
                     .onFailure {
-                        ErrorLog.add("删除", "删除失败", it)
+                        AppLog.e("删除", "删除失败", it)
                         Toast.makeText(
                             context,
                             "删除失败：${it.message ?: "未知错误"}",
@@ -430,7 +430,7 @@ fun AppBackupScreen(
                         viewModel.loadList(scrollToTop = false)
                     }
                     .onFailure {
-                        ErrorLog.add("删除", "删除失败", it)
+                        AppLog.e("删除", "删除失败", it)
                         Toast.makeText(
                             context,
                             "删除失败：${it.message ?: "未知错误"}",
@@ -498,7 +498,7 @@ fun AppBackupScreen(
             BackupNotifier.finish(context, "恢复", if (result.isFailure) 1 else 0, 1)
             if (result.isFailure) {
                 backupError = result.exceptionOrNull()?.message ?: "恢复失败"
-                ErrorLog.add("恢复", backupError.orEmpty(), result.exceptionOrNull())
+                AppLog.e("恢复", backupError.orEmpty(), result.exceptionOrNull())
                 backupSteps.update { RusticClient.markFailed(it) }
             } else {
                 reloadKey++
@@ -541,7 +541,7 @@ fun AppBackupScreen(
                 .onSuccess {
                     reloadKey++
                 }.onFailure {
-                    ErrorLog.add("备注", "修改备注失败", it)
+                    AppLog.e("备注", "修改备注失败", it)
                     Toast.makeText(
                         context,
                         "修改备注失败：${it.message ?: "未知错误"}",

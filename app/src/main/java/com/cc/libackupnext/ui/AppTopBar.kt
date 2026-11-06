@@ -129,8 +129,6 @@ fun AppTopBar(
     manageBackupLabel: String = "管理应用备份",
     /** 非空时在「更多」菜单里多一项「设置」。 */
     onOpenSettings: (() -> Unit)? = null,
-    /** 非空时在「更多」菜单里多一项「错误日志」。 */
-    onOpenErrorLog: (() -> Unit)? = null,
     /** 「重新加载」；传 null 就不显示这一项（设置页）。 */
     onReload: (() -> Unit)? = null,
     moreMenuContent: @Composable (onDismiss: () -> Unit) -> Unit = { onDismiss ->
@@ -168,15 +166,6 @@ fun AppTopBar(
                 onClick = {
                     onDismiss()
                     onOpenSettings()
-                }
-            )
-        }
-        if (onOpenErrorLog != null) {
-            DropdownMenuItem(
-                text = { Text("错误日志") },
-                onClick = {
-                    onDismiss()
-                    onOpenErrorLog()
                 }
             )
         }

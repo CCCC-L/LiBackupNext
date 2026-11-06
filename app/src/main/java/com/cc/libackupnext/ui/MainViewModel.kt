@@ -17,7 +17,7 @@ import com.cc.libackupnext.service.AppManagerService
 import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.ui.screen.BackupBatchMode
 import com.cc.libackupnext.ui.util.AppIconStore
-import com.cc.libackupnext.util.ErrorLog
+import com.cc.libackupnext.util.AppLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -155,7 +155,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 try {
                     AppManagerService.getUsers()
                 } catch (t: Throwable) {
-                    ErrorLog.e(TAG, "loadUsers failed", t)
+                    AppLog.e(TAG, "loadUsers failed", t)
                     emptyList()
                 }
             }
@@ -281,7 +281,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // 被新的加载任务取代，正常流程
                 throw t
             } catch (t: Throwable) {
-                ErrorLog.e(TAG, "loadApps failed", t)
+                AppLog.e(TAG, "loadApps failed", t)
                 // 静默刷新失败就保持原样，不弹错误页
                 if (isActive && !silent) _loadError.value = t.message ?: "读取应用列表失败"
             } finally {

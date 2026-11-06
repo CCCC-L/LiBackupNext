@@ -34,6 +34,97 @@ use rustic_core::repofile::NodeType;
 use rustic_core::{LimitOption, PruneOptions};
 use serde::{Deserialize, Serialize};
 
+use std::ffi::{c_char, c_int, c_void, CString};
+use std::io::Write;
+use std::panic;
+use std::sync::OnceLock;
+
+// ==================== native 崩溃留痕 ====================
+
+/// root 服务传进来的日志目录（filesDir/logs）。panic 时往这里追加 rust-panic.txt。
+static LOG_DIR: OnceLock<String> = OnceLock::new();
+
+/// `RusticServer.nativeSetLogDir(path: String): Int`
+#[no_mangle]
+pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeSetLogDir<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    path: JString<'local>,
+) -> jint {
+    let outcome = env.with_env(|env| -> Result<jint, jni::errors::Error> {
+        let value: String = env.get_string(&path)?.into();
+        let _ = LOG_DIR.set(value);
+        Ok(0)
+    });
+
+    outcome.resolve::<jni::errors::ThrowRuntimeExAndDefault>()
+}
+
+/// release 是 panic=abort，catch_unwind 拦不住；只能在 abort 之前把信息写下来。
+/// 同时写 logcat（导出包会抓）和文件（logcat 被冲掉也还在）。
+fn install_panic_hook() {
+    panic::set_hook(Box::new(|info| {
+        let payload = if let Some(text) = info.payload().downcast_ref::<&str>() {
+            (*text).to_string()
+        } else if let Some(text) = info.payload().downcast_ref::<String>() {
+            text.clone()
+        } else {
+            "unknown payload".to_string()
+        };
+        let location = info
+            .location()
+            .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
+            .unwrap_or_else(|| "unknown".to_string());
+        let thread = std::thread::current().name().unwrap_or("?").to_string();
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+
+        let text = format!(
+            "[libackup-rust] PANIC (process will abort)\ntime(ms): {stamp}\nthread: {thread}\nlocation: {location}\npayload: {payload}\n"
+        );
+
+        android_log_fatal(&text);
+
+        if let Some(dir) = LOG_DIR.get() {
+            let _ = std::fs::create_dir_all(dir);
+            let file = std::path::Path::new(dir).join("rust-panic.txt");
+            if let Ok(mut out) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(file)
+            {
+                let _ = write!(out, "===== {stamp} =====\n{text}\n");
+                let _ = out.sync_all();
+            }
+        }
+    }));
+}
+
+fn android_log_fatal(text: &str) {
+    extern "C" {
+        fn __android_log_print(prio: c_int, tag: *const c_char, fmt: *const c_char, ...) -> c_int;
+    }
+    if let (Ok(tag), Ok(fmt), Ok(msg)) = (
+        CString::new("LiBackupRust"),
+        CString::new("%s"),
+        CString::new(text),
+    ) {
+        // 6 = ANDROID_LOG_FATAL
+        unsafe {
+            __android_log_print(6, tag.as_ptr(), fmt.as_ptr(), msg.as_ptr());
+        }
+    }
+}
+
+/// 库加载时安装 panic hook，不改动任何现有 JNI 函数名。
+#[no_mangle]
+pub extern "system" fn JNI_OnLoad(_vm: *mut c_void, _reserved: *mut c_void) -> jint {
+    install_panic_hook();
+    0x0001_0006 // JNI_VERSION_1_6
+}
+
 /// 进度区在共享内存里的起始位置。
 /// 请求 / 响应帧可用的大小。
 ///

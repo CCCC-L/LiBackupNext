@@ -71,7 +71,11 @@ private const val SCROLL_DOWN_SIGN = -1f
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun AppListScreen(viewModel: MainViewModel = viewModel()) {
+fun AppListScreen(
+    viewModel: MainViewModel = viewModel(),
+    /** 崩溃续命后重建时直接落到设置 tab，保证导出日志立刻可达。 */
+    initialTab: HomeTab = HomeTab.APPS
+) {
     val context = LocalContext.current
     val appName = remember {
         context.applicationInfo.loadLabel(context.packageManager).toString()
@@ -104,7 +108,7 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
     val batchListState = rememberLazyListState()
 
     // 底栏：应用 / 文件 / 设置。不持久化，每次进应用都先落在「应用」页
-    var tab by remember { mutableStateOf(HomeTab.APPS) }
+    var tab by remember { mutableStateOf(initialTab) }
     // 页签的横向 Pager：手势、跟手、相邻页都由它负责
     val pagerState = rememberPagerState(initialPage = tab.ordinal) { HomeTab.entries.size }
 
@@ -286,8 +290,8 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
         viewModel.toggleSearch()
     }
 
-    // 批量页 / 错误日志：返回列表页。详情页自己处理返回（onBack）
-    BackHandler(enabled = route == AppRoute.BATCH || route == AppRoute.ERROR_LOG) {
+    // 批量页：返回列表页。详情页自己处理返回（onBack）
+    BackHandler(enabled = route == AppRoute.BATCH) {
         route = AppRoute.LIST
     }
 
@@ -351,10 +355,6 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                 )
             }
 
-            AppRoute.ERROR_LOG -> ErrorLogScreen(
-                onBack = { route = AppRoute.LIST }
-            )
-
             AppRoute.LIST -> Scaffold(
                 containerColor = pageBackground,
 
@@ -402,10 +402,6 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
                         },
                         createBackupLabel = tab.createLabel,
                         manageBackupLabel = tab.manageLabel,
-                        onOpenErrorLog = {
-                            if (isSearching) viewModel.toggleSearch()
-                            route = AppRoute.ERROR_LOG
-                        },
                         // 文件页的「重新加载」重算目录列表，顺手刷新备份数量
                         onReload = when (tab) {
                             HomeTab.FILES -> {
@@ -570,14 +566,13 @@ fun AppListScreen(viewModel: MainViewModel = viewModel()) {
  * 主页面的页面栈。
  *
  * 底栏的三个页签都在这一个 route 里（[LIST]），切页签不算换页；
- * 只有详情 / 批量备份 / 错误日志才是压在上面的页面。
+ * 只有详情 / 批量备份才是压在上面的页面。
  *
  * @param depth 转场方向：越深越靠右
  */
 private enum class AppRoute(val depth: Int) {
     LIST(0),
     BATCH(1),
-    ERROR_LOG(1),
     DETAIL(2)
 }
 

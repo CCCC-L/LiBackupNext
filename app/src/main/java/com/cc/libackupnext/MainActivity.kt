@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -31,10 +32,12 @@ import com.cc.libackupnext.service.RootManager
 import com.cc.libackupnext.data.ReleaseInfo
 import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.service.UpdateChecker
+import com.cc.libackupnext.ui.HomeTab
 import com.cc.libackupnext.ui.WelcomeScreen
 import com.cc.libackupnext.ui.dialog.UpdateDialog
 import com.cc.libackupnext.ui.screen.AppListScreen
 import com.cc.libackupnext.ui.theme.AppManagerTheme
+import com.cc.libackupnext.util.AppLog
 import com.cc.libackupnext.util.RepoPath
 import com.topjohnwu.superuser.Shell
 import kotlinx.coroutines.Dispatchers
@@ -52,13 +55,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
 
+        // 崩溃续命后重建的 Activity 带这个标记：跳过引导页，直接落到设置 tab
+        val crashRecovery = intent?.getBooleanExtra(AppLog.EXTRA_CRASH_RECOVERY, false) == true
+
         setContent {
             AppManagerTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    AppRoot()
+                    AppRoot(crashRecovery = crashRecovery)
                 }
             }
         }
@@ -66,7 +72,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun AppRoot() {
+private fun AppRoot(crashRecovery: Boolean) {
     val context = LocalContext.current
 
     // 启动时检查更新：单独一个 effect，不阻塞 root 授权流程。
@@ -94,11 +100,35 @@ private fun AppRoot() {
     }
     val scope = rememberCoroutineScope()
 
+    // 上次运行异常退出（含 native abort / 系统杀进程）：下次启动稳定补一次提示
+    LaunchedEffect(Unit) {
+        if (AppLog.hasPendingCrash()) {
+            Toast.makeText(
+                context,
+                "上次运行出现异常，日志已保存，可在 设置 → 导出日志 查看",
+                Toast.LENGTH_LONG
+            ).show()
+            AppLog.consumePendingCrash()
+        }
+    }
+
+    // 崩溃续命后的收尾：恢复被 SIGSTOP 的应用，别让它们一直卡在暂停状态
+    DisposableEffect(Unit) {
+        AppLog.recoveryHook = {
+            scope.launch(Dispatchers.IO) {
+                runCatching { AppManagerService.resumeAllPaused() }
+                runCatching { AppPrefs.clearPausedApps() }
+            }
+        }
+        onDispose { AppLog.recoveryHook = null }
+    }
+
     var hasRoot by remember { mutableStateOf(false) }
     var isChecking by remember { mutableStateOf(true) }
     var isRequesting by remember { mutableStateOf(false) }
     var isInitializing by remember { mutableStateOf(false) }
-    var hasEnteredApp by remember { mutableStateOf(false) }
+    // 崩溃恢复时直接进主页面，保证设置页（导出日志）立刻可达
+    var hasEnteredApp by rememberSaveable { mutableStateOf(crashRecovery) }
     var initError by remember { mutableStateOf<String?>(null) }
 
     // rustic 仓库是否已就绪（初始化过 / 校验过密码）
@@ -113,7 +143,7 @@ private fun AppRoot() {
         val granted = withContext(Dispatchers.IO) {
             RootManager.isGranted() || RootManager.request()
         }
-        android.util.Log.d("AppRoot", "acquireRoot granted=$granted")
+        AppLog.breadcrumb("启动", "root 授权结果=$granted")
         if (granted) {
             hasRoot = true
             // 提前把两个 root 服务绑好，后面调用不用再等 su 握手
@@ -148,9 +178,11 @@ private fun AppRoot() {
         }
 
         if (exists) {
+            AppLog.breadcrumb("启动", "跳过欢迎页，进入主页面")
             hasEnteredApp = true
         } else {
             // 目录不在了就停在欢迎页，要求重新选择 / 初始化
+            AppLog.breadcrumb("启动", "仓库目录不存在，停在欢迎页：$path")
             isRepoReady = false
             Toast.makeText(
                 context,
@@ -163,7 +195,9 @@ private fun AppRoot() {
     when {
         isChecking -> Box(modifier = Modifier.fillMaxSize())
 
-        hasEnteredApp -> AppListScreen()
+        hasEnteredApp -> AppListScreen(
+            initialTab = if (crashRecovery) HomeTab.SETTINGS else HomeTab.APPS
+        )
 
         else -> WelcomeScreen(
             hasRoot = hasRoot,

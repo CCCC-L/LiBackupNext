@@ -28,6 +28,7 @@ object AppPrefs {
     private const val KEY_COLOR_SEED = "color_seed"
     private const val KEY_COLOR_STYLE = "color_style"
     private const val KEY_COLOR_SPEC = "color_spec"
+    private const val KEY_VERBOSE_LOG = "verbose_log"
 
     private val prefs: SharedPreferences by lazy {
         App.application.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -94,6 +95,13 @@ object AppPrefs {
     var colorSpec: String
         get() = prefs.getString(KEY_COLOR_SPEC, "SPEC_2025").orEmpty()
         set(value) = prefs.edit { putString(KEY_COLOR_SPEC, value) }
+
+    // ==================== 日志 ====================
+
+    /** 打开后 DEBUG 级日志也写进文件，复现疑难问题时再开，避免平时刷屏。 */
+    var verboseLog: Boolean
+        get() = prefs.getBoolean(KEY_VERBOSE_LOG, false)
+        set(value) = prefs.edit { putBoolean(KEY_VERBOSE_LOG, value) }
 
     // ==================== 列表排序 ====================
 

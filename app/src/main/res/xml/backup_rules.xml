@@ -4,7 +4,10 @@
 
   仓库地址和仓库密码存在 SharedPreferences 里，不能进云备份，
   所以整个 sharedpref 域都排除掉；设置需要在新设备上重新填一次。
+
+  日志文件里可能有包名、文件路径和系统 logcat 内容，同样不进备份。
 -->
 <full-backup-content>
   <exclude domain="sharedpref" path="." />
+  <exclude domain="file" path="logs/" />
 </full-backup-content>

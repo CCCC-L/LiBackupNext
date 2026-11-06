@@ -89,7 +89,6 @@ object BackupNotifier {
             )
         }.onFailure {
             Log.w(TAG, "start foreground service failed", it)
-            ErrorLog.e(TAG, "启动前台服务失败（后台可能被冻结）", it)
         }
     }
 
@@ -146,7 +145,7 @@ object BackupNotifier {
             // 服务不在（被系统回收 / 启动失败）才退回普通 notify，否则完全没反馈
             if (!reportedServiceGone) {
                 reportedServiceGone = true
-                ErrorLog.add("通知", "前台服务已不在，退回普通通知（后台可能不刷新）")
+                AppLog.e("通知", "前台服务已不在，退回普通通知（后台可能不刷新）")
             }
             runCatching { manager.notify(NOTIFICATION_ID, notification) }
                 .onFailure { Log.w(TAG, "notify update failed", it) }

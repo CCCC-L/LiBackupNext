@@ -25,7 +25,7 @@ import android.util.Log
 import androidx.core.graphics.createBitmap
 import com.cc.libackupnext.data.AppPrefs
 import com.cc.libackupnext.entity.AppInfo
-import com.cc.libackupnext.util.ErrorLog
+import com.cc.libackupnext.util.AppLog
 import com.topjohnwu.superuser.ipc.RootService
 import dev.rikka.tools.refine.Refine
 import java.io.BufferedInputStream
@@ -53,7 +53,7 @@ object AppManagerService {
         val pipe = try {
             ParcelFileDescriptor.createPipe()
         } catch (e: IOException) {
-            ErrorLog.e(TAG, "createPipe failed", e)
+            AppLog.e(TAG, "createPipe failed", e)
             return null
         }
 
@@ -69,7 +69,7 @@ object AppManagerService {
                     }
                 }
             } catch (t: Throwable) {
-                ErrorLog.e(TAG, "pipe write failed", t)
+                AppLog.e(TAG, "pipe write failed", t)
             }
         }, "PipeWriter").start()
 
