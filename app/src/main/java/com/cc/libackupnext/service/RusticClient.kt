@@ -1,5 +1,6 @@
 package com.cc.libackupnext.service
 
+import android.os.IBinder
 import android.util.Log
 import com.cc.libackupnext.App
 import com.cc.libackupnext.data.AppBackupSummary
@@ -21,6 +22,8 @@ import com.cc.libackupnext.service.util.SystemDataExporter
 import com.cc.libackupnext.util.ErrorLog
 import com.topjohnwu.superuser.Shell
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -42,7 +45,41 @@ object RusticClient {
         }
     }
 
-    private suspend fun getService(): IRusticService = manager.getService()
+    /** 不含凭据的空请求：仓库地址和密码只由 setRepo() 注入。 */
+    private const val EMPTY_REQUEST = "{}"
+
+    // ==================== 仓库凭据 ====================
+    //
+    // AppPrefs 是唯一真源，Rust 侧有一份静态副本；root 侧 Kotlin 不留密码。
+    // 每次绑定（含服务被杀后重连）通过 setRepo() 注入一次，之后所有业务命令
+    // 都不带凭据。用 binder 身份 + 版本号判断是否需要重新注入，正常路径零额外 IPC。
+    // initRepo() 是唯一自带候选凭据的命令：只校验 / 建库，不改全局配置，
+    // 成功才由 initRepository() 保存 AppPrefs 并作废注入标记。
+
+    private val credentialLock = Mutex()
+
+    @Volatile
+    private var credentialVersion = 0L
+    private var injectedBinder: IBinder? = null
+    private var injectedVersion = -1L
+
+    /** 凭据需要重新对齐（初始化成功 / 服务重启）：下次调用重新注入真源。 */
+    fun invalidateCredentials() {
+        credentialVersion++
+    }
+
+    private suspend fun getService(): IRusticService {
+        val service = manager.getService()
+        credentialLock.withLock {
+            val binder = service.asBinder()
+            if (injectedBinder !== binder || injectedVersion != credentialVersion) {
+                service.setRepo(repoPath, repoPassword)
+                injectedBinder = binder
+                injectedVersion = credentialVersion
+            }
+        }
+        return service
+    }
 
     /** 提前绑定 root 服务，避免点初始化时再等 su 握手。 */
     suspend fun warmUp() {
@@ -58,6 +95,7 @@ object RusticClient {
      */
     fun restart() {
         manager.release()
+        invalidateCredentials()
     }
 
     // ==================== 快照缓存 ====================
@@ -71,12 +109,7 @@ object RusticClient {
         if (!AppPrefs.hasRepository()) return@withContext emptyList()
 
         try {
-            val request = JSONObject().apply {
-                put("path", repoPath)
-                put("password", repoPassword)
-            }
-
-            val json = JSONObject(getService().overview(request.toString()))
+            val json = JSONObject(getService().overview(EMPTY_REQUEST))
             if (!json.optBoolean("ok", false)) {
                 ErrorLog.add(
                     "备份概况",
@@ -140,14 +173,10 @@ object RusticClient {
      * @param packageName 传 null 表示要全部快照
      */
     private suspend fun listSnapshots(
-        repoPath: String,
-        repoPassword: String,
         packageName: String? = null
     ): Result<List<BackupSnapshot>> = withContext(Dispatchers.IO) {
         try {
             val request = JSONObject().apply {
-                put("path", repoPath)
-                put("password", repoPassword)
                 put("package_name", packageName.orEmpty())
             }
 
@@ -183,14 +212,10 @@ object RusticClient {
 
     /** 删除一批快照。 */
     private suspend fun deleteSnapshots(
-        repoPath: String,
-        repoPassword: String,
         ids: List<String>
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val request = JSONObject().apply {
-                put("path", repoPath)
-                put("password", repoPassword)
                 put("ids", JSONArray(ids))
             }
             val error = getService().deleteSnapshots(request.toString())
@@ -240,15 +265,11 @@ object RusticClient {
             // 图标只保留一份：仓库里已有 pkg:icon 就不再备份。
             // 批量备份时调用方已经知道答案（来自备份概况），不用再查一遍。
             val hasIcon = isDir || isFixed || iconAlreadyBackedUp ?: listSnapshots(
-                repoPath = request.repoPath,
-                repoPassword = request.repoPassword,
                 packageName = request.packageName
             ).getOrNull()?.any { it.label == "${request.packageName}:${SnapshotKind.ICON.key}" }
                 ?: false
 
             val payload = JSONObject().apply {
-                put("repoPath", request.repoPath)
-                put("repoPassword", request.repoPassword)
                 put("packageName", request.packageName)
                 put("appName", request.appName)
                 put("version", request.version)
@@ -293,8 +314,6 @@ object RusticClient {
             // 覆盖备份：新的写成功了再删旧的
             if (deleteIds.isNotEmpty()) {
                 val deleteRequest = JSONObject().apply {
-                    put("path", request.repoPath)
-                    put("password", request.repoPassword)
                     put("ids", JSONArray(deleteIds))
                 }
                 val deleteError = getService().deleteSnapshots(deleteRequest.toString())
@@ -318,7 +337,10 @@ object RusticClient {
     private val repoPassword: String get() = AppPrefs.repoPassword
 
     /**
-     * 初始化 / 校验 rustic 仓库，成功后记住地址和密码。
+     * 初始化 / 校验 rustic 仓库，成功后才记住地址和密码。
+     *
+     * 候选路径和密码只随 initRepo() 这一次请求下传，不写全局配置。
+     * 因此失败时 AppPrefs 保持原样，root / Rust 侧也没被改过，不需要任何回滚。
      *
      * @return 成功返回 Unit；失败返回带具体原因的错误。
      */
@@ -336,6 +358,8 @@ object RusticClient {
                 val error = getService().initRepo(path, password)
                 if (error.isNullOrBlank()) {
                     AppPrefs.saveRepository(path, password)
+                    // 成功才让下一次 getService() 把新凭据注入到 root / Rust 侧
+                    invalidateCredentials()
                     Result.success(Unit)
                 } else {
                     Result.failure(IllegalStateException(error))
@@ -355,7 +379,7 @@ object RusticClient {
     suspend fun loadEntries(packageName: String, appName: String): Result<List<BackupEntry>> =
         runCatching {
             // 按包名查（rustic 侧按 label 前缀过滤），不再拉整个仓库的快照
-            listSnapshots(repoPath, repoPassword, packageName)
+            listSnapshots(packageName)
                 .getOrThrow()
                 .toEntries(appName)
         }
@@ -429,7 +453,7 @@ object RusticClient {
      */
     suspend fun loadIcon(packageName: String): Result<ByteArray> =
         withContext(Dispatchers.IO) {
-            val icon = listSnapshots(repoPath, repoPassword, packageName)
+            val icon = listSnapshots(packageName)
                 .getOrNull()
                 ?.firstOrNull { it.label == "$packageName:${SnapshotKind.ICON.key}" }
                 ?: return@withContext Result.failure(IllegalStateException("没有图标备份"))
@@ -442,8 +466,6 @@ object RusticClient {
 
             try {
                 val request = JSONObject().apply {
-                    put("path", repoPath)
-                    put("password", repoPassword)
                     put("id", icon.id)
                     put("dest", dir.absolutePath)
                 }
@@ -470,14 +492,13 @@ object RusticClient {
     suspend fun deleteAll(packageName: String): Result<Int> {
         // 按包名查（rustic 侧按 label 前缀过滤），不要拿全量列表自己筛：
         // 全量列表有条数上限，备份次数多了会漏掉老快照，导致「删不干净」
-        val snapshots = listSnapshots(repoPath, repoPassword, packageName).getOrElse {
+        val snapshots = listSnapshots(packageName).getOrElse {
             return Result.failure(it)
         }
 
         if (snapshots.isEmpty()) return Result.success(0)
 
-        return deleteSnapshots(repoPath, repoPassword, snapshots.map { it.id })
-            .map { snapshots.size }
+        return deleteSnapshots(snapshots.map { it.id }).map { snapshots.size }
     }
 
     /**
@@ -518,11 +539,7 @@ object RusticClient {
         if (!AppPrefs.hasRepository()) return@withContext Result.success(0)
 
         try {
-            val request = JSONObject().apply {
-                put("path", repoPath)
-                put("password", repoPassword)
-            }
-            val json = JSONObject(getService().cleanOrphanIcons(request.toString()))
+            val json = JSONObject(getService().cleanOrphanIcons(EMPTY_REQUEST))
             if (!json.optBoolean("ok", false)) {
                 return@withContext Result.failure(
                     IllegalStateException(
@@ -543,7 +560,7 @@ object RusticClient {
         if (ids.isEmpty()) {
             return Result.failure(IllegalStateException("请先勾选要删除的内容"))
         }
-        return deleteSnapshots(repoPath, repoPassword, ids)
+        return deleteSnapshots(ids)
     }
 
     /**
@@ -561,14 +578,10 @@ object RusticClient {
      */
     suspend fun prune(): Result<Int> = withContext(Dispatchers.IO) {
         try {
-            val request = JSONObject().apply {
-                put("path", repoPath)
-                put("password", repoPassword)
-            }
             // 删除孤儿图标后再整理空间
             val removedIcons = cleanOrphanIcons().getOrDefault(0)
 
-            val error = getService().prune(request.toString())
+            val error = getService().prune(EMPTY_REQUEST)
             if (!error.isNullOrBlank()) {
                 return@withContext Result.failure(IllegalStateException(error))
             }
@@ -587,11 +600,7 @@ object RusticClient {
      */
     suspend fun estimatePrune(): Result<Long> = withContext(Dispatchers.IO) {
         try {
-            val request = JSONObject().apply {
-                put("path", repoPath)
-                put("password", repoPassword)
-            }
-            val json = JSONObject(getService().pruneEstimate(request.toString()))
+            val json = JSONObject(getService().pruneEstimate(EMPTY_REQUEST))
             if (json.optBoolean("ok", false)) {
                 Result.success(json.optLong("bytes", 0L))
             } else {
@@ -612,8 +621,6 @@ object RusticClient {
         withContext(Dispatchers.IO) {
             try {
                 val request = JSONObject().apply {
-                    put("path", repoPath)
-                    put("password", repoPassword)
                     put("ids", JSONArray(entry.ids))
                     if (description != null) {
                         put("description", description)
@@ -822,8 +829,6 @@ object RusticClient {
         return withContext(Dispatchers.IO) {
             try {
                 val request = JSONObject().apply {
-                    put("repoPath", repoPath)
-                    put("repoPassword", repoPassword)
                     put("userId", app.userId)
                     put("packageName", app.packageName)
                     put("delete", true)
@@ -930,8 +935,6 @@ object RusticClient {
         app: AppInfo,
         groups: Set<BackupGroup>
     ) = BackupRequest(
-        repoPath = repoPath,
-        repoPassword = repoPassword,
         packageName = app.packageName,
         appName = app.name,
         version = app.version,

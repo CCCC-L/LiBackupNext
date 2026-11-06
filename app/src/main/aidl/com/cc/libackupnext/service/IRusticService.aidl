@@ -7,10 +7,22 @@ import com.cc.libackupnext.service.IBackupProgressCallback;
 interface IRusticService {
 
   /**
+   * 注入仓库地址和密码（业务命令唯一的凭据来源）。
+   *
+   * 主进程在每次绑定（含 root 服务重启后的重连）时调一次，初始化成功 / 改密码 /
+   * 清配置时再调。Rust 侧留一份类级副本，root 侧 Kotlin 不保存密码；
+   * 之后所有业务命令的请求 JSON 都不再带凭据。传空串表示清空凭据。
+   */
+  void setRepo(String path, String password);
+
+  /**
    * 初始化 / 校验 rustic 仓库。
    *
    * - 目录为空：创建新仓库
    * - 目录已是 rustic 仓库：校验密码
+   *
+   * 这两个参数只用于本次校验，不写入 Rust 侧的全局凭据，也不会污染当前仓库配置。
+   * 主进程按返回值决定是否保存：成功才更新 AppPrefs 并重新注入，失败什么都不改。
    *
    * @return 成功返回空字符串；失败返回具体错误信息（可直接展示给用户）。
    */
@@ -19,7 +31,7 @@ interface IRusticService {
   /**
    * 备份一个应用。
    *
-   * @param request JSON：{repoPath, repoPassword, packageName, userId, apk, user, data, timestamp}
+   * @param request JSON：{packageName, userId, apk, user, data, timestamp}
    * @param callback 进度回调，可为 null
    * @return 成功返回空字符串；失败返回具体错误信息
    */
@@ -28,7 +40,7 @@ interface IRusticService {
   /**
    * 按 label 前缀（包名）查询快照。
    *
-   * @param request JSON：{path, password, package_name}
+   * @param request JSON：{package_name}
    * @return JSON：{ok, snapshots:[{id,label,tags,time,description}], error}
    */
   String listSnapshots(String request);
@@ -40,7 +52,7 @@ interface IRusticService {
   /**
    * 修改一批快照的备注。
    *
-   * @param request JSON：{path, password, ids:[...], description:"..."|null}
+   * @param request JSON：{ids:[...], description:"..."|null}
    * @return 成功返回空字符串；失败返回具体错误信息
    */
   String updateDescription(String request);
@@ -48,7 +60,7 @@ interface IRusticService {
    /**
    * 把单个快照恢复到指定目录（导出图标这类小文件用）。
    *
-   * @param request JSON：{path, password, id, dest}
+   * @param request JSON：{id, dest}
    * @return 成功返回空字符串；失败返回原因
    */
   String exportSnapshot(String request);
@@ -56,14 +68,14 @@ interface IRusticService {
   /**
    * 删除一批快照。
    *
-   * @param request JSON：{path, password, ids:[...]}
+   * @param request JSON：{ids:[...]}
    */
   String deleteSnapshots(String request);
 
   /**
    * 回收仓库空间（prune）：删掉没人引用的 pack。
    *
-   * @param request JSON：{path, password}
+   * @param request 空请求 "{}"
    * @return 成功返回空字符串；失败返回具体错误信息
    */
   String prune(String request);
@@ -71,7 +83,7 @@ interface IRusticService {
   /**
    * 只算不删：估算整理仓库能回收多少空间。
    *
-   * @param request JSON：{path, password}
+   * @param request 空请求 "{}"
    * @return JSON：{ok:true, bytes:可回收字节数} 或 {ok:false, error:"..."}
    */
   String pruneEstimate(String request);
@@ -79,7 +91,7 @@ interface IRusticService {
   /**
    * 恢复一批快照。
    *
-   * @param request JSON：{path, password, userId, packageName, items:[{kind, id}]}
+   * @param request JSON：{userId, packageName, items:[{kind, id}]}
    */
   String restoreSnapshots(String request, IBackupProgressCallback callback);
 

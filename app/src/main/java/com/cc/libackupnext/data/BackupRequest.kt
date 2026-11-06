@@ -6,8 +6,6 @@ package com.cc.libackupnext.data
  * @param version 形如 `1.10.2(230102)`，直接进 tag
  */
 data class BackupRequest(
-    val repoPath: String,
-    val repoPassword: String,
     val packageName: String,
     val appName: String,
     val version: String,

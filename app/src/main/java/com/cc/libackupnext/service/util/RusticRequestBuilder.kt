@@ -110,8 +110,6 @@ internal class RusticRequestBuilder(
                 )
             )
             return JSONObject().apply {
-                put("path", options.getString("repoPath"))
-                put("password", options.getString("repoPassword"))
                 put("items", dirItems)
                 // 不备份.thumbnails 文件夹和 .trashed开头的文件
                 put(
@@ -143,8 +141,6 @@ internal class RusticRequestBuilder(
             }
 
             return JSONObject().apply {
-                put("path", options.getString("repoPath"))
-                put("password", options.getString("repoPassword"))
                 put("items", JSONArray().put(systemItem))
                 options.optString("batch").takeIf { it.isNotBlank() }?.let { put("batch", it) }
             }.toString()
@@ -275,8 +271,6 @@ internal class RusticRequestBuilder(
         }
 
         return JSONObject().apply {
-            put("path", options.getString("repoPath"))
-            put("password", options.getString("repoPassword"))
             put("items", items)
             put("excludes", JSONArray(BACKUP_EXCLUDES))
             options.optString("batch").takeIf { it.isNotBlank() }?.let { put("batch", it) }

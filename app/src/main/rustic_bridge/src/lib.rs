@@ -8,13 +8,16 @@
 //! ```
 //!
 //! 帧格式统一为「大端 i32 长度 + UTF-8 JSON」。
-//! 请求：`{"path":"/storage/emulated/0/xxx","password":"..."}`
+//! 仓库地址和密码由 `nativeSetRepo` 单独注入一次（绑定 / 初始化成功 / 换仓库时），
+//! 业务请求 JSON 里只放命令本身的参数，不再带 path / password。
+//! 唯一例外是 `initRepo`：它带候选 path / password，只用来建库 / 校验密码，
+//! 不写全局凭据；成功与否由主进程判断，成功才保存并重新注入。
 //! 响应：`{"ok":true}` 或 `{"ok":false,"error":"..."}`
 //! 进度：`{"stage":"apk","done":123,"total":456,"finished":false}`
 
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -47,15 +50,7 @@ const PROGRESS_SLOT_SIZE: usize = 256;
 const PROGRESS_SLOT_COUNT: usize = (64 * 1024 - PROGRESS_COUNTER_SIZE) / PROGRESS_SLOT_SIZE;
 
 #[derive(Deserialize)]
-struct InitRequest {
-    path: String,
-    password: String,
-}
-
-#[derive(Deserialize)]
 struct BackupRequest {
-    path: String,
-    password: String,
     items: Vec<BackupItem>,
     /// 备份时要排除的路径模式（gitignore 语义，`!` 开头表示排除）
     #[serde(default)]
@@ -94,10 +89,15 @@ struct BackupItem {
     excludes: Vec<String>,
 }
 
+/// 初始化 / 校验仓库用的**候选**凭据：只跟着这一次请求走，不写全局配置。
 #[derive(Deserialize)]
-struct ListRequest {
+struct InitRequest {
     path: String,
     password: String,
+}
+
+#[derive(Deserialize)]
+struct ListRequest {
     /// 包名；留空表示列出全部快照
     #[serde(default)]
     package_name: String,
@@ -105,8 +105,6 @@ struct ListRequest {
 
 #[derive(Deserialize)]
 struct UpdateDescriptionRequest {
-    path: String,
-    password: String,
     ids: Vec<String>,
     #[serde(default)]
     description: Option<String>,
@@ -114,15 +112,7 @@ struct UpdateDescriptionRequest {
 
 #[derive(Deserialize)]
 struct DeleteRequest {
-    path: String,
-    password: String,
     ids: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct PruneRequest {
-    path: String,
-    password: String,
 }
 
 #[derive(Deserialize)]
@@ -136,8 +126,6 @@ struct RestoreItem {
 
 #[derive(Deserialize)]
 struct RestoreRequest {
-    path: String,
-    password: String,
     items: Vec<RestoreItem>,
 }
 
@@ -183,11 +171,82 @@ impl BridgeResponse {
     }
 }
 
+// ==================== 仓库凭据 ====================
+
+/// 仓库地址和密码：由 `nativeSetRepo` 在绑定 / 初始化成功 / 换仓库时写入一次。
+///
+/// 业务请求 JSON 里不再带 path / password，都从这里读；`initRepo` 是例外，
+/// 它自带的候选凭据只用于本次建库 / 校验，不写进这里。
+/// `generation` 每次注入递增，三个仓库缓存拿它当 key —— 换仓库 / 改密码后
+/// 即使缓存没来得及清，也不会错误复用旧仓库实例。
+#[derive(Clone)]
+struct RepoConfig {
+    path: String,
+    password: String,
+    generation: u64,
+}
+
+static REPO_CONFIG: Mutex<Option<RepoConfig>> = Mutex::new(None);
+static REPO_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// 空路径 / 空密码视为「没有配置」，避免拿半截凭据去开仓库。
+fn set_repo(path: &str, password: &str) {
+    let generation = REPO_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    if let Ok(mut guard) = REPO_CONFIG.lock() {
+        *guard = if path.is_empty() || password.is_empty() {
+            None
+        } else {
+            Some(RepoConfig {
+                path: path.to_string(),
+                password: password.to_string(),
+                generation,
+            })
+        };
+    }
+
+    // 换了仓库 / 密码，三级缓存里的 Repository 全部作废
+    clear_repo_cache();
+    invalidate_indexed_repo();
+    invalidate_backup_repo();
+}
+
+fn repo_config() -> Result<RepoConfig, String> {
+    REPO_CONFIG
+        .lock()
+        .ok()
+        .and_then(|guard| (*guard).clone())
+        .ok_or_else(|| "仓库尚未配置，请先初始化仓库".to_string())
+}
+
+/// 缓存标识：路径 + 凭据代数。密码不进 key，代数已经能区分每次注入。
+fn repo_key(config: &RepoConfig) -> String {
+    format!("{}\0{}", config.path, config.generation)
+}
+
+/// `RusticServer.nativeSetRepo(path: String, password: String): Int`
+#[no_mangle]
+pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeSetRepo<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    path: JString<'local>,
+    password: JString<'local>,
+) -> jint {
+    let outcome = env.with_env(|env| -> Result<jint, jni::errors::Error> {
+        let path: String = env.get_string(&path)?.into();
+        let password: String = env.get_string(&password)?.into();
+        set_repo(&path, &password);
+        Ok(0)
+    });
+
+    outcome.resolve::<jni::errors::ThrowRuntimeExAndDefault>()
+}
+
 // ==================== 初始化 ====================
 
 /// `RusticServer.nativeInitRepo(buffer: ByteBuffer): Int`
 ///
-/// 返回 0 成功，1 业务失败，2 共享内存不可用。
+/// 请求：`{"path":"仓库目录","password":"候选密码"}`，只用于本次建库 / 校验密码，
+/// 不读写全局仓库凭据。返回 0 成功，1 业务失败，2 共享内存不可用。
 #[no_mangle]
 pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeInitRepo<'local>(
     mut env: EnvUnowned<'local>,
@@ -231,18 +290,17 @@ fn handle_init(ptr: *mut u8, capacity: usize) -> jint {
     }
 }
 
+/// 只建库 / 校验传入的候选凭据，**不读写全局 `REPO_CONFIG`，也不碰仓库缓存**。
+///
+/// 主进程拿到成功结果后才会保存 AppPrefs 并通过 `setRepo()` 注入新凭据；
+/// 失败时全局状态原封不动，所以不需要任何回滚。
 fn init_repo(path: &str, password: &str) -> Result<(), String> {
-    // 换仓库 / 改密码都从这里走，先丢掉旧实例
-    clear_repo_cache();
-    invalidate_indexed_repo();
-    invalidate_backup_repo();
-
     let dir = std::path::Path::new(path);
     if !dir.exists() {
-        return Err(format!("仓库目录不存在：{path}"));
+        return Err(format!("仓库目录不存在：{}", path));
     }
     if !dir.is_dir() {
-        return Err(format!("所选路径不是目录：{path}"));
+        return Err(format!("所选路径不是目录：{}", path));
     }
 
     let backend = LocalBackend::new(path, Vec::<(String, String)>::new())
@@ -259,24 +317,22 @@ fn init_repo(path: &str, password: &str) -> Result<(), String> {
 
     // 目录里已经有 config 说明是现成的 rustic 仓库，此时只校验密码
     if dir.join("config").is_file() {
-        let opened = repository.open(&credentials).map_err(|e| {
+        repository.open(&credentials).map_err(|e| {
             format!(
                 "该目录已经是 rustic 仓库，但密码校验失败：{}",
                 describe_error(&e)
             )
         })?;
-        cache_repo(path, password, opened);
         return Ok(());
     }
 
-    let created = repository
+    repository
         .init(
             &credentials,
             &KeyOptions::default(),
             &ConfigOptions::default(),
         )
         .map_err(|e| format!("创建仓库失败：{}", describe_error(&e)))?;
-    cache_repo(path, password, created);
 
     Ok(())
 }
@@ -311,7 +367,7 @@ pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeSetCa
 
 /// `RusticServer.nativeListSnapshots(buffer: ByteBuffer): Int`
 ///
-/// 请求：`{"path":"...","password":"...","package_name":"包名"}`
+/// 请求：`{"package_name":"包名"}`
 /// 响应：`{"ok":true,"snapshots":[{"id","label","tags","time","description"}]}`
 #[no_mangle]
 pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeListSnapshots<'local>(
@@ -390,7 +446,7 @@ fn handle_list(ptr: *mut u8, capacity: usize) -> jint {
 }
 
 fn list_snapshots(request: &ListRequest) -> Result<Vec<SnapshotInfo>, String> {
-    let repository = open_repo_cached(&request.path, &request.password)?;
+    let repository = open_repo_cached()?;
 
     // 应用：label 形如 `<包名>:<类型>`，按前缀过滤（纯查找，不做语义处理）
     // 目录：label 形如 `<绝对路径>:dir`，整条精确匹配（避免 /a/DCIM 命中 /a/DCIM2）
@@ -443,7 +499,7 @@ static CACHE_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 fn repo_options() -> RepositoryOptions {
     let mut options = RepositoryOptions::default();
 
-    let dir = CACHE_DIR.lock().ok().and_then(|guard| guard.clone());
+    let dir = CACHE_DIR.lock().ok().and_then(|guard| (*guard).clone());
     match dir {
         Some(dir) => {
             if std::fs::create_dir_all(&dir).is_ok() {
@@ -460,8 +516,8 @@ fn repo_options() -> RepositoryOptions {
 }
 
 /// 打开仓库（不需要索引，列表/改备注都够用）。
-fn open_repo(path: &str, password: &str) -> Result<rustic_core::Repository<rustic_core::OpenStatus>, String> {
-    let backend = LocalBackend::new(path, Vec::<(String, String)>::new())
+fn open_repo(config: &RepoConfig) -> Result<rustic_core::Repository<rustic_core::OpenStatus>, String> {
+    let backend = LocalBackend::new(&config.path, Vec::<(String, String)>::new())
         .map_err(|e| format!("无法打开仓库目录：{}", describe_error(&e)))?;
 
     let backends = RepositoryBackends::new(Arc::new(backend), None);
@@ -470,7 +526,7 @@ fn open_repo(path: &str, password: &str) -> Result<rustic_core::Repository<rusti
 
     Repository::new(&options, &backends)
         .map_err(|e| format!("无法访问仓库：{}", describe_error(&e)))?
-        .open(&Credentials::password(password))
+        .open(&Credentials::password(&config.password))
         .map_err(|e| format!("打开仓库失败（密码是否正确？）：{}", describe_error(&e)))
 }
 
@@ -480,10 +536,7 @@ fn open_repo(path: &str, password: &str) -> Result<rustic_core::Repository<rusti
 /// **不含快照列表和索引**，所以仓库内容变了也不会读到旧数据，
 /// 每次查询照旧重新列 `snapshots/` 目录。
 struct CachedRepo {
-    /// 仓库标识：完整地址 + 全部凭据（现在只有「路径 + 密码」）。
-    ///
-    /// 将来接远程仓库（S3 / SFTP 等）时，要把 URL、access key 之类的
-    /// 凭据一起拼进 key，任何一个变了都必须重新打开。
+    /// 仓库标识：路径 + 凭据代数（见 [repo_key]）。
     key: String,
     repo: Arc<Repository<rustic_core::OpenStatus>>,
     last_used: Instant,
@@ -494,21 +547,6 @@ const REPO_CACHE_IDLE: Duration = Duration::from_secs(600);
 
 static OPEN_REPO: Mutex<Option<CachedRepo>> = Mutex::new(None);
 
-fn repo_key(path: &str, password: &str) -> String {
-    // 用 \0 分隔，避免 path 里带分隔符造成误判
-    format!("{path}\0{password}")
-}
-
-fn cache_repo(path: &str, password: &str, repo: Repository<rustic_core::OpenStatus>) {
-    if let Ok(mut guard) = OPEN_REPO.lock() {
-        *guard = Some(CachedRepo {
-            key: repo_key(path, password),
-            repo: Arc::new(repo),
-            last_used: Instant::now(),
-        });
-    }
-}
-
 fn clear_repo_cache() {
     if let Ok(mut guard) = OPEN_REPO.lock() {
         *guard = None;
@@ -516,11 +554,9 @@ fn clear_repo_cache() {
 }
 
 /// 取仓库：命中缓存就直接复用（省掉 scrypt 派生），否则打开并缓存。
-fn open_repo_cached(
-    path: &str,
-    password: &str,
-) -> Result<Arc<Repository<rustic_core::OpenStatus>>, String> {
-    let key = repo_key(path, password);
+fn open_repo_cached() -> Result<Arc<Repository<rustic_core::OpenStatus>>, String> {
+    let config = repo_config()?;
+    let key = repo_key(&config);
 
     if let Ok(mut guard) = OPEN_REPO.lock() {
         let reusable = guard
@@ -537,7 +573,7 @@ fn open_repo_cached(
         *guard = None;
     }
 
-    let repo = Arc::new(open_repo(path, password)?);
+    let repo = Arc::new(open_repo(&config)?);
     if let Ok(mut guard) = OPEN_REPO.lock() {
         *guard = Some(CachedRepo {
             key,
@@ -573,11 +609,9 @@ fn invalidate_indexed_repo() {
 }
 
 /// 取「已建索引」的仓库：命中缓存直接复用，省掉 scrypt 派生和读索引。
-fn open_indexed_repo_cached(
-    path: &str,
-    password: &str,
-) -> Result<Arc<Repository<rustic_core::IndexedFullStatus>>, String> {
-    let key = repo_key(path, password);
+fn open_indexed_repo_cached() -> Result<Arc<Repository<rustic_core::IndexedFullStatus>>, String> {
+    let config = repo_config()?;
+    let key = repo_key(&config);
 
     if let Ok(mut guard) = OPEN_INDEXED.lock() {
         let reusable = guard
@@ -594,7 +628,7 @@ fn open_indexed_repo_cached(
     }
 
     let repo = Arc::new(
-        open_repo(path, password)?
+        open_repo(&config)?
             .to_indexed()
             .map_err(|e| format!("读取仓库索引失败：{}", describe_error(&e)))?,
     );
@@ -633,22 +667,23 @@ fn invalidate_backup_repo() {
 }
 
 fn open_backup_repo_cached(
-    path: &str,
-    password: &str,
     batch: Option<&str>,
 ) -> Result<Arc<Repository<rustic_core::IndexedIdsStatus>>, String> {
+    let config = repo_config()?;
     // 没有批次标识就不缓存：单次备份本来也只会用一次
     let key = match batch {
-        Some(batch) if !batch.is_empty() => format!("{}\0batch\0{batch}", repo_key(path, password)),
+        Some(batch) if !batch.is_empty() => {
+            format!("{}\0batch\0{batch}", repo_key(&config))
+        }
         _ => {
-            let backend = LocalBackend::new(path, Vec::<(String, String)>::new())
+            let backend = LocalBackend::new(&config.path, Vec::<(String, String)>::new())
                 .map_err(|e| format!("无法打开仓库目录：{}", describe_error(&e)))?;
             let backends = RepositoryBackends::new(Arc::new(backend), None);
             let repository = Repository::new(&repo_options(), &backends)
                 .map_err(|e| format!("无法访问仓库：{}", describe_error(&e)))?;
             return Ok(Arc::new(
                 repository
-                    .open(&Credentials::password(password))
+                    .open(&Credentials::password(&config.password))
                     .map_err(|e| format!("打开仓库失败（密码是否正确？）：{}", describe_error(&e)))?
                     .to_indexed_ids()
                     .map_err(|e| format!("读取仓库索引失败：{}", describe_error(&e)))?,
@@ -670,7 +705,7 @@ fn open_backup_repo_cached(
         *guard = None;
     }
 
-    let backend = LocalBackend::new(path, Vec::<(String, String)>::new())
+    let backend = LocalBackend::new(&config.path, Vec::<(String, String)>::new())
         .map_err(|e| format!("无法打开仓库目录：{}", describe_error(&e)))?;
     let backends = RepositoryBackends::new(Arc::new(backend), None);
     let repository = Repository::new(&repo_options(), &backends)
@@ -678,7 +713,7 @@ fn open_backup_repo_cached(
 
     let repo = Arc::new(
         repository
-            .open(&Credentials::password(password))
+            .open(&Credentials::password(&config.password))
             .map_err(|e| format!("打开仓库失败（密码是否正确？）：{}", describe_error(&e)))?
             .to_indexed_ids()
             .map_err(|e| format!("读取仓库索引失败：{}", describe_error(&e)))?,
@@ -701,12 +736,6 @@ fn write_list_response(ptr: *mut u8, capacity: usize, response: ListResponse) {
 }
 
 // ==================== 备份概况 ====================
-
-#[derive(Deserialize)]
-struct OverviewRequest {
-    path: String,
-    password: String,
-}
 
 /// 概况里的一条快照：只带 id / label / 大小。
 ///
@@ -766,8 +795,8 @@ fn backup_stamp(snapshot: &SnapshotFile) -> i64 {
         .unwrap_or_else(|| snapshot.time.timestamp().as_millisecond())
 }
 
-fn build_overview(request: &OverviewRequest) -> Result<Vec<PackageOverview>, String> {
-    let repository = open_repo_cached(&request.path, &request.password)?;
+fn build_overview() -> Result<Vec<PackageOverview>, String> {
+    let repository = open_repo_cached()?;
 
     let snapshots = repository
         .get_matching_snapshots(|_| true)
@@ -885,25 +914,7 @@ pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeOverv
     buffer: JByteBuffer<'local>,
 ) -> jint {
     run_simple(env, buffer, |ptr, capacity| {
-        let request = match read_frame_at(ptr, capacity, 0).and_then(|bytes| {
-            serde_json::from_slice::<OverviewRequest>(&bytes).map_err(|e| e.to_string())
-        }) {
-            Ok(request) => request,
-            Err(message) => {
-                write_overview_response(
-                    ptr,
-                    capacity,
-                    OverviewResponse {
-                        ok: false,
-                        packages: Vec::new(),
-                        error: Some(message),
-                    },
-                );
-                return 1;
-            }
-        };
-
-        match build_overview(&request) {
+        match build_overview() {
             Ok(packages) => {
                 write_overview_response(
                     ptr,
@@ -934,7 +945,7 @@ pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeOverv
 
 /// `RusticServer.nativeUpdateDescription(buffer: ByteBuffer): Int`
 ///
-/// 请求：`{"path","password","ids":["..."],"description":"..."|null}`
+/// 请求：`{"ids":["..."],"description":"..."|null}`
 #[no_mangle]
 pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeUpdateDescription<'local>(
     mut env: EnvUnowned<'local>,
@@ -983,7 +994,7 @@ fn update_descriptions(request: &UpdateDescriptionRequest) -> Result<(), String>
         return Ok(());
     }
 
-    let repository = open_repo_cached(&request.path, &request.password)?;
+    let repository = open_repo_cached()?;
 
     let mut snapshots = repository
         .get_snapshots(&request.ids)
@@ -1077,7 +1088,7 @@ fn delete_snapshots(request: &DeleteRequest) -> Result<(), String> {
     // 快照删掉后索引里的引用也变了，缓存必须作废
     invalidate_indexed_repo();
 
-    let repository = open_repo_cached(&request.path, &request.password)?;
+    let repository = open_repo_cached()?;
 
     let ids = repository
         .get_snapshots(&request.ids)
@@ -1098,12 +1109,6 @@ fn delete_snapshots(request: &DeleteRequest) -> Result<(), String> {
 
 // ==================== 清理孤儿图标 ====================
 
-#[derive(Deserialize)]
-struct CleanupRequest {
-    path: String,
-    password: String,
-}
-
 #[derive(Serialize)]
 struct CleanupResponse {
     ok: bool,
@@ -1116,8 +1121,8 @@ struct CleanupResponse {
 ///
 /// 图标快照不属于任何一次备份（它没有时间戳分组），所以按备份删的时候碰不到它；
 /// 应用的所有备份都删光之后，这个图标就变成了仓库里的垃圾，需要单独回收。
-fn clean_orphan_icons(request: &CleanupRequest) -> Result<u32, String> {
-    let repository = open_repo_cached(&request.path, &request.password)?;
+fn clean_orphan_icons() -> Result<u32, String> {
+    let repository = open_repo_cached()?;
 
     let snapshots = repository
         .get_matching_snapshots(|_| true)
@@ -1178,25 +1183,7 @@ pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeClean
     buffer: JByteBuffer<'local>,
 ) -> jint {
     run_simple(env, buffer, |ptr, capacity| {
-        let request = match read_frame_at(ptr, capacity, 0).and_then(|bytes| {
-            serde_json::from_slice::<CleanupRequest>(&bytes).map_err(|e| e.to_string())
-        }) {
-            Ok(request) => request,
-            Err(message) => {
-                write_cleanup_response(
-                    ptr,
-                    capacity,
-                    CleanupResponse {
-                        ok: false,
-                        removed: 0,
-                        error: Some(message),
-                    },
-                );
-                return 1;
-            }
-        };
-
-        match clean_orphan_icons(&request) {
+        match clean_orphan_icons() {
             Ok(removed) => {
                 write_cleanup_response(
                     ptr,
@@ -1235,17 +1222,7 @@ pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativePrune
     buffer: JByteBuffer<'local>,
 ) -> jint {
     run_simple(env, buffer, |ptr, capacity| {
-        let request = match read_frame_at(ptr, capacity, 0)
-            .and_then(|bytes| serde_json::from_slice::<PruneRequest>(&bytes).map_err(|e| e.to_string()))
-        {
-            Ok(request) => request,
-            Err(message) => {
-                write_response(ptr, capacity, &BridgeResponse::err(message));
-                return 1;
-            }
-        };
-
-        match prune_repo(&request) {
+        match prune_repo() {
             Ok(()) => {
                 write_response(ptr, capacity, &BridgeResponse::ok());
                 0
@@ -1273,12 +1250,12 @@ fn prune_options() -> PruneOptions {
     options
 }
 
-fn prune_repo(request: &PruneRequest) -> Result<(), String> {
+fn prune_repo() -> Result<(), String> {
     // 整理会重写 pack 和索引，缓存必须作废
     invalidate_indexed_repo();
     invalidate_backup_repo();
 
-    let repository = open_indexed_repo_cached(&request.path, &request.password)?;
+    let repository = open_indexed_repo_cached()?;
 
     let options = prune_options();
 
@@ -1299,9 +1276,9 @@ fn prune_repo(request: &PruneRequest) -> Result<(), String> {
 /// 只算不删：估算这次整理能回收多少字节。
 ///
 /// 算法：整包删除的字节 + 重打包时被丢弃的未使用字节 + 无引用的包文件。
-fn prune_estimate(request: &PruneRequest) -> Result<u64, String> {
+fn prune_estimate() -> Result<u64, String> {
     // 只算不删，可以放心复用缓存（估算和真正整理之间通常只隔几秒）
-    let repository = open_indexed_repo_cached(&request.path, &request.password)?;
+    let repository = open_indexed_repo_cached()?;
 
     let options = prune_options();
     let plan = repository
@@ -1354,17 +1331,7 @@ pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativePrune
     buffer: JByteBuffer<'local>,
 ) -> jint {
     run_simple(env, buffer, |ptr, capacity| {
-        let request = match read_frame_at(ptr, capacity, 0)
-            .and_then(|bytes| serde_json::from_slice::<PruneRequest>(&bytes).map_err(|e| e.to_string()))
-        {
-            Ok(request) => request,
-            Err(message) => {
-                write_estimate(ptr, capacity, Err(message));
-                return 1;
-            }
-        };
-
-        match prune_estimate(&request) {
+        match prune_estimate() {
             Ok(bytes) => {
                 write_estimate(ptr, capacity, Ok(bytes));
                 0
@@ -1415,7 +1382,7 @@ fn restore_snapshots(request: &RestoreRequest) -> Result<(), String> {
 
     // 恢复一个应用会分 5 次进来（apk / user / user_de / data / permissions），
     // 每次都重开仓库 + 读索引的话，固定开销就有 3~4 秒，所以走缓存。
-    let repository = open_indexed_repo_cached(&request.path, &request.password)?;
+    let repository = open_indexed_repo_cached()?;
 
     for item in &request.items {
         let snapshot = repository
@@ -1916,7 +1883,7 @@ fn backup_repo(request: &BackupRequest, progress: Arc<ProgressCtx>) -> Result<()
     // 这一段是「每个应用一次」的固定开销：scrypt 密钥派生 + 读一遍索引。
     // 同批次内复用，命中缓存就不用再付。
     let repository =
-        open_backup_repo_cached(&request.path, &request.password, request.batch.as_deref())?;
+        open_backup_repo_cached(request.batch.as_deref())?;
 
     let result = backup_items(request, repository.as_ref(), progress.clone());
 
@@ -2201,8 +2168,18 @@ fn describe_error(error: &rustic_core::RusticError) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{backup_repo, init_repo, read_frame_at, BackupItem, BackupRequest, ProgressCtx};
-    use std::sync::Arc;
+    use super::{backup_repo, init_repo, read_frame_at, set_repo, BackupItem, BackupRequest, ProgressCtx};
+    use std::sync::{Arc, Mutex};
+
+    /// 凭据现在是进程级静态状态，测试必须串行跑，否则会互相覆盖仓库路径。
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn setup_repo(path: &str) -> std::sync::MutexGuard<'static, ()> {
+        let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_repo(path, "rustic");
+        init_repo(path, "rustic").expect("init 应该成功");
+        guard
+    }
 
     #[test]
     fn backup_creates_snapshot() {
@@ -2216,11 +2193,9 @@ mod tests {
         std::fs::write(src_dir.join("hello.txt"), b"hello rustic").unwrap();
 
         let repo = repo_dir.to_string_lossy().to_string();
-        init_repo(&repo, "rustic").expect("init 应该成功");
+        let _guard = setup_repo(&repo);
 
         let request = BackupRequest {
-            path: repo,
-            password: "rustic".to_string(),
             items: vec![BackupItem {
                 stage: "apk".to_string(),
                 label: "com.example:apk".to_string(),
@@ -2233,11 +2208,14 @@ mod tests {
                 as_path: None,
                 skip_reason: None,
                 description: None,
+                parent: None,
                 excludes: Vec::new(),
             }],
+            excludes: Vec::new(),
+            batch: None,
         };
 
-        let mut buffer = vec![0u8; 128 * 1024];
+        let mut buffer = vec![0u8; 576 * 1024];
         let progress = Arc::new(ProgressCtx::new(buffer.as_mut_ptr(), buffer.len()));
         backup_repo(&request, progress).expect("backup 应该成功");
 
@@ -2255,7 +2233,7 @@ mod tests {
 
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.to_string_lossy().to_string();
-        init_repo(&path, "rustic").expect("init 应该成功");
+        let _guard = setup_repo(&path);
 
         // 初始化后仓库目录里应该有 config 文件
         assert!(dir.join("config").exists(), "仓库缺少 config 文件");
@@ -2278,11 +2256,9 @@ mod tests {
         std::fs::write(dir_b.join("b.txt"), b"bbbbbbbbbbbb").unwrap();
 
         let repo = repo_dir.to_string_lossy().to_string();
-        init_repo(&repo, "rustic").expect("init 应该成功");
+        let _guard = setup_repo(&repo);
 
         let request = BackupRequest {
-            path: repo,
-            password: "rustic".to_string(),
             items: vec![BackupItem {
                 stage: "user".to_string(),
                 label: "com.example:user".to_string(),
@@ -2294,16 +2270,19 @@ mod tests {
                 as_path: None,
                 skip_reason: None,
                 description: None,
+                parent: None,
                 excludes: Vec::new(),
             }],
+            excludes: Vec::new(),
+            batch: None,
         };
 
-        let mut buffer = vec![0u8; 128 * 1024];
+        let mut buffer = vec![0u8; 576 * 1024];
         let progress = Arc::new(ProgressCtx::new(buffer.as_mut_ptr(), buffer.len()));
         backup_repo(&request, progress).expect("backup 应该成功");
 
         // 用仓库 API 读回快照，确认两个源目录的内容都进去了
-        let backend = rustic_backend::LocalBackend::new(&request.path, Vec::<(String, String)>::new())
+        let backend = rustic_backend::LocalBackend::new(&repo, Vec::<(String, String)>::new())
             .unwrap();
         let backends = rustic_core::RepositoryBackends::new(Arc::new(backend), None);
         let mut options = rustic_core::RepositoryOptions::default();
@@ -2338,12 +2317,10 @@ mod tests {
         std::fs::write(dir.join("base.apk"), b"bbbbbbbbbbbb").unwrap();
 
         let repo = repo_dir.to_string_lossy().to_string();
-        init_repo(&repo, "rustic").unwrap();
+        let _guard = setup_repo(&repo);
 
         // 目录：as_path = 包名；文件：as_path = 文件名
         let request = BackupRequest {
-            path: repo.clone(),
-            password: "rustic".to_string(),
             items: vec![
                 BackupItem {
                     stage: "user".to_string(),
@@ -2353,6 +2330,7 @@ mod tests {
                     as_path: Some("com.example".to_string()),
                     skip_reason: None,
                     description: None,
+                    parent: None,
                     excludes: Vec::new(),
                 },
                 BackupItem {
@@ -2363,12 +2341,15 @@ mod tests {
                     as_path: Some("base.apk".to_string()),
                     skip_reason: None,
                     description: None,
+                    parent: None,
                     excludes: Vec::new(),
                 },
             ],
+            excludes: Vec::new(),
+            batch: None,
         };
 
-        let mut buffer = vec![0u8; 128 * 1024];
+        let mut buffer = vec![0u8; 576 * 1024];
         let progress = Arc::new(ProgressCtx::new(buffer.as_mut_ptr(), buffer.len()));
         backup_repo(&request, progress).expect("带 as_path 的备份应该成功");
 
@@ -2393,11 +2374,9 @@ mod tests {
         std::fs::write(src.join("a.txt"), b"hello").unwrap();
 
         let repo = repo_dir.to_string_lossy().to_string();
-        init_repo(&repo, "rustic").unwrap();
+        let _guard = setup_repo(&repo);
 
         let request = BackupRequest {
-            path: repo.clone(),
-            password: "rustic".to_string(),
             items: vec![
                 BackupItem {
                     stage: "apk".to_string(),
@@ -2412,6 +2391,7 @@ mod tests {
                     as_path: Some("com.example".to_string()),
                     skip_reason: None,
                     description: None,
+                    parent: None,
                     excludes: Vec::new(),
                 },
                 BackupItem {
@@ -2422,18 +2402,19 @@ mod tests {
                     as_path: Some("icon.png".to_string()),
                     skip_reason: None,
                     description: None,
+                    parent: None,
                     excludes: Vec::new(),
                 },
             ],
+            excludes: Vec::new(),
+            batch: None,
         };
 
-        let mut buffer = vec![0u8; 128 * 1024];
+        let mut buffer = vec![0u8; 576 * 1024];
         let progress = Arc::new(ProgressCtx::new(buffer.as_mut_ptr(), buffer.len()));
         backup_repo(&request, progress).unwrap();
 
         let list = super::list_snapshots(&super::ListRequest {
-            path: repo.clone(),
-            password: "rustic".to_string(),
             package_name: "com.example".to_string(),
         })
         .expect("查询应该成功");
@@ -2442,16 +2423,12 @@ mod tests {
 
         // 前缀相同的另一个包名不能被误伤
         let other = super::list_snapshots(&super::ListRequest {
-            path: repo.clone(),
-            password: "rustic".to_string(),
             package_name: "com.exam".to_string(),
         })
         .expect("查询应该成功");
         assert!(other.is_empty(), "com.exam 不应该匹配 com.example 的快照");
 
         let none = super::list_snapshots(&super::ListRequest {
-            path: repo,
-            password: "rustic".to_string(),
             package_name: "com.other".to_string(),
         })
         .expect("查询应该成功");
@@ -2472,7 +2449,7 @@ mod tests {
         std::fs::write(src.join("a.txt"), b"hello").unwrap();
 
         let repo = repo_dir.to_string_lossy().to_string();
-        init_repo(&repo, "rustic").unwrap();
+        let _guard = setup_repo(&repo);
 
         let item = |stage: &str| BackupItem {
             stage: stage.to_string(),
@@ -2486,22 +2463,21 @@ mod tests {
             as_path: Some("com.example".to_string()),
             skip_reason: None,
             description: None,
+            parent: None,
             excludes: Vec::new(),
         };
 
         let request = BackupRequest {
-            path: repo.clone(),
-            password: "rustic".to_string(),
             items: vec![item("apk"), item("user")],
+            excludes: Vec::new(),
+            batch: None,
         };
 
-        let mut buffer = vec![0u8; 128 * 1024];
+        let mut buffer = vec![0u8; 576 * 1024];
         let progress = Arc::new(ProgressCtx::new(buffer.as_mut_ptr(), buffer.len()));
         backup_repo(&request, progress).unwrap();
 
         let ids: Vec<String> = super::list_snapshots(&super::ListRequest {
-            path: repo.clone(),
-            password: "rustic".to_string(),
             package_name: "com.example".to_string(),
         })
         .unwrap()
@@ -2512,16 +2488,12 @@ mod tests {
 
         // 写入备注
         super::update_descriptions(&super::UpdateDescriptionRequest {
-            path: repo.clone(),
-            password: "rustic".to_string(),
             ids: ids.clone(),
             description: Some("更新前备份".to_string()),
         })
         .expect("写备注应该成功");
 
         let after: Vec<_> = super::list_snapshots(&super::ListRequest {
-            path: repo.clone(),
-            password: "rustic".to_string(),
             package_name: "com.example".to_string(),
         })
         .unwrap();
@@ -2534,16 +2506,12 @@ mod tests {
         // 移除备注
         let new_ids: Vec<String> = after.iter().map(|s| s.id.clone()).collect();
         super::update_descriptions(&super::UpdateDescriptionRequest {
-            path: repo,
-            password: "rustic".to_string(),
             ids: new_ids,
             description: None,
         })
         .expect("移除备注应该成功");
 
         let cleared: Vec<_> = super::list_snapshots(&super::ListRequest {
-            path: base.join("repo").to_string_lossy().to_string(),
-            password: "rustic".to_string(),
             package_name: "com.example".to_string(),
         })
         .unwrap();
@@ -2567,11 +2535,9 @@ mod tests {
         std::fs::write(src.join("sub").join("b.bin"), b"0123456789").unwrap();
 
         let repo = repo_dir.to_string_lossy().to_string();
-        init_repo(&repo, "rustic").unwrap();
+        let _guard = setup_repo(&repo);
 
         let request = BackupRequest {
-            path: repo.clone(),
-            password: "rustic".to_string(),
             items: vec![BackupItem {
                 stage: "user".to_string(),
                 label: "com.example:user".to_string(),
@@ -2580,17 +2546,18 @@ mod tests {
                 as_path: Some("com.example".to_string()),
                 skip_reason: None,
                 description: None,
+                parent: None,
                 excludes: Vec::new(),
             }],
+            excludes: Vec::new(),
+            batch: None,
         };
 
-        let mut buffer = vec![0u8; 128 * 1024];
+        let mut buffer = vec![0u8; 576 * 1024];
         let progress = Arc::new(ProgressCtx::new(buffer.as_mut_ptr(), buffer.len()));
         backup_repo(&request, progress).unwrap();
 
         let snap = super::list_snapshots(&super::ListRequest {
-            path: repo.clone(),
-            password: "rustic".to_string(),
             package_name: "com.example".to_string(),
         })
         .unwrap()
@@ -2603,8 +2570,6 @@ mod tests {
         std::fs::write(out.join("com.example").join("stale.txt"), b"stale").unwrap();
 
         super::restore_snapshots(&super::RestoreRequest {
-            path: repo,
-            password: "rustic".to_string(),
             items: vec![super::RestoreItem {
                 id: snap.id,
                 dest: out.to_string_lossy().to_string(),
@@ -2642,11 +2607,9 @@ mod tests {
         std::fs::write(src.join("a.txt"), b"hi").unwrap();
 
         let repo = repo_dir.to_string_lossy().to_string();
-        init_repo(&repo, "rustic").unwrap();
+        let _guard = setup_repo(&repo);
 
         let request = BackupRequest {
-            path: repo.clone(),
-            password: "rustic".to_string(),
             items: vec![BackupItem {
                 stage: "apk".to_string(),
                 label: "com.example:apk".to_string(),
@@ -2655,17 +2618,18 @@ mod tests {
                 as_path: Some("base.apk".to_string()),
                 skip_reason: None,
                 description: None,
+                parent: None,
                 excludes: Vec::new(),
             }],
+            excludes: Vec::new(),
+            batch: None,
         };
 
-        let mut buffer = vec![0u8; 128 * 1024];
+        let mut buffer = vec![0u8; 576 * 1024];
         let progress = Arc::new(ProgressCtx::new(buffer.as_mut_ptr(), buffer.len()));
         backup_repo(&request, progress).unwrap();
 
         let snap = super::list_snapshots(&super::ListRequest {
-            path: repo,
-            password: "rustic".to_string(),
             package_name: "com.example".to_string(),
         })
         .unwrap()
@@ -2688,7 +2652,7 @@ mod tests {
         let ptr = buffer.as_mut_ptr();
         let capacity = buffer.len();
 
-        let json = br#"{"path":"/tmp/x","password":"p"}"#;
+        let json = br#"{"package_name":"com.example"}"#;
         let header = (json.len() as i32).to_be_bytes();
         unsafe {
             std::ptr::copy_nonoverlapping(header.as_ptr(), ptr, 4);

@@ -84,7 +84,8 @@ object RusticServer {
     private const val MEDIA_RW_UID = 1023
 
     /**
-     * 初始化 / 校验 rustic 仓库。
+     * 初始化 / 校验 rustic 仓库。请求帧里带候选 path / password，只用于本次校验，
+     * 不写 Rust 侧的全局凭据。
      *
      * @return 0 成功；1 业务失败（原因写回缓冲区）；2 共享内存不可用。
      */
@@ -132,6 +133,14 @@ object RusticServer {
     /** 设置 rustic 的本地缓存目录（root 服务启动时调一次），空串表示关闭缓存。 */
     private external fun nativeSetCacheDir(path: String): Int
 
+    /**
+     * 把仓库地址和密码写进 Rust 侧的静态凭据，顺便清掉三个仓库缓存。
+     *
+     * 这是业务命令唯一的凭据来源：root 侧 Kotlin 不留副本，业务请求的 JSON
+     * 都不带 path / password。initRepo 例外，它自带候选凭据只用于本次校验。
+     */
+    private external fun nativeSetRepo(path: String, password: String): Int
+
     class Service : RootService() {
         override fun onBind(intent: Intent): IBinder = Impl(applicationContext).apply { onBind() }
     }
@@ -161,36 +170,24 @@ object RusticServer {
             }
         }
 
+        /** 主进程在绑定 / 初始化成功 / 改密码 / 清配置时调一次，凭据只进 Rust 静态配置。 */
+        override fun setRepo(path: String, password: String) {
+            if (nativeError != null) return
+            runCatching { nativeSetRepo(path, password) }
+                .onFailure { Log.e(TAG, "nativeSetRepo failed", it) }
+        }
+
+        /**
+         * 候选路径和密码只随这一次请求下传，不写全局凭据。
+         * 成功与否由主进程判断，失败时不需要任何回滚或状态恢复。
+         */
         override fun initRepo(path: String, password: String): String {
             nativeError?.let { return it }
-
-            return try {
-                val shared = SharedMemory.create(SHARED_MEMORY_NAME, BUFFER_SIZE)
-                try {
-                    val buffer = shared.mapReadWrite()
-
-                    val request = JSONObject().apply {
-                        put("path", path)
-                        put("password", password)
-                    }
-                    writeFrameAt(buffer, 0, request.toString())
-
-                    val code = nativeInitRepo(buffer)
-
-                    val response = runCatching { readFrameAt(buffer, 0) }.getOrNull()
-                    if (code == 0 && (response == null || response.optBoolean("ok", true))) {
-                        return ""
-                    }
-
-                    response?.optString("error").orEmpty()
-                        .ifBlank { "初始化失败（code=$code）" }
-                } finally {
-                    shared.close()
-                }
-            } catch (t: Throwable) {
-                Log.e(TAG, "initRepo failed, path=$path", t)
-                "初始化异常：${t.message ?: t.javaClass.simpleName}"
+            val request = JSONObject().apply {
+                put("path", path)
+                put("password", password)
             }
+            return runSimple(request.toString(), ::nativeInitRepo, "初始化失败")
         }
 
         override fun listSnapshots(request: String): String =
@@ -223,8 +220,6 @@ object RusticServer {
             val uid = context.applicationInfo.uid
 
             return restoreTree(
-                repoPath = options.getString("path"),
-                repoPassword = options.getString("password"),
                 snapshotId = options.getString("id"),
                 target = dest,
                 uid = uid,
@@ -280,8 +275,6 @@ object RusticServer {
                 val options = JSONObject(request)
                 val packageName = options.getString("packageName")
                 val userId = options.optInt("userId", 0)
-                val repoPath = options.getString("repoPath")
-                val repoPassword = options.getString("repoPassword")
                 val deleteFirst = options.optBoolean("delete", true)
                 val items = options.optJSONArray("items") ?: JSONArray()
 
@@ -302,7 +295,6 @@ object RusticServer {
                     // 和备份对称：写到 /data/media/0，而不是 FUSE 的 /sdcard。
                     // 用户目录归 media_rw、权限 2770 —— 和系统自己建的一致。
                     val error = restoreTree(
-                        repoPath, repoPassword,
                         snapshotId = id,
                         target = File(mediaPath(packageName)),
                         delete = false,
@@ -327,7 +319,7 @@ object RusticServer {
                         mkdirs()
                     }
 
-                    val error = restoreTo(repoPath, repoPassword, id, dir.absolutePath, delete = false)
+                    val error = restoreTo(id, dir.absolutePath, delete = false)
                     if (error.isNotBlank()) {
                         emit(SnapshotKind.APK, "failed")
                         return error
@@ -368,7 +360,7 @@ object RusticServer {
                     }
 
                     val json = try {
-                        loadJsonFromRepo(repoPath, repoPassword, id, SnapshotKind.PERMISSIONS.key)
+                        loadJsonFromRepo(id, SnapshotKind.PERMISSIONS.key)
                     } catch (e: IllegalStateException) {
                         emit(SnapshotKind.PERMISSIONS, "failed")
                         return e.message.orEmpty()
@@ -413,7 +405,6 @@ object RusticServer {
 
                     emit(kind, "running")
                     val error = restoreTree(
-                        repoPath, repoPassword,
                         snapshotId = id,
                         target = File(spec.dir, packageName),
                         delete = deleteFirst,
@@ -437,7 +428,7 @@ object RusticServer {
                     emit(kind, "running")
 
                     val result = try {
-                        val json = loadJsonFromRepo(repoPath, repoPassword, id, kind.key)
+                        val json = loadJsonFromRepo(id, kind.key)
                         SystemDataRestorer.restore(context, kind, json)
                     } catch (t: Throwable) {
                         Log.e(TAG, "恢复 ${kind.key} 失败", t)
@@ -463,19 +454,13 @@ object RusticServer {
             }
         }
 
-        private fun loadJsonFromRepo(
-            repoPath: String,
-            repoPassword: String,
-            id: String,
-            kind: String
-        ): JSONObject {
+        private fun loadJsonFromRepo(id: String, kind: String): JSONObject {
             val dir = File(context.cacheDir, "restore_${kind}").apply {
                 deleteRecursively()
                 mkdirs()
             }
             try {
-                val error =
-                    restoreTo(repoPath, repoPassword, id, dir.absolutePath, delete = false)
+                val error = restoreTo(id, dir.absolutePath, delete = false)
                 if (error.isNotBlank()) {
                     throw IllegalStateException(error)
                 }
@@ -514,8 +499,6 @@ object RusticServer {
          * @return 出错时返回给用户看的说明，成功返回 null
          */
         private fun restoreTree(
-            repoPath: String,
-            repoPassword: String,
             snapshotId: String,
             target: File,
             uid: Int,
@@ -526,7 +509,7 @@ object RusticServer {
             parentContext: Boolean = false,
             dirMode: String? = null
         ): String? {
-            val error = restoreTo(repoPath, repoPassword, snapshotId, dest.absolutePath, delete)
+            val error = restoreTo(snapshotId, dest.absolutePath, delete)
             if (error.isNotBlank()) return error
 
             // 备份文件夹为空时Rustic不会写入快照中，所以补建一下，如果补建失败直接返回
@@ -537,16 +520,8 @@ object RusticServer {
         }
 
         /** 把单个快照恢复到 dest。 */
-        private fun restoreTo(
-            repoPath: String,
-            repoPassword: String,
-            id: String,
-            dest: String,
-            delete: Boolean
-        ): String {
+        private fun restoreTo(id: String, dest: String, delete: Boolean): String {
             val payload = JSONObject().apply {
-                put("path", repoPath)
-                put("password", repoPassword)
                 put(
                     "items",
                     JSONArray().put(

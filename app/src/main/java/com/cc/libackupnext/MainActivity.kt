@@ -177,9 +177,9 @@ private fun AppRoot() {
                     Toast.makeText(context, "无法解析该目录", Toast.LENGTH_SHORT).show()
                 } else {
                     rusticPath = path
-                    // 换了目录就必须重新初始化
+                    // 换目录后必须重新初始化并验证密码。只有初始化成功才会覆盖
+                    // AppPrefs 里保存的仓库地址和密码，失败时保留原来的配置
                     isRepoReady = false
-                    AppPrefs.clearRepository()
                 }
             },
             rusticPassword = rusticPassword,
