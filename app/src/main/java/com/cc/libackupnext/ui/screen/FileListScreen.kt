@@ -1,10 +1,10 @@
 package com.cc.libackupnext.ui.screen
 
+import com.cc.libackupnext.ui.util.rememberFolderPicker
+
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material.icons.Icons
@@ -48,11 +48,8 @@ fun FileListScreen(
 ) {
     val context = LocalContext.current
 
-    // 系统文件选择器，只能选文件夹
-    val picker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
+    // 系统文件夹选择器：契约与 URI 权限持久化由 FolderPicker 统一处理
+    val pickFolder = rememberFolderPicker { uri ->
         val path = treeUriToPath(uri)
         when {
             path == null -> Toast
@@ -96,7 +93,7 @@ fun FileListScreen(
         // 右下角圆形按钮：打开系统文件夹选择器
         extraAction = {
             FloatingActionButton(
-                onClick = { picker.launch(null) },
+                onClick = pickFolder,
                 containerColor = MaterialTheme.colorScheme.secondaryContainer,
                 contentColor = MaterialTheme.colorScheme.onSecondaryContainer
             ) {

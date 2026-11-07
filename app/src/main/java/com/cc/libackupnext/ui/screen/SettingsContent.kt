@@ -1,5 +1,7 @@
 package com.cc.libackupnext.ui.screen
 
+import com.cc.libackupnext.ui.util.rememberFolderPicker
+
 import android.content.ClipData
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -128,11 +130,8 @@ fun SettingsContent(
     var isInitializing by remember { mutableStateOf(false) }
     var initError by remember { mutableStateOf<String?>(null) }
 
-    // 和欢迎页一样：选完目录只回填路径，密码和初始化在弹窗里完成
-    val folderPicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
+    // 选完目录只回填路径，密码和初始化在弹窗里完成
+    val pickFolder = rememberFolderPicker { uri ->
         val path = RepoPath.toFilesystemPath(uri.toString())
         if (path == null) {
             Toast.makeText(context, "无法解析该目录", Toast.LENGTH_SHORT).show()
@@ -551,7 +550,7 @@ fun SettingsContent(
                 // 和引导页共用同一份实现（目录 + 密码 + 「请牢记密码」提示）
                 RepoSetupForm(
                     path = dialogPath,
-                    onPickFolder = { folderPicker.launch(null) },
+                    onPickFolder = pickFolder,
                     password = dialogPassword,
                     onPasswordChange = { dialogPassword = it },
                     enabled = !isInitializing,

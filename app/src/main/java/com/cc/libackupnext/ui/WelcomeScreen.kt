@@ -1,8 +1,5 @@
 package com.cc.libackupnext.ui
 
-import android.content.Intent
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -29,7 +26,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -40,6 +36,7 @@ import com.cc.libackupnext.ui.theme.rootCardGrantedTextVariant
 import com.cc.libackupnext.ui.theme.rootGrantedButtonBackground
 import com.cc.libackupnext.ui.theme.rootGrantedButtonContent
 import com.cc.libackupnext.ui.util.RepoSetupForm
+import com.cc.libackupnext.ui.util.rememberFolderPicker
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -58,7 +55,6 @@ fun WelcomeScreen(
     initError: String?,
     onDismissError: () -> Unit
 ) {
-    val context = LocalContext.current
     val colors = MaterialTheme.colorScheme
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
 
@@ -84,22 +80,8 @@ fun WelcomeScreen(
             !isInitializing &&
             !isRepoReady
 
-    // 文件夹选择器
-    val folderPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        if (uri != null) {
-            try {
-                context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                )
-            } catch (_: SecurityException) {
-                // 某些 provider 不支持持久化权限，忽略即可
-            }
-            onRusticPathChange(uri.toString())
-        }
-    }
+    // 文件夹选择器：契约与 URI 权限持久化由 FolderPicker 统一处理
+    val pickFolder = rememberFolderPicker { uri -> onRusticPathChange(uri.toString()) }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -213,7 +195,7 @@ fun WelcomeScreen(
                         // 目录 + 密码 + 密码提示：和设置页共用同一份实现
                         RepoSetupForm(
                             path = rusticPath,
-                            onPickFolder = { folderPickerLauncher.launch(null) },
+                            onPickFolder = pickFolder,
                             password = rusticPassword,
                             onPasswordChange = onRusticPasswordChange,
                             enabled = rusticEnabled
