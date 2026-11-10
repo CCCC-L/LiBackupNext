@@ -2,8 +2,6 @@ package com.cc.libackupnext.ui.theme
 
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.ContentTransform
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
@@ -29,8 +27,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.Measurable
+import androidx.compose.ui.layout.MeasureResult
+import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.node.LayoutModifierNode
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.invalidateMeasurement
+import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
@@ -38,8 +45,8 @@ import kotlin.math.roundToInt
 // ---- 动画时长常量（集中管理，方便统一调整） ----
 private const val ERASE_DURATION_MS = 200L
 private const val POSITION_DURATION_MS = 200L
-private const val SEARCH_BAR_DURATION_MS = 200
-private const val SEARCH_BAR_EXIT_DELAY_MS = 100
+/** 搜索栏展开 / 收缩的时长；顶栏等它收完再弹键盘也用这个值。 */
+const val SearchBarDurationMs = 300
 private const val PAGE_TRANSITION_DURATION_MS = 300
 private const val ROW_COLOR_DURATION_MS = 180
 
@@ -114,6 +121,38 @@ fun Modifier.eraseToRight(
             }
         }
 
+/**
+ * 让位 + 推走：容器宽度随 [push] 收到 0（给搜索栏腾出布局空间），
+ * 内容始终按完整槽位宽绘制并向右平移、淡出 —— 看起来像是被搜索栏右边缘顶着推出屏幕，
+ * 而不是 [eraseToRight] 那样在原地被擦掉。
+ *
+ * 关键在于不裁剪：内容要能画到容器外面，直到被窗口右边界吃掉。
+ * 透明度也走 `graphicsLayer(clip = false)`，避免 layer 把平移出去的图标切掉。
+ *
+ * @param enabled false 时整块不显示（例如设置页没有搜索按钮）。
+ * @param push 0 = 原位显示，1 = 完全让位并推走。
+ */
+fun Modifier.pushOutToRight(enabled: Boolean, push: Float): Modifier {
+    val e = if (enabled) 1f else 0f
+    val p = push.coerceIn(0f, 1f)
+    return this
+        .layout { measurable, constraints ->
+            val slot = IconSlotWidth.roundToPx()
+            val width = (slot * e * (1f - p)).roundToInt().coerceIn(0, slot)
+            val placeable = measurable.measure(
+                constraints.copy(minWidth = slot, maxWidth = slot)
+            )
+            layout(width, placeable.height) {
+                placeable.place((slot * 2 * p).roundToInt(), 0)
+            }
+        }
+        .graphicsLayer {
+            // 前半段保持不透明，让「被推着走」看得清；后半段再快速淡出
+            alpha = e * (1f - p * p)
+            clip = false
+        }
+}
+
 // ================================================================
 //  图标位置移动动画（排序按钮在进入/退出搜索时，向右滑到"更多"位置）
 // ================================================================
@@ -144,25 +183,78 @@ fun rememberActionGroupWidth(isSearching: Boolean): State<Dp> =
     )
 
 // ================================================================
-//  搜索栏进出动画（同时供 AppListScreen 和 AppBackupScreen 使用）
+//  搜索栏展开 / 收缩动画（顶栏所有入口共用）
 // ================================================================
 
-/** 搜索栏入场：从左滑入 + 淡入 */
-fun searchBarEnterTransition(): EnterTransition =
-    fadeIn(animationSpec = tween(SEARCH_BAR_DURATION_MS)) +
-            slideInHorizontally(
-                initialOffsetX = { -it / 3 },
-                animationSpec = tween(SEARCH_BAR_DURATION_MS)
-            )
-
-/** 搜索栏出场：向左滑出 + 淡出（延迟 [SEARCH_BAR_EXIT_DELAY_MS]，让内部文字先消失） */
-fun searchBarExitTransition(): ExitTransition =
-    fadeOut(
-        animationSpec = tween(SEARCH_BAR_DURATION_MS, delayMillis = SEARCH_BAR_EXIT_DELAY_MS)
-    ) + slideOutHorizontally(
-        targetOffsetX = { -it / 3 },
-        animationSpec = tween(SEARCH_BAR_DURATION_MS, delayMillis = SEARCH_BAR_EXIT_DELAY_MS)
+/**
+ * 搜索栏展开进度：1f 完整展开，0f 完全收起。
+ *
+ * 开合共用同一个进度 —— 打开时从左往右长出来，关闭时右边缘往左退回去，完全镜像。
+ * 必须在顶栏函数体里调用（不要放在会被条件移除的内容里），否则状态随内容销毁，
+ * 下次展开就没有从 0 起步的动画了。
+ */
+@Composable
+fun rememberSearchBarProgress(visible: Boolean): State<Float> =
+    animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(durationMillis = SearchBarDurationMs),
+        label = "searchBarProgress"
     )
+
+/**
+ * 水平收缩：容器宽度按 [progress] 从完整宽度收到 0，左边缘钉住、右边缘往左退。
+ *
+ * 子项按「展开瞬间的完整宽度」锁定测量并放在 (0, 0)，超出的部分被裁掉 ——
+ * 所以收缩过程中输入框不会重新布局：文字不挤压、不换行，关闭按钮也不跟着往左跑。
+ * 宽度必须锁定：退出搜索时右侧动作区会展开一个图标位，父宽会少 48dp，
+ * 若跟着当前父宽测量，占位文案会在收缩途中被挤成两排。
+ */
+fun Modifier.collapseHorizontally(progress: Float): Modifier =
+    clipToBounds().then(CollapseHorizontallyElement(progress))
+
+private data class CollapseHorizontallyElement(
+    val progress: Float
+) : ModifierNodeElement<CollapseHorizontallyNode>() {
+    override fun create() = CollapseHorizontallyNode(progress)
+
+    override fun update(node: CollapseHorizontallyNode) {
+        node.progress = progress
+        node.invalidateMeasurement()
+    }
+
+    override fun InspectorInfo.inspectableProperties() {
+        name = "collapseHorizontally"
+    }
+}
+
+private class CollapseHorizontallyNode(
+    var progress: Float
+) : Modifier.Node(), LayoutModifierNode {
+    /** 展开态的可用宽度；收缩期间保持不变，展开态则跟着父宽走（横竖屏 / 切页签都能自适应）。 */
+    private var fullWidth = 0
+
+    override fun MeasureScope.measure(
+        measurable: Measurable,
+        constraints: Constraints
+    ): MeasureResult {
+        val available = constraints.maxWidth
+        if (progress >= 1f) {
+            fullWidth = available
+        } else if (available > fullWidth) {
+            fullWidth = available
+        }
+        val width = (available * progress.coerceIn(0f, 1f))
+            .roundToInt()
+            .coerceIn(0, available)
+        val placeable = measurable.measure(
+            constraints.copy(minWidth = fullWidth, maxWidth = fullWidth)
+        )
+        return layout(width, placeable.height) {
+            placeable.place(0, 0)
+        }
+    }
+}
+
 // ================================================================
 //  右滑选中（批量页）
 // ================================================================

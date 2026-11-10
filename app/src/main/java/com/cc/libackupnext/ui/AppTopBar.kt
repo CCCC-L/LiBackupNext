@@ -1,6 +1,5 @@
 package com.cc.libackupnext.ui
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -38,7 +37,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -54,12 +55,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.ui.theme.IconSlotWidth
+import com.cc.libackupnext.ui.theme.SearchBarDurationMs
+import com.cc.libackupnext.ui.theme.collapseHorizontally
 import com.cc.libackupnext.ui.theme.eraseToRight
+import com.cc.libackupnext.ui.theme.pushOutToRight
 import com.cc.libackupnext.ui.theme.rememberActionGroupWidth
 import com.cc.libackupnext.ui.theme.rememberEraseProgress
 import com.cc.libackupnext.ui.theme.rememberMiddleButtonEndPadding
-import com.cc.libackupnext.ui.theme.searchBarEnterTransition
-import com.cc.libackupnext.ui.theme.searchBarExitTransition
+import com.cc.libackupnext.ui.theme.rememberSearchBarProgress
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -180,6 +183,16 @@ fun AppTopBar(
     val searchQuery = searchQueryText ?: vmSearchQuery
     val toggleSearch: () -> Unit = { onToggleSearch?.invoke() ?: viewModel.toggleSearch() }
     val updateQuery: (String) -> Unit = { onSearchQueryChange?.invoke(it) ?: viewModel.updateSearchQuery(it) }
+
+    // 搜索栏开合共用的进度：状态留在顶栏这一层，内容收完被移除也不会丢动画。
+    val searchBarProgress by rememberSearchBarProgress(isSearching)
+
+    var closingQuery by remember { mutableStateOf("") }
+    LaunchedEffect(isSearching, searchQuery) {
+        if (isSearching) closingQuery = searchQuery
+    }
+    val displayQuery = if (isSearching) searchQuery else closingQuery
+
     val isMoreMenuExpanded by viewModel.isMoreMenuExpanded.collectAsState()
 
     // 用户菜单状态
@@ -192,8 +205,8 @@ fun AppTopBar(
     val keyboardController = LocalSoftwareKeyboardController.current
     LaunchedEffect(isSearching) {
         if (isSearching) {
-            // 等 AnimatedVisibility 把输入框布局出来再请求焦点
-            delay(120)
+            // 等展开动画走完再弹键盘，输入框还在往右长的时候别把键盘顶上来
+            delay(SearchBarDurationMs.toLong())
             runCatching { searchFocusRequester.requestFocus() }
             keyboardController?.show()
         } else {
@@ -201,15 +214,13 @@ fun AppTopBar(
         }
     }
 
-    // 每个图标独立使用擦除动画。
+    // 搜索按钮一律在自己槽位内擦除；更多按钮仍「被搜索栏推走」（它在最右端，
+    // 右边没有别的按钮，飞出屏幕不会穿过任何图标）。连续模式按手指权重驱动同一份擦除。
     val searchOpenErase by rememberEraseProgress(visible = !isSearching)
-    val searchAnimated by rememberEraseProgress(visible = showSearch && !isSearching)
-    val searchErase = searchWeight?.let { weight -> weight() * searchOpenErase } ?: searchAnimated
+    val searchErase = searchWeight?.let { weight -> weight() * searchOpenErase }
 
     val userAnimated by rememberEraseProgress(visible = showUserButton)
     val userErase = userWeight?.invoke() ?: userAnimated
-
-    val moreButtonErase by rememberEraseProgress(visible = !isSearching)
 
     val middleAnimated by rememberEraseProgress(visible = showMiddleButton)
     val middleWeightValue = middleWeight?.invoke()
@@ -245,7 +256,8 @@ fun AppTopBar(
                 ) {
                     // 换页签时标题用「宽度展开」切换：宽度和透明度取同一个比例，
                     // 和底栏的文字一样 —— 旧的收完、新的再从 0 宽长出来，两段不会叠在一起。
-                    val baseAlpha = if (isSearching) 0f else 1f
+                    // 标题随搜索栏的展开 / 收缩反向淡入淡出，收起时不会突然露出整行文字
+                    val baseAlpha = 1f - searchBarProgress
                     val incomingAlpha =
                         if (isSearching) 0f else incomingTitleAlpha().coerceIn(0f, 1f)
                     val outgoingAlpha = if (isSearching) {
@@ -282,81 +294,91 @@ fun AppTopBar(
                         )
                     }
 
-                    this@Row.AnimatedVisibility(
-                        visible = isSearching,
-                        enter = searchBarEnterTransition(),
-                        exit = searchBarExitTransition(),
-                        modifier = Modifier
-                            .height(52.dp)
-                            .align(Alignment.CenterStart)
-                    ) {
-                        BasicTextField(
-                            value = searchQuery,
-                            onValueChange = { updateQuery(it) },
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.bodyLarge.copy(
-                                color = MaterialTheme.colorScheme.onSurface
-                            ),
-                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    // 收起过程中内容要留着被一起擦掉，所以等进度真的归零才移除。
+                    if (isSearching || searchBarProgress > 0f) {
+                        Box(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .focusRequester(searchFocusRequester),
-                            decorationBox = { innerTextField ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(52.dp)
-                                        .background(
-                                            searchBarBackground,
-                                            MaterialTheme.shapes.large
-                                        )
-                                        .padding(start = 16.dp, end = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Box(
+                                .height(52.dp)
+                                .align(Alignment.CenterStart)
+                                .collapseHorizontally(searchBarProgress)
+                        ) {
+                            BasicTextField(
+                                value = displayQuery,
+                                onValueChange = { updateQuery(it) },
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodyLarge.copy(
+                                    color = MaterialTheme.colorScheme.onSurface
+                                ),
+                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(searchFocusRequester),
+                                decorationBox = { innerTextField ->
+                                    Row(
                                         modifier = Modifier
-                                            .weight(1f)
-                                            .alpha(if (isSearching) 1f else 0f),
-                                        contentAlignment = Alignment.CenterStart
+                                            .fillMaxWidth()
+                                            .height(52.dp)
+                                            .background(
+                                                searchBarBackground,
+                                                MaterialTheme.shapes.large
+                                            )
+                                            .padding(start = 16.dp, end = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        if (searchQuery.isEmpty()) {
-                                            Text(
-                                                text = searchPlaceholder,
-                                                style = MaterialTheme.typography.bodyLarge,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        Box(
+                                            modifier = Modifier.weight(1f),
+                                            contentAlignment = Alignment.CenterStart
+                                        ) {
+                                            if (displayQuery.isEmpty()) {
+                                                Text(
+                                                    text = searchPlaceholder,
+                                                    style = MaterialTheme.typography.bodyLarge,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    // 收缩期间父宽会变，占位文案别被挤成两排
+                                                    maxLines = 1,
+                                                    softWrap = false,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                            innerTextField()
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .size(40.dp)
+                                                .clickable(
+                                                    interactionSource = remember {
+                                                        MutableInteractionSource()
+                                                    },
+                                                    indication = null,
+                                                    onClick = { toggleSearch() }
+                                                ),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Close,
+                                                contentDescription = "关闭搜索",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(20.dp)
                                             )
                                         }
-                                        innerTextField()
-                                    }
-                                    Box(
-                                        modifier = Modifier
-                                            .size(40.dp)
-                                            .clickable(
-                                                interactionSource = remember {
-                                                    MutableInteractionSource()
-                                                },
-                                                indication = null,
-                                                onClick = { toggleSearch() }
-                                            ),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Close,
-                                            contentDescription = "关闭搜索",
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier
-                                                .size(20.dp)
-                                                .alpha(if (isSearching) 1f else 0f)
-                                        )
                                     }
                                 }
-                            }
-                        )
+                            )
+                        }
                     }
                 }
             }
         },
         actions = {
+            if (!selectionMode) {
+                SearchActionButton(
+                    showSearch = showSearch,
+                    progress = searchBarProgress,
+                    searchWeight = searchWeight,
+                    searchErase = searchErase,
+                    onClick = { toggleSearch() }
+                )
+            }
             if (selectionMode) {
                 // 全选 / 取消全选
                 IconButton(onClick = { onSelectAll?.invoke() }) {
@@ -373,22 +395,6 @@ fun AppTopBar(
                     )
                 }
             } else {
-            // ===== 搜索按钮：使用独立擦除动画 =====
-            Box(
-                modifier = Modifier.eraseToRight(
-                    searchErase,
-                    fade = searchWeight != null,
-                    fly = searchWeight == null
-                )
-            ) {
-                IconButton(
-                    onClick = { toggleSearch() },
-                    modifier = Modifier.requiredWidth(IconSlotWidth)
-                ) {
-                    Icon(Icons.Default.Search, contentDescription = "搜索")
-                }
-            }
-
             // ===== 用户按钮：和搜索按钮同一套擦除动画 =====
             Box(
                 modifier = Modifier.eraseToRight(
@@ -439,17 +445,17 @@ fun AppTopBar(
             }
 
             // ===== 中间按钮 + 更多按钮复合区域 =====
+            // 不裁剪：更多按钮要能一路画到容器右外面，看起来才像被推出屏幕
             Box(
                 modifier = Modifier
                     .width(actionGroupWidth)
                     .height(48.dp)
-                    .clipToBounds()
             ) {
-                // 更多按钮：使用独立擦除动画
+                // 更多按钮：被搜索栏推走
                 Box(
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
-                        .eraseToRight(moreButtonErase)
+                        .pushOutToRight(enabled = true, push = searchBarProgress)
                 ) {
                     IconButton(
                         onClick = { viewModel.isMoreMenuExpanded.value = true },
@@ -491,6 +497,28 @@ fun AppTopBar(
             }
         }
     )
+}
+
+@Composable
+private fun SearchActionButton(
+    showSearch: Boolean,
+    progress: Float,
+    searchWeight: (() -> Float)?,
+    searchErase: Float?,
+    onClick: () -> Unit
+) {
+    val erase = if (searchWeight != null) {
+        // 连续模式：外部权重里已经把搜索态算成 0，逐帧跟手不额外补动画
+        searchErase ?: 0f
+    } else {
+        // 普通模式：搜索栏展开到哪，按钮槽位就收到哪
+        (if (showSearch) 1f else 0f) * (1f - progress)
+    }
+    Box(modifier = Modifier.eraseToRight(erase, fade = true, fly = false)) {
+        IconButton(onClick = onClick, modifier = Modifier.requiredWidth(IconSlotWidth)) {
+            Icon(Icons.Default.Search, contentDescription = "搜索")
+        }
+    }
 }
 
 
