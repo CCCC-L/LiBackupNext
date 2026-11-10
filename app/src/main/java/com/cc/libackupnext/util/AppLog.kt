@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
+import android.os.SystemClock
 import android.system.Os
 import android.util.Log
 import android.widget.Toast
@@ -307,7 +308,10 @@ object AppLog {
         val allow = countAndAllow()
 
         if (isMain && allow) {
-            toastOnMain("应用遇到问题，日志已保存，可在 设置 → 导出日志 查看")
+            toastOnMain(
+                "应用遇到问题，日志已保存，可在 设置 → 导出日志 查看",
+                longToast = true
+            )
 
             // 重活放到恢复后的消息队列里做：handler 里做跨进程 AIDL 会卡住续命
             Handler(Looper.getMainLooper()).post {
@@ -362,11 +366,33 @@ object AppLog {
         runCatching { appContext.startActivity(intent) }
     }
 
-    fun toastOnMain(text: String) {
+    // ==================== 全应用 Toast ====================
+    //
+    // 只保留一个 Toast 实例 + 一道时间闸门：上一条还在屏幕上时直接丢掉新提示，
+    // 不排队、不叠文字（双击守卫里原来就是这套做法，现在提到全局共用）。
+
+    /** LENGTH_SHORT / LENGTH_LONG 在系统里的显示时长，用来判断上一条是否还在显示。 */
+    private const val TOAST_SHORT_MILLIS = 2000L
+    private const val TOAST_LONG_MILLIS = 3500L
+
+    private val toastLock = Any()
+    private var toast: Toast? = null
+    private var toastUntil = 0L
+
+    /** 全应用共用的吐司提示：上一条还在弹出时不再弹新的。可从任意线程调用。 */
+    fun toastOnMain(text: String, longToast: Boolean = false) {
         runCatching {
             Handler(Looper.getMainLooper()).post {
-                runCatching {
-                    Toast.makeText(appContext, text, Toast.LENGTH_LONG).show()
+                val now = SystemClock.elapsedRealtime()
+                synchronized(toastLock) {
+                    if (now < toastUntil) return@synchronized
+                    val duration = if (longToast) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
+                    val t = toast ?: Toast.makeText(appContext, text, duration).also { toast = it }
+                    t.setText(text)
+                    t.duration = duration
+                    t.show()
+                    toastUntil = now +
+                            if (longToast) TOAST_LONG_MILLIS else TOAST_SHORT_MILLIS
                 }
             }
         }
@@ -466,7 +492,17 @@ object AppLog {
         append("包名: ").append(appContext.packageName).append('\n')
         append("rustic_core: ").append(BuildConfig.RUSTIC_CORE_VERSION).append('\n')
         append("rustic_backend: ").append(BuildConfig.RUSTIC_BACKEND_VERSION).append('\n')
-        append("仓库路径: ").append(runCatching { AppPrefs.repoPath }.getOrDefault("")).append('\n')
+        // 远程 location 本身不含凭据，但也别把服务地址整条写进导出包
+        append("仓库路径: ").append(
+            runCatching {
+                val location = AppPrefs.repoPath
+                if (AppPrefs.isRemote) {
+                    AppPrefs.remoteRepos
+                        .firstOrNull { location.startsWith("remote:${it.id}:") }
+                        ?.redacted() ?: "远程仓库"
+                } else location
+            }.getOrDefault("")
+        ).append('\n')
         append("详细日志: ").append(if (verbose) "开" else "关").append('\n')
 
         append("\n--- 设备 ---\n")

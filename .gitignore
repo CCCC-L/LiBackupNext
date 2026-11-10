@@ -15,5 +15,5 @@
 local.properties
 
 # Rust
-/app/src/main/rustic_bridge/target
+/app/src/main/rust_bridge/target
 /app/src/main/jniLibs

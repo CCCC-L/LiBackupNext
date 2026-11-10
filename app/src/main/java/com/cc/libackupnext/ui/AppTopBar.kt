@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -28,6 +30,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
@@ -55,6 +58,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.ui.theme.IconSlotWidth
+import com.cc.libackupnext.ui.theme.actionGroupWidthTarget
 import com.cc.libackupnext.ui.theme.SearchBarDurationMs
 import com.cc.libackupnext.ui.theme.collapseHorizontally
 import com.cc.libackupnext.ui.theme.eraseToRight
@@ -62,19 +66,23 @@ import com.cc.libackupnext.ui.theme.pushOutToRight
 import com.cc.libackupnext.ui.theme.rememberActionGroupWidth
 import com.cc.libackupnext.ui.theme.rememberEraseProgress
 import com.cc.libackupnext.ui.theme.rememberMiddleButtonEndPadding
+import com.cc.libackupnext.ui.theme.rememberPendingRetryPulse
 import com.cc.libackupnext.ui.theme.rememberSearchBarProgress
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppTopBar(
-    viewModel: MainViewModel,
+    /** tab 页传 Activity 作用域的 ViewModel；文件夹选择弹窗传 null，自己接管搜索和动作区。 */
+    viewModel: MainViewModel? = null,
     title: String,
     pageBackground: Color,
     searchBarBackground: Color,
     navigationIcon: (@Composable () -> Unit)? = null,
     middleIcon: ImageVector = Icons.Default.Sort,
-    onMiddleClick: () -> Unit = { viewModel.isSortMenuExpanded.value = true },
+    onMiddleClick: () -> Unit = {
+        viewModel?.let { it.isSortMenuExpanded.value = true }
+    },
     showSortMenu: Boolean = true,
     /** 排序菜单最后一项放什么：列表页是「显示系统应用」，批量页换成别的。 */
     sortMenuExtra: SortMenuExtra = SortMenuExtra.SYSTEM_APPS,
@@ -134,6 +142,9 @@ fun AppTopBar(
     onOpenSettings: (() -> Unit)? = null,
     /** 「重新加载」；传 null 就不显示这一项（设置页）。 */
     onReload: (() -> Unit)? = null,
+    /** 非空时在「更多」菜单末尾加「继续未完成（N）」；只有 tab 页传。 */
+    pendingRetryCount: Int = 0,
+    onRetryPending: (() -> Unit)? = null,
     moreMenuContent: @Composable (onDismiss: () -> Unit) -> Unit = { onDismiss ->
         // 传了才显示：设置页这种没有可刷新内容的页面不传
         if (onReload != null) {
@@ -172,33 +183,87 @@ fun AppTopBar(
                 }
             )
         }
-    }
+        // 有未完成批次才出现，放菜单最末尾；和「更多」按钮一起闪红提示
+        if (onRetryPending != null) {
+            DropdownMenuItem(
+                text = {
+                    val pulse = rememberPendingRetryPulse(true)
+                    Text(
+                        "继续未完成（$pendingRetryCount）",
+                        color = pulse ?: Color.Unspecified
+                    )
+                },
+                onClick = {
+                    onDismiss()
+                    onRetryPending.invoke()
+                }
+            )
+        }
+    },
+    /**
+     * 非空时替换「搜索按钮之后」的动作区（文件夹选择弹窗用它平铺新建 / 刷新）。
+     * 搜索按钮始终由顶栏统一渲染，展开搜索栏时在自己槽位内擦除让位。
+     */
+    customActions: (@Composable RowScope.() -> Unit)? = null,
+    /** Dialog 是独立窗口且外层已做过 statusBarsPadding，传零 inset 免得顶栏再下沉一次。 */
+    windowInsets: WindowInsets = TopAppBarDefaults.windowInsets
 ) {
-    val vmIsSearching by viewModel.isSearching.collectAsState()
-    val vmSearchQuery by viewModel.searchQuery.collectAsState()
+    // ViewModel 可空：文件夹选择弹窗不碰主页面的全局状态，只靠外部接管的搜索参数驱动。
+    val vmIsSearching = if (viewModel != null) {
+        viewModel.isSearching.collectAsState().value
+    } else {
+        false
+    }
+    val vmSearchQuery = if (viewModel != null) {
+        viewModel.searchQuery.collectAsState().value
+    } else {
+        ""
+    }
 
     // 传了 searchOpen 就用外部的状态（例如应用信息页自己管搜索）
     // 多选模式下不显示搜索框（标题要让位给「已选择 N 项」）
     val isSearching = showSearch && (searchOpen ?: vmIsSearching) && !selectionMode
     val searchQuery = searchQueryText ?: vmSearchQuery
-    val toggleSearch: () -> Unit = { onToggleSearch?.invoke() ?: viewModel.toggleSearch() }
-    val updateQuery: (String) -> Unit = { onSearchQueryChange?.invoke(it) ?: viewModel.updateSearchQuery(it) }
+    val toggleSearch: () -> Unit = {
+        onToggleSearch?.invoke() ?: viewModel?.toggleSearch()
+    }
+    val updateQuery: (String) -> Unit = { text ->
+        onSearchQueryChange?.invoke(text) ?: viewModel?.updateSearchQuery(text)
+    }
 
     // 搜索栏开合共用的进度：状态留在顶栏这一层，内容收完被移除也不会丢动画。
     val searchBarProgress by rememberSearchBarProgress(isSearching)
 
+    // 关闭那一帧 ViewModel / 弹窗会清空 query，留一份最近的输入给收缩动画继续显示，
+    // 否则收到一半文字会突然跳回占位文案。下次打开时 searchQuery 为空，自然回到占位符。
     var closingQuery by remember { mutableStateOf("") }
     LaunchedEffect(isSearching, searchQuery) {
         if (isSearching) closingQuery = searchQuery
     }
     val displayQuery = if (isSearching) searchQuery else closingQuery
 
-    val isMoreMenuExpanded by viewModel.isMoreMenuExpanded.collectAsState()
+    val isMoreMenuExpanded = if (viewModel != null) {
+        viewModel.isMoreMenuExpanded.collectAsState().value
+    } else {
+        false
+    }
 
     // 用户菜单状态
-    val users by viewModel.users.collectAsState()
-    val isUserMenuExpanded by viewModel.isUserMenuExpanded.collectAsState()
-    val currentUserId by viewModel.currentUserId.collectAsState()
+    val users = if (viewModel != null) {
+        viewModel.users.collectAsState().value
+    } else {
+        emptyList()
+    }
+    val isUserMenuExpanded = if (viewModel != null) {
+        viewModel.isUserMenuExpanded.collectAsState().value
+    } else {
+        false
+    }
+    val currentUserId = if (viewModel != null) {
+        viewModel.currentUserId.collectAsState().value
+    } else {
+        0
+    }
 
     // 搜索框自动聚焦
     val searchFocusRequester = remember { FocusRequester() }
@@ -214,8 +279,7 @@ fun AppTopBar(
         }
     }
 
-    // 搜索按钮一律在自己槽位内擦除；更多按钮仍「被搜索栏推走」（它在最右端，
-    // 右边没有别的按钮，飞出屏幕不会穿过任何图标）。连续模式按手指权重驱动同一份擦除。
+    // 搜索按钮一律在自己槽位内擦除
     val searchOpenErase by rememberEraseProgress(visible = !isSearching)
     val searchErase = searchWeight?.let { weight -> weight() * searchOpenErase }
 
@@ -228,10 +292,15 @@ fun AppTopBar(
 
     // 中间按钮的位置动画 & 复合容器宽度动画
     val middleButtonEndPadding by rememberMiddleButtonEndPadding(isSearching)
-    // 没有中间按钮时右边只剩「更多」一个槽位（搜索态也是只剩一个）
-    val actionGroupWidthAnimated by rememberActionGroupWidth(isSearching || !showMiddleButton)
+    // 搜索态更多按钮被推走，只剩中间按钮；中间按钮本身也可能被擦除（设置 / 系统页
+    // 权重为 0），这时仍要留一段尾部边距，否则搜索框会顶到屏幕边、和列表不对齐。
+    // 连续模式直接用跟手权重，非连续模式按 showMiddleButton 走 200ms 动画。
+    val middleVisible = (middleWeightValue ?: (if (showMiddleButton) 1f else 0f))
+        .coerceIn(0f, 1f)
+    val actionGroupWidthAnimated by rememberActionGroupWidth(isSearching, middleVisible)
     val actionGroupWidth = if (middleWeightValue != null) {
-        IconSlotWidth * (if (isSearching) 1f else 1f + middleWeightValue)
+        // 连续模式逐帧跟手，不补 200ms 动画
+        actionGroupWidthTarget(isSearching, middleVisible)
     } else {
         actionGroupWidthAnimated
     }
@@ -240,6 +309,7 @@ fun AppTopBar(
 
     TopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(containerColor = pageBackground),
+        windowInsets = windowInsets,
         navigationIcon = {
             if (navigationIcon != null) navigationIcon()
         },
@@ -370,6 +440,8 @@ fun AppTopBar(
             }
         },
         actions = {
+            // 搜索按钮统一由顶栏渲染（包括自定义动作区的弹窗），展开搜索栏时
+            // 在自己槽位内擦除让位；多选模式让位给全选 / 反选。
             if (!selectionMode) {
                 SearchActionButton(
                     showSearch = showSearch,
@@ -379,7 +451,10 @@ fun AppTopBar(
                     onClick = { toggleSearch() }
                 )
             }
-            if (selectionMode) {
+            if (customActions != null) {
+                // 文件夹选择弹窗：搜索按钮之后只放新建 / 刷新，不带用户 / 排序 / 更多菜单
+                customActions.invoke(this)
+            } else if (selectionMode) {
                 // 全选 / 取消全选
                 IconButton(onClick = { onSelectAll?.invoke() }) {
                     Icon(
@@ -405,8 +480,10 @@ fun AppTopBar(
             ) {
                 IconButton(
                     onClick = {
-                        viewModel.loadUsers()
-                        viewModel.isUserMenuExpanded.value = true
+                        viewModel?.let { vm ->
+                            vm.loadUsers()
+                            vm.isUserMenuExpanded.value = true
+                        }
                     },
                     modifier = Modifier.requiredWidth(IconSlotWidth)
                 ) {
@@ -414,7 +491,9 @@ fun AppTopBar(
                 }
                 DropdownMenu(
                     expanded = isUserMenuExpanded,
-                    onDismissRequest = { viewModel.isUserMenuExpanded.value = false },
+                    onDismissRequest = {
+                        viewModel?.let { it.isUserMenuExpanded.value = false }
+                    },
                     shape = MaterialTheme.shapes.large,
                     containerColor = menuColor
                 ) {
@@ -428,9 +507,11 @@ fun AppTopBar(
                             DropdownMenuItem(
                                 text = { Text(user.name ?: "用户 ${user.id}") },
                                 onClick = {
-                                    viewModel.currentUserId.value = user.id
-                                    viewModel.isUserMenuExpanded.value = false
-                                    viewModel.loadList()
+                                    viewModel?.let { vm ->
+                                        vm.currentUserId.value = user.id
+                                        vm.isUserMenuExpanded.value = false
+                                        vm.loadList()
+                                    }
                                 },
                                 leadingIcon = {
                                     RadioButton(
@@ -458,18 +539,30 @@ fun AppTopBar(
                         .pushOutToRight(enabled = true, push = searchBarProgress)
                 ) {
                     IconButton(
-                        onClick = { viewModel.isMoreMenuExpanded.value = true },
+                        onClick = {
+                            viewModel?.let { it.isMoreMenuExpanded.value = true }
+                        },
                         modifier = Modifier.requiredWidth(IconSlotWidth)
                     ) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "更多")
+                        // 有未完成批次时呼吸闪红，没完成时保持原本图标色
+                        val pulse = rememberPendingRetryPulse(onRetryPending != null)
+                        Icon(
+                            Icons.Default.MoreVert,
+                            contentDescription = "更多",
+                            tint = pulse ?: LocalContentColor.current
+                        )
                     }
                     DropdownMenu(
                         expanded = isMoreMenuExpanded,
-                        onDismissRequest = { viewModel.isMoreMenuExpanded.value = false },
+                        onDismissRequest = {
+                            viewModel?.let { it.isMoreMenuExpanded.value = false }
+                        },
                         shape = MaterialTheme.shapes.large,
                         containerColor = menuColor
                     ) {
-                        moreMenuContent { viewModel.isMoreMenuExpanded.value = false }
+                        moreMenuContent {
+                            viewModel?.let { it.isMoreMenuExpanded.value = false }
+                        }
                     }
                 }
 
@@ -493,12 +586,19 @@ fun AppTopBar(
                 }
             }
 
-            if (showSortMenu) SortMenu(viewModel, sortMenuExtra, showSortTypes)
+            if (showSortMenu) viewModel?.let { SortMenu(it, sortMenuExtra, showSortTypes) }
             }
         }
     )
 }
 
+/**
+ * 搜索按钮：所有页面统一在自己 48dp 槽位内被裁掉、宽度收到 0，右边缘始终贴着
+ * 下一个动作按钮，不会飞过右侧按钮再消失在屏幕边界。主 tab 页和文件夹选择弹窗
+ * 共用这一颗，进度都来自同一个 [progress]（展开 / 收缩完全镜像）。
+ *
+ * 切页签跟手的连续模式例外：改由外部权重驱动同一份擦除，才能逐帧跟手。
+ */
 @Composable
 private fun SearchActionButton(
     showSearch: Boolean,

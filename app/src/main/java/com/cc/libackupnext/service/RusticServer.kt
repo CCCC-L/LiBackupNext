@@ -138,12 +138,13 @@ object RusticServer {
     private external fun nativeSetLogDir(path: String): Int
 
     /**
-     * 把仓库地址和密码写进 Rust 侧的静态凭据，顺便清掉三个仓库缓存。
+     * 把仓库地址、密码和后端选项写进 Rust 侧的静态凭据，顺便清掉三个仓库缓存。
      *
      * 这是业务命令唯一的凭据来源：root 侧 Kotlin 不留副本，业务请求的 JSON
      * 都不带 path / password。initRepo 例外，它自带候选凭据只用于本次校验。
+     * path 可以是本地路径或带协议前缀的仓库位置，options 是 JSON 对象字符串。
      */
-    private external fun nativeSetRepo(path: String, password: String): Int
+    private external fun nativeSetRepo(path: String, password: String, options: String): Int
 
     class Service : RootService() {
         override fun onBind(intent: Intent): IBinder = Impl(applicationContext).apply { onBind() }
@@ -158,7 +159,7 @@ object RusticServer {
 
         fun onBind() {
             AppLog.i(TAG, "root 服务绑定，加载 native 库")
-            nativeError = runCatching { loadNativeLibrary() }
+            nativeError = runCatching { loadRusticBridge() }
                 .exceptionOrNull()
                 ?.let { t ->
                     AppLog.e(TAG, "load librustic_bridge.so failed", t)
@@ -186,22 +187,24 @@ object RusticServer {
         }.getOrNull()
 
         /** 主进程在绑定 / 初始化成功 / 改密码 / 清配置时调一次，凭据只进 Rust 静态配置。 */
-        override fun setRepo(path: String, password: String) {
+        override fun setRepo(path: String, password: String, options: String) {
             if (nativeError != null) return
             AppLog.i(TAG, "setRepo：注入仓库凭据（不含密码内容）")
-            runCatching { nativeSetRepo(path, password) }
+            runCatching { nativeSetRepo(path, password, options) }
                 .onFailure { AppLog.e(TAG, "nativeSetRepo failed", it) }
         }
 
         /**
-         * 候选路径和密码只随这一次请求下传，不写全局凭据。
+         * 候选路径、密码和后端选项只随这一次请求下传，不写全局凭据。
          * 成功与否由主进程判断，失败时不需要任何回滚或状态恢复。
          */
-        override fun initRepo(path: String, password: String): String {
+        override fun initRepo(path: String, password: String, options: String): String {
             nativeError?.let { return it }
             val request = JSONObject().apply {
                 put("path", path)
                 put("password", password)
+                // 和 nativeSetRepo 一样容个错：非法 JSON 退化成空 options，本地仓库照常工作
+                put("options", runCatching { JSONObject(options) }.getOrDefault(JSONObject()))
             }
             return runSimple(request.toString(), ::nativeInitRepo, "初始化失败")
         }
@@ -777,11 +780,6 @@ object RusticServer {
             thread.interrupt()
             runCatching { thread.join(500) }
         }
-    }
-
-    /** root 进程里 java.library.path 不可靠，直接用绝对路径加载。 */
-    private fun loadNativeLibrary() {
-        System.loadLibrary("rustic_bridge")
     }
 
     private fun writeFrameAt(buffer: ByteBuffer, offset: Int, json: String) {

@@ -1,10 +1,5 @@
 package com.cc.libackupnext.ui.screen
 
-import com.cc.libackupnext.ui.util.rememberFolderPicker
-
-import android.net.Uri
-import android.provider.DocumentsContract
-import android.widget.Toast
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material.icons.Icons
@@ -15,18 +10,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.data.AppBackupSummary
 import com.cc.libackupnext.data.BackupTarget
+import com.cc.libackupnext.data.FolderPickerLauncher
+import com.cc.libackupnext.data.FolderPickerMode
 import com.cc.libackupnext.entity.dirAppInfo
 import java.io.File
+import com.cc.libackupnext.util.AppLog
 
 /**
  * 文件页：列出要备份的目录。
  *
- * 默认 4 个（DCIM / Download / Music / Pictures），右下角的圆形按钮打开系统文件选择器
- * 再挑别的目录。点一行进这个目录的「文件信息」页，快照 label 是 `dir:<绝对路径>`。
+ * 默认 4 个（DCIM / Download / Music / Pictures），右下角的圆形按钮打开全屏文件夹选择
+ * 弹窗再挑别的目录。点一行进这个目录的「文件信息」页，快照 label 是 `dir:<绝对路径>`。
  */
 @Composable
 fun FileListScreen(
@@ -39,6 +36,8 @@ fun FileListScreen(
     listState: LazyListState,
     onOpen: (String) -> Unit,
     onAdd: (String) -> Unit,
+    /** 打开通用文件夹选择弹窗；这里允许一路退到文件系统根 "/"。 */
+    onOpenFolderPicker: (FolderPickerLauncher) -> Unit = {},
     modifier: Modifier = Modifier,
     /** 倒序：顶栏排序菜单里唯一对文件夹列表生效的开关。 */
     reverse: Boolean = false,
@@ -46,24 +45,25 @@ fun FileListScreen(
     isRefreshing: Boolean = false,
     onRefresh: (() -> Unit)? = null,
 ) {
-    val context = LocalContext.current
+    // 文件 tab 的 + 号允许一路退到 /：备份目标不一定是内部存储里的目录
+    val pickFolder: () -> Unit = {
+        onOpenFolderPicker(
+            FolderPickerLauncher(
+                mode = FolderPickerMode.LOCAL,
+                allowRoot = true,
+                onPick = { path ->
+                    when {
+                        path in dirs -> if (File(path).isDirectory) {
+                            AppLog.toastOnMain("已经在列表里了")
+                        } else {
+                            onAdd(path)
+                        }
 
-    // 系统文件夹选择器：契约与 URI 权限持久化由 FolderPicker 统一处理
-    val pickFolder = rememberFolderPicker { uri ->
-        val path = treeUriToPath(uri)
-        when {
-            path == null -> Toast
-                .makeText(context, "这个位置拿不到绝对路径，换一个文件夹试试", Toast.LENGTH_SHORT)
-                .show()
-
-            path in dirs -> if (File(path).isDirectory) {
-                Toast.makeText(context, "已经在列表里了", Toast.LENGTH_SHORT).show()
-            } else {
-                onAdd(path)
-            }
-
-            else -> onAdd(path)
-        }
+                        else -> onAdd(path)
+                    }
+                }
+            )
+        )
     }
 
     // 目录被删掉之后：还有备份就留着（划线置灰提示「已不存在」），
@@ -90,7 +90,7 @@ fun FileListScreen(
         modifier = modifier,
         isRefreshing = isRefreshing,
         onRefresh = onRefresh,
-        // 右下角圆形按钮：打开系统文件夹选择器
+        // 右下角圆形按钮：打开全屏文件夹选择弹窗
         extraAction = {
             FloatingActionButton(
                 onClick = pickFolder,
@@ -101,23 +101,4 @@ fun FileListScreen(
             }
         }
     )
-}
-
-/**
- * 把 SAF 选的目录 URI 转成文件系统绝对路径。
- *
- * `content://com.android.externalstorage.documents/tree/primary%3ADCIM` 的 documentId 是
- * `primary:DCIM`，对应 `/sdcard/DCIM`；SD 卡之类的卷是 `XXXX-XXXX:dir`，对应 `/storage/XXXX-XXXX/dir`。
- */
-private fun treeUriToPath(uri: Uri): String? {
-    val docId = runCatching { DocumentsContract.getTreeDocumentId(uri) }.getOrNull()
-        ?: return null
-    val parts = docId.split(":", limit = 2)
-    if (parts.size != 2 || parts[1].isBlank()) return null
-    val path = if (parts[0].equals("primary", ignoreCase = true)) {
-        "/storage/emulated/0/${parts[1]}"
-    } else {
-        "/storage/${parts[0]}/${parts[1]}"
-    }
-    return path.trimEnd('/').ifBlank { null }
 }

@@ -57,6 +57,10 @@
     <service android:name=".service.RusticServer" android:exported="false"
        android:process=":root"
        tools:ignore="Instantiatable"/>
+
+    <service android:name=".service.RcloneServer" android:exported="false"
+       android:process=":root"
+       tools:ignore="Instantiatable"/>
   </application>
 
 </manifest>

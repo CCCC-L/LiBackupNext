@@ -8,9 +8,9 @@ plugins {
 
 // ==================== rustic 依赖版本 ====================
 
-// 直接读 rustic_bridge/Cargo.toml，编译期写进 BuildConfig，设置页用来展示
+// 直接读 rust_bridge/rustic_bridge/Cargo.toml，编译期写进 BuildConfig，设置页用来展示
 val cargoTomlText = providers.fileContents(
-    layout.projectDirectory.file("src/main/rustic_bridge/Cargo.toml")
+    layout.projectDirectory.file("src/main/rust_bridge/rustic_bridge/Cargo.toml")
 ).asText
 
 fun cargoCrateVersion(text: String, crate: String): String {
@@ -92,6 +92,10 @@ android {
         jniLibs {
             // cargo-ndk 会把依赖 crate 的 cdylib 一起拷进来，这里只保留我们自己的库
             excludes += "**/libcrc_fast-*.so"
+            // go build -o xxx.so 会顺带生成 xxx.h，别打进 APK
+            excludes += "**/*.h"
+            // librclone.so 是精简版 rclone 的 c-shared 库，librclone_bridge.so 会按
+            // nativeLibraryDir 里的绝对路径 dlopen 它，所以这些 .so 都必须解压出来
             // 压缩 APK 里的 .so（安装时解压），能省一大截体积
             useLegacyPackaging = true
         }
@@ -135,7 +139,7 @@ dependencies {
 
 // ==================== rustic JNI 库 ====================
 
-val rustDir = rootProject.layout.projectDirectory.dir("app/src/main/rustic_bridge")
+val rustDir = rootProject.layout.projectDirectory.dir("app/src/main/rust_bridge")
 val jniLibsDir = layout.projectDirectory.dir("src/main/jniLibs")
 
 /** 从 local.properties 的 sdk.dir 推出 NDK 路径，给 cargo-ndk 用。 */
@@ -178,7 +182,7 @@ val rustAbis: List<String> = (providers.gradleProperty("rustAbis").orNull ?: "ar
 
 val buildRust = tasks.register<Exec>("buildRust") {
     group = "build"
-    description = "编译 rustic JNI 库（默认 arm64-v8a + x86_64，可用 -PrustAbis 指定）"
+    description = "编译 rustic_bridge / rclone_bridge 两个 JNI 库（默认 arm64-v8a + x86_64，可用 -PrustAbis 指定）"
 
     workingDir = rustDir.asFile
     ndkHome?.let { environment("ANDROID_NDK_HOME", it) }
@@ -201,14 +205,100 @@ val buildRust = tasks.register<Exec>("buildRust") {
             add(jniLibsDir.asFile.absolutePath)
             add("build")
             add("--release")
+            // virtual workspace：显式带 --workspace，保证两个 cdylib 都产出
+            add("--workspace")
         }
     )
 
-    inputs.dir(rustDir.dir("src"))
     inputs.file(rustDir.file("Cargo.toml"))
+    // 两个 crate 的源码 / manifest 都要进 inputs，改任意一个都触发重编
+    inputs.dir(rustDir.dir("rustic_bridge/src"))
+    inputs.file(rustDir.file("rustic_bridge/Cargo.toml"))
+    inputs.dir(rustDir.dir("rclone_bridge/src"))
+    inputs.file(rustDir.file("rclone_bridge/Cargo.toml"))
     outputs.dir(jniLibsDir)
 }
 
+// ==================== 精简 librclone（进程内 RC 库） ====================
+
+/** 和 cargoCmd 一样，允许用环境变量 GO 指定 go 可执行文件，否则交给 PATH 解析。 */
+val goCmd: String = System.getenv("GO")?.takeIf { it.isNotBlank() } ?: "go"
+
+val librcloneSrcDir = rootProject.layout.projectDirectory.dir("app/librclone")
+
+/** GOOS=android + c-shared 必须走 NDK 的 clang；Windows 上带 .cmd 后缀。 */
+val librcloneHostTag: String = run {
+    val osName = System.getProperty("os.name").orEmpty()
+    when {
+        osName.startsWith("Windows") -> "windows-x86_64"
+        osName.startsWith("Mac") -> "darwin-x86_64"
+        else -> "linux-x86_64"
+    }
+}
+val librcloneClangExt: String = if (librcloneHostTag == "windows-x86_64") ".cmd" else ""
+
+/** ABI -> (GOARCH, NDK clang 前缀)。debug 要 x86_64 给模拟器，正式包只会用到 arm64。 */
+fun librcloneTargetOf(abi: String): Pair<String, String> = when (abi) {
+    "arm64-v8a" -> "arm64" to "aarch64-linux-android31-clang"
+    "x86_64" -> "amd64" to "x86_64-linux-android31-clang"
+    else -> error("librclone 不支持的 ABI：$abi（rustAbis 只支持 arm64-v8a / x86_64）")
+}
+
+// jniLibs 被 .gitignore 忽略，首次克隆后必须能自动重建，所以挂到 preBuild。
+// ABI 列表直接复用 rustAbis：debug 默认 arm64 + x86_64 两个，打正式包时用
+// 每个 ABI 一个 task，inputs/outputs 独立，改一个 ABI 不会触发另一个重编。
+val librcloneTasks = rustAbis.map { abi ->
+    val (goArch, clangPrefix) = librcloneTargetOf(abi)
+    val out = layout.projectDirectory.file("src/main/jniLibs/$abi/librclone.so")
+    val taskName = "buildLibrclone_${abi.replace('-', '_')}"
+    val clang = ndkHome?.let { ndk ->
+        File(
+            ndk,
+            "toolchains/llvm/prebuilt/$librcloneHostTag/bin/$clangPrefix$librcloneClangExt"
+        ).takeIf { it.exists() }?.absolutePath
+    }
+    if (clang == null) {
+        logger.warn("找不到 NDK 的 $clangPrefix，$taskName 会失败；请检查 ANDROID_NDK_HOME / local.properties")
+    }
+
+    tasks.register<Exec>(taskName) {
+        group = "build"
+        description = "编译 $abi 的 librclone.so（c-shared，webdav/sftp/smb + serve restic RC）"
+
+        workingDir = librcloneSrcDir.asFile
+        inputs.file(librcloneSrcDir.file("main.go"))
+        inputs.file(librcloneSrcDir.file("go.mod"))
+        inputs.file(librcloneSrcDir.file("go.sum"))
+        outputs.file(out)
+
+        environment("GOTOOLCHAIN", "auto")
+        environment(
+            "GOPROXY",
+            System.getenv("GOPROXY").takeUnless { it.isNullOrBlank() } ?: "https://goproxy.cn,direct"
+        )
+        environment("GOOS", "android")
+        environment("GOARCH", goArch)
+        environment("CGO_ENABLED", "1")
+        environment("GOFLAGS", "-mod=mod")
+        clang?.let { environment("CC", it) }
+
+        // 不挂 doFirst/doLast 闭包：Gradle Kotlin DSL 的脚本对象引用会破坏 configuration cache。
+        // 顺带生成的 librclone.h 由 packaging.excludes 挡在 APK 外。
+        commandLine(
+            goCmd, "build", "-buildmode=c-shared", "-trimpath",
+            "-ldflags=-s -w",
+            "-o", out.asFile.absolutePath, "."
+        )
+    }
+}
+
+/** 聚合任务：保留原来的任务名，外部脚本 / 文档不用改。 */
+val buildLibrclone = tasks.register("buildLibrclone") {
+    group = "build"
+    description = "编译 librclone.so（ABI：${rustAbis.joinToString()}）"
+    dependsOn(librcloneTasks)
+}
+
 tasks.named("preBuild").configure {
-    dependsOn(buildRust)
+    dependsOn(buildRust, buildLibrclone)
 }

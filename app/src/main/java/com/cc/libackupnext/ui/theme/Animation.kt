@@ -3,11 +3,16 @@ package com.cc.libackupnext.ui.theme
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.animateColor
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -16,10 +21,12 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.gestures.DraggableState
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -49,6 +56,8 @@ private const val POSITION_DURATION_MS = 200L
 const val SearchBarDurationMs = 300
 private const val PAGE_TRANSITION_DURATION_MS = 300
 private const val ROW_COLOR_DURATION_MS = 180
+/** 未完成批次的闪红呼吸周期（单程）。 */
+private const val PENDING_RETRY_PULSE_DURATION_MS = 500
 
 /** 每个图标槽位的宽度 */
 val IconSlotWidth: Dp = 48.dp
@@ -170,14 +179,39 @@ fun rememberMiddleButtonEndPadding(isSearching: Boolean): State<Dp> =
     )
 
 /**
- * 中间按钮 + 更多按钮的容器宽度。
- * 非搜索态：两个图标位（因为有两个按钮）。
- * 搜索态：一个图标位（只剩中间按钮）。
+ * 搜索态、复合容器里一颗按钮都不剩时，右侧仍要留的尾部边距。
+ * TopAppBar 自带约 4dp，补成 16dp 才能让搜索框右边缘和列表卡片
+ * （AppListContainer 默认 horizontal = 16.dp）齐平。
  */
+val SearchBarTrailingPadding: Dp = 12.dp
+
+/**
+ * 中间按钮 + 更多按钮复合容器的目标宽度。
+ *
+ * 非搜索态：更多按钮 1 个图标位，加上中间按钮按 [middleVisible] 占的比例。
+ * 搜索态：更多按钮被推走，宽度跟着中间按钮收缩，但**不收到 0** —— 没有中间按钮的
+ * 页签（设置 / 系统）仍保留 [SearchBarTrailingPadding]，否则搜索框会顶到屏幕边、
+ * 和下面的列表不对齐。
+ *
+ * 连续模式直接取它逐帧跟手，非连续模式拿它当动画目标，两处共用一份公式。
+ */
+fun actionGroupWidthTarget(isSearching: Boolean, middleVisible: Float): Dp {
+    val v = middleVisible.coerceIn(0f, 1f)
+    return if (isSearching) {
+        SearchBarTrailingPadding + (IconSlotWidth - SearchBarTrailingPadding) * v
+    } else {
+        IconSlotWidth * (1f + v)
+    }
+}
+
+/** 复合容器宽度的 200ms 动画版（非连续模式用）。 */
 @Composable
-fun rememberActionGroupWidth(isSearching: Boolean): State<Dp> =
+fun rememberActionGroupWidth(
+    isSearching: Boolean,
+    middleVisible: Float = 1f
+): State<Dp> =
     animateDpAsState(
-        targetValue = if (isSearching) IconSlotWidth else IconSlotWidth * 2,
+        targetValue = actionGroupWidthTarget(isSearching, middleVisible),
         animationSpec = tween(durationMillis = ERASE_DURATION_MS.toInt()),
         label = "actionGroupWidth"
     )
@@ -358,4 +392,25 @@ fun <S> pageTransitionSpec(
                     animationSpec = tween(PAGE_TRANSITION_DURATION_MS)
                 ) + fadeOut(animationSpec = tween(PAGE_TRANSITION_DURATION_MS)))
     }.using(SizeTransform(clip = false))
+}
+
+/**
+ * 有未完成批次时的呼吸红：在 error 色和默认图标色之间往复。
+ *
+ * 返回 null 表示不闪，调用方保留原本的 tint / 文字色，不影响其它页面。
+ */
+@Composable
+fun rememberPendingRetryPulse(active: Boolean): Color? {
+    if (!active) return null
+    val transition = rememberInfiniteTransition(label = "PendingRetryPulse")
+    val pulse by transition.animateColor(
+        initialValue = MaterialTheme.colorScheme.error,
+        targetValue = MaterialTheme.colorScheme.onSurfaceVariant,
+        animationSpec = infiniteRepeatable(
+            animation = tween(PENDING_RETRY_PULSE_DURATION_MS, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "PendingRetryPulseColor"
+    )
+    return pulse
 }

@@ -9,7 +9,6 @@ import android.provider.CallLog
 import android.provider.ContactsContract
 import android.provider.DocumentsContract
 import android.provider.Settings
-import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -50,7 +49,11 @@ import com.cc.libackupnext.service.AppManagerService
 import com.cc.libackupnext.service.BackupProgress
 import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.ui.AppTopBar
+import com.cc.libackupnext.ui.BatchAction
+import com.cc.libackupnext.ui.BatchItem
+import com.cc.libackupnext.ui.BatchOrigin
 import com.cc.libackupnext.ui.MainViewModel
+import com.cc.libackupnext.ui.PendingBatch
 import com.cc.libackupnext.ui.dialog.BackupHelpDialog
 import com.cc.libackupnext.ui.dialog.BackupProgressDialog
 import com.cc.libackupnext.ui.dialog.ItemAction
@@ -95,7 +98,9 @@ fun AppBackupScreen(
     /** 顶栏标题，默认取 target 的标题。 */
     title: String = target.detailTitle,
     /** 传了才在右上角菜单里出现「移除该文件夹」。 */
-    onRemoveDir: (() -> Unit)? = null
+    onRemoveDir: (() -> Unit)? = null,
+    /** 是不是从批量页进来的：记进未完成批次，跳回来时才知道返回该回哪一页。 */
+    fromBatch: Boolean = false
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -186,6 +191,7 @@ fun AppBackupScreen(
     }
     var progressTitle by remember { mutableStateOf("正在备份") }
     var backupError by remember { mutableStateOf<String?>(null) }
+    var connectionInterrupted by remember { mutableStateOf(false) }
     var entries by remember { mutableStateOf<List<BackupEntry>>(emptyList()) }
 
     // 应用信息页用自己的搜索状态，不影响 applist 的搜索框
@@ -291,13 +297,9 @@ fun AppBackupScreen(
                     ItemAction.WIFI_OFF -> Unit
                 }
 
-                Toast.makeText(context, "成功", Toast.LENGTH_SHORT).show()
+                AppLog.toastOnMain("成功")
             } catch (t: Throwable) {
-                Toast.makeText(
-                    context,
-                    "${action.title()}失败：${t.message ?: "未知错误"}",
-                    Toast.LENGTH_SHORT
-                ).show()
+                AppLog.toastOnMain("${action.title()}失败：${t.message ?: "未知错误"}")
             } finally {
                 isBusy = false
             }
@@ -305,10 +307,30 @@ fun AppBackupScreen(
     }
 
     /** 备份 / 覆盖备份共用：进度弹窗 + 结果处理，具体逻辑在 service 层。 */
-    fun runBackup(groups: Set<BackupGroup>, overwrite: BackupEntry? = null) {
+    fun runBackup(
+        groups: Set<BackupGroup>,
+        overwrite: BackupEntry? = null,
+        /** 一次逻辑操作的标识：重试沿用，主动新备份换新值。 */
+        operationId: Long = System.currentTimeMillis(),
+        resume: Boolean = false
+    ) {
+        // 冻结这次勾选和要覆盖的那条备份；失败时留着，从 tab 页「继续未完成」原样重跑
+        if (!resume) {
+            viewModel.setPending(
+                PendingBatch(
+                    action = if (overwrite == null) BatchAction.CREATE else BatchAction.OVERWRITE,
+                    items = listOf(BatchItem(displayApp, groups, overwrite)),
+                    operationId = operationId,
+                    origin = BatchOrigin.DETAIL,
+                    detailApp = displayApp,
+                    detailFromBatch = fromBatch
+                )
+            )
+        }
         showBackupOptions = false
         managingEntry = null
         backupError = null
+        connectionInterrupted = false
         progressTitle = "正在备份"
         backupRunning = true
         showBackupProgress = true
@@ -344,18 +366,29 @@ fun AppBackupScreen(
             }
 
             val result = if (overwrite == null) {
-                RusticClient.backup(displayApp, groups, onProgress)
+                RusticClient.backup(displayApp, groups, onProgress, operationId = operationId)
             } else {
-                RusticClient.overwrite(displayApp, overwrite, groups, onProgress)
+                RusticClient.overwrite(
+                    displayApp, overwrite, groups, onProgress,
+                    operationId = operationId
+                )
             }
 
             backupRunning = false
-            BackupNotifier.finish(context, "备份", if (result.isFailure) 1 else 0, 1)
+            val failure = result.exceptionOrNull()
+            if (RusticClient.isRemoteConnectionFailure(failure)) {
+                BackupNotifier.abort(context, "备份")
+                connectionInterrupted = true
+                backupError = null
+            } else {
+                BackupNotifier.finish(context, "备份", if (result.isFailure) 1 else 0, 1)
+                if (result.isFailure) backupError = failure?.message ?: "备份失败"
+            }
             if (result.isFailure) {
-                backupError = result.exceptionOrNull()?.message ?: "备份失败"
-                AppLog.e("备份", backupError.orEmpty(), result.exceptionOrNull())
+                AppLog.e("备份", backupError ?: "远程仓库连接中断", failure)
                 backupSteps.update { RusticClient.markFailed(it) }
             } else {
+                viewModel.clearPending()
                 reloadKey++
                 // 备份完只刷新备份数，不用重新拉整个应用列表
                 viewModel.refreshBackupInfo()
@@ -374,7 +407,7 @@ fun AppBackupScreen(
     fun overwriteSelected(entry: BackupEntry) {
         val groups = managingKinds
         if (entry.selectedSnapshots(groups).isEmpty()) {
-            Toast.makeText(context, "请先勾选要覆盖的内容", Toast.LENGTH_SHORT).show()
+            AppLog.toastOnMain("请先勾选要覆盖的内容")
             return
         }
         runBackup(groups, overwrite = entry)
@@ -384,7 +417,7 @@ fun AppBackupScreen(
     fun deleteSelected(entry: BackupEntry) {
         val groups = managingKinds
         if (entry.selectedSnapshots(groups).isEmpty()) {
-            Toast.makeText(context, "请先勾选要删除的内容", Toast.LENGTH_SHORT).show()
+            AppLog.toastOnMain("请先勾选要删除的内容")
             return
         }
 
@@ -400,11 +433,7 @@ fun AppBackupScreen(
                     }
                     .onFailure {
                         AppLog.e("删除", "删除失败", it)
-                        Toast.makeText(
-                            context,
-                            "删除失败：${it.message ?: "未知错误"}",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        AppLog.toastOnMain("删除失败：${it.message ?: "未知错误"}")
                     }
             } finally {
                 KeepAwake.release()
@@ -420,22 +449,14 @@ fun AppBackupScreen(
             try {
                 RusticClient.deleteAll(displayApp.packageName)
                     .onSuccess { count ->
-                        Toast.makeText(
-                            context,
-                            if (count == 0) "没有可删除的备份" else "删除成功",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        AppLog.toastOnMain(if (count == 0) "没有可删除的备份" else "删除成功")
                         reloadKey++
                         // 备份全删了，只在备份里存在的应用也要从列表里去掉，整表重读
                         viewModel.loadList(scrollToTop = false)
                     }
                     .onFailure {
                         AppLog.e("删除", "删除失败", it)
-                        Toast.makeText(
-                            context,
-                            "删除失败：${it.message ?: "未知错误"}",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        AppLog.toastOnMain("删除失败：${it.message ?: "未知错误"}")
                     }
             } finally {
                 KeepAwake.release()
@@ -444,11 +465,29 @@ fun AppBackupScreen(
     }
 
     /** 恢复勾选的快照。 */
-    fun restoreSelected(entry: BackupEntry) {
-        val groups = managingKinds
+    fun restoreSelected(
+        entry: BackupEntry,
+        /** 重试时用冻结的勾选，不读当前 managingKinds。 */
+        groups: Set<BackupGroup> = managingKinds,
+        resume: Boolean = false
+    ) {
         RusticClient.restoreBlockedReason(entry, groups, isInstalled)?.let { reason ->
-            Toast.makeText(context, reason, Toast.LENGTH_SHORT).show()
+            AppLog.toastOnMain(reason)
             return
+        }
+
+        // 冻结用户选的那条备份（含版本和快照 id）与勾选类型，重试不能退回最新一条
+        if (!resume) {
+            viewModel.setPending(
+                PendingBatch(
+                    action = BatchAction.RESTORE,
+                    items = listOf(BatchItem(displayApp, groups, entry)),
+                    operationId = System.currentTimeMillis(),
+                    origin = BatchOrigin.DETAIL,
+                    detailApp = displayApp,
+                    detailFromBatch = fromBatch
+                )
+            )
         }
 
         managingEntry = null
@@ -457,6 +496,7 @@ fun AppBackupScreen(
 
         progressTitle = "正在恢复"
         backupError = null
+        connectionInterrupted = false
         backupRunning = true
         showBackupProgress = true
 
@@ -495,12 +535,20 @@ fun AppBackupScreen(
             }
 
             backupRunning = false
-            BackupNotifier.finish(context, "恢复", if (result.isFailure) 1 else 0, 1)
+            val failure = result.exceptionOrNull()
+            if (RusticClient.isRemoteConnectionFailure(failure)) {
+                BackupNotifier.abort(context, "恢复")
+                connectionInterrupted = true
+                backupError = null
+            } else {
+                BackupNotifier.finish(context, "恢复", if (result.isFailure) 1 else 0, 1)
+                if (result.isFailure) backupError = failure?.message ?: "恢复失败"
+            }
             if (result.isFailure) {
-                backupError = result.exceptionOrNull()?.message ?: "恢复失败"
-                AppLog.e("恢复", backupError.orEmpty(), result.exceptionOrNull())
+                AppLog.e("恢复", backupError ?: "远程仓库连接中断", failure)
                 backupSteps.update { RusticClient.markFailed(it) }
             } else {
+                viewModel.clearPending()
                 reloadKey++
                 // 恢复可能把已经删掉的目录重新建出来，重算一次「还在不在」，
                 // 否则 header 会一直停在划线置灰的状态
@@ -519,10 +567,38 @@ fun AppBackupScreen(
     // 进入页面 / 备份结束后，按包名 tag 查一次仓库
     LaunchedEffect(displayApp.packageName, backupRunning, reloadKey) {
         if (backupRunning) return@LaunchedEffect
-        entries = withContext(Dispatchers.IO) {
+        val result = withContext(Dispatchers.IO) {
             RusticClient.loadEntries(displayApp.packageName, displayApp.name)
-                .getOrNull()
-                .orEmpty()
+        }
+        result.onFailure { t ->
+            if (RusticClient.isRemoteConnectionFailure(t)) {
+                AppLog.toastOnMain(
+                    t.message ?: RusticClient.REMOTE_INTERRUPTED_MESSAGE,
+                    longToast = true
+                )
+            }
+        }
+        entries = result.getOrElse { emptyList() }
+    }
+
+    // 从 tab 页「更多」菜单点「继续未完成」跳回来后自动续跑
+    val resumeRequested by viewModel.resumeRequested.collectAsState()
+    LaunchedEffect(resumeRequested) {
+        if (!resumeRequested) return@LaunchedEffect
+        viewModel.resumeRequested.value = false
+        val pending = viewModel.pendingBatch.value ?: return@LaunchedEffect
+        if (pending.origin != BatchOrigin.DETAIL) return@LaunchedEffect
+        val item = pending.items.firstOrNull() ?: return@LaunchedEffect
+        when (pending.action) {
+            BatchAction.CREATE -> runBackup(item.kinds, null, pending.operationId, resume = true)
+            BatchAction.OVERWRITE ->
+                runBackup(item.kinds, item.entry, pending.operationId, resume = true)
+
+            BatchAction.RESTORE -> item.entry?.let {
+                restoreSelected(it, item.kinds, resume = true)
+            }
+
+            BatchAction.DELETE -> Unit
         }
     }
 
@@ -542,11 +618,7 @@ fun AppBackupScreen(
                     reloadKey++
                 }.onFailure {
                     AppLog.e("备注", "修改备注失败", it)
-                    Toast.makeText(
-                        context,
-                        "修改备注失败：${it.message ?: "未知错误"}",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    AppLog.toastOnMain("修改备注失败：${it.message ?: "未知错误"}")
                 }
         }
     }
@@ -790,7 +862,11 @@ fun AppBackupScreen(
             isRestore = progressTitle != "正在备份",
             error = backupError,
             running = backupRunning,
-            onDismiss = { showBackupProgress = false }
+            onDismiss = {
+                showBackupProgress = false
+                connectionInterrupted = false
+            },
+            connectionInterrupted = connectionInterrupted
         )
     }
 }
@@ -839,7 +915,7 @@ private fun openDirectory(context: Context, path: String) {
     }
 
     if (docId == null) {
-        Toast.makeText(context, "这个位置打不开", Toast.LENGTH_SHORT).show()
+        AppLog.toastOnMain("这个位置打不开")
         return
     }
 
@@ -859,7 +935,7 @@ private fun openDirectory(context: Context, path: String) {
         if (runCatching { context.startActivity(intent) }.isSuccess) return
     }
 
-    Toast.makeText(context, "没有能打开文件夹的应用", Toast.LENGTH_SHORT).show()
+    AppLog.toastOnMain("没有能打开文件夹的应用")
 }
 
 /** 删除整个目录（root）。路径里可能有空格，用单引号包起来并转义。 */
@@ -878,14 +954,13 @@ private fun launchApp(context: Context, app: AppInfo) {
         }.getOrNull()
 
         if (intent == null) {
-            Toast.makeText(context, "该应用没有可启动的界面", Toast.LENGTH_SHORT).show()
+            AppLog.toastOnMain("该应用没有可启动的界面")
             return
         }
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         runCatching { context.startActivity(intent) }
             .onFailure {
-                Toast.makeText(context, "启动失败：${it.message ?: "未知错误"}", Toast.LENGTH_SHORT)
-                    .show()
+                AppLog.toastOnMain("启动失败：${it.message ?: "未知错误"}")
             }
         return
     }
@@ -896,12 +971,12 @@ private fun launchApp(context: Context, app: AppInfo) {
         val user = UserHandle.getUserHandleForUid(app.userId * 100_000)
         val info = launcherApps?.getActivityList(app.packageName, user)?.firstOrNull()
         if (info == null) {
-            Toast.makeText(context, "该应用没有可启动的界面", Toast.LENGTH_SHORT).show()
+            AppLog.toastOnMain("该应用没有可启动的界面")
         } else {
             launcherApps.startMainActivity(info.componentName, info.user, null, null)
         }
     }.onFailure {
-        Toast.makeText(context, "启动失败：${it.message ?: "未知错误"}", Toast.LENGTH_SHORT).show()
+        AppLog.toastOnMain("启动失败：${it.message ?: "未知错误"}")
     }
 }
 
@@ -910,7 +985,7 @@ private fun openWifiSettings(context: Context) {
     val intent = Intent(Settings.ACTION_WIFI_SETTINGS)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     runCatching { context.startActivity(intent) }
-        .onFailure { Toast.makeText(context, "打开 Wi-Fi 设置失败", Toast.LENGTH_SHORT).show() }
+        .onFailure { AppLog.toastOnMain("打开 Wi-Fi 设置失败") }
 }
 
 /** 打开联系人应用 */
@@ -921,7 +996,7 @@ private fun openContacts(context: Context) {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
     }.onFailure {
-        Toast.makeText(context, "打开联系人失败", Toast.LENGTH_SHORT).show()
+        AppLog.toastOnMain("打开联系人失败")
     }
 }
 
@@ -933,7 +1008,7 @@ private fun openCallLog(context: Context) {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
     }.onFailure {
-        Toast.makeText(context, "打开通话记录失败", Toast.LENGTH_SHORT).show()
+        AppLog.toastOnMain("打开通话记录失败")
     }
 }
 
@@ -947,7 +1022,7 @@ private fun openAppSettings(context: Context, app: AppInfo) {
     }
     runCatching { context.startActivity(intent) }
         .onFailure {
-            Toast.makeText(context, "打开系统设置失败", Toast.LENGTH_SHORT).show()
+            AppLog.toastOnMain("打开系统设置失败")
         }
 }
 

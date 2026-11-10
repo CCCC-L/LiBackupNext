@@ -1,0 +1,12 @@
+# 两个独立的 cdylib：rustic_bridge 只做快照 DAO，rclone_bridge 独占 librclone。
+# virtual workspace 根目录；cargo-ndk 带 --workspace 才会把两个产物一起拷进 jniLibs。
+[workspace]
+members = ["rustic_bridge", "rclone_bridge"]
+resolver = "2"
+
+[profile.release]
+lto = "fat"
+strip = "symbols"
+opt-level = "s"
+codegen-units = 1
+panic = "abort"

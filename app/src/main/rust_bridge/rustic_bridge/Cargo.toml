@@ -1,0 +1,23 @@
+[package]
+name = "rustic_bridge"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "rustic_bridge"
+crate-type = ["cdylib"]
+
+[dependencies]
+jni = "0.22.4"
+rustic_core = "0.13.0"
+rustic_backend = { version = "0.7.0", default-features = false, features = ["rest"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rayon = "1"
+# 只为了从 RusticError 的 source 链里 downcast 出 reqwest::Error（判定 rclone serve
+# 返回的 5xx）。版本与 rustic_backend 用的一致，Cargo 会复用同一份 crate 实例，
+# 否则 TypeId 不同，downcast 永远不命中；default-features 关掉不引入额外能力。
+reqwest = { version = "0.13.2", default-features = false }
+libc = "0.2"
+jiff = "0.2"

@@ -65,6 +65,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var isSortMenuExpanded = MutableStateFlow(false)
     var isMoreMenuExpanded = MutableStateFlow(false)
 
+    // ==================== 未完成批次 ====================
+    /**
+     * 中断 / 失败后剩下的待办。放在 ViewModel 里是因为入口在 tab 页的「更多」菜单，
+     * 用户会先退出批量页 / 详情页，页面内的 remember 早就没了。
+     */
+    private val _pendingBatch = MutableStateFlow<PendingBatch?>(loadPendingBatch())
+    val pendingBatch: StateFlow<PendingBatch?> = _pendingBatch.asStateFlow()
+
+    /** 点「继续未完成」后置 true；目标页面消费后复位。 */
+    var resumeRequested = MutableStateFlow(false)
+
+    /**
+     * 写盘用 apply()（异步），不阻塞备份线程；每成功一项都写，
+     * 中途被系统杀掉也不会丢掉已完成的项，重启后不会又备份一遍。
+     */
+    private fun persistPending(batch: PendingBatch?) {
+        AppPrefs.pendingBatchJson = batch?.let { encodePendingBatch(it) }.orEmpty()
+    }
+
+    /** 发起新操作：覆盖旧待办（同时换新的 operationId）。 */
+    fun setPending(batch: PendingBatch) {
+        _pendingBatch.value = batch
+        persistPending(batch)
+        resumeRequested.value = false
+    }
+
+    /** 每成功一项就划掉一项；全跑完自动清空。 */
+    fun updatePendingItems(items: List<BatchItem>) {
+        val next = if (items.isEmpty()) null else _pendingBatch.value?.copy(items = items)
+        _pendingBatch.value = next
+        persistPending(next)
+    }
+
+    /** 放弃未完成的内容。 */
+    fun clearPending() {
+        _pendingBatch.value = null
+        AppPrefs.pendingBatchJson = ""
+        resumeRequested.value = false
+    }
+
     var sortType = MutableStateFlow(loadSortType())
     var isReverse = MutableStateFlow(AppPrefs.sortReverse)
     var showSystemApps = MutableStateFlow(AppPrefs.showSystemApps)
@@ -254,7 +294,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (scrollToTop) requestScrollToTop()
                 }
 
-                val overview = overviewDeferred.await()
+                val overviewResult = overviewDeferred.await()
+                overviewResult.onFailure { t ->
+                    if (RusticClient.isRemoteConnectionFailure(t)) {
+                        AppLog.toastOnMain(
+                            t.message ?: RusticClient.REMOTE_INTERRUPTED_MESSAGE,
+                            longToast = true
+                        )
+                    }
+                }
+                val overview = overviewResult.getOrElse { emptyList() }
                 val installedNames = installed.mapTo(HashSet()) { it.packageName }
                 val merged = installed + RusticClient.backupApps(userId, overview)
                     .filter { it.packageName !in installedNames }
@@ -309,9 +358,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         overview: List<com.cc.libackupnext.data.RepoOverview>? = null
     ) {
         val names = apps.associate { it.packageName to it.name }
-        val summaries = runCatching { RusticClient.backupOverview(names, overview) }
-            .getOrDefault(emptyList())
-            .associateBy { it.packageName }
+        val summaries = if (overview != null) {
+            runCatching { RusticClient.backupOverview(names, overview) }
+                .getOrDefault(emptyList())
+        } else {
+            RusticClient.backupOverviewResult(names).onFailure { t ->
+                if (RusticClient.isRemoteConnectionFailure(t)) {
+                    AppLog.toastOnMain(
+                        t.message ?: RusticClient.REMOTE_INTERRUPTED_MESSAGE,
+                        longToast = true
+                    )
+                }
+            }.getOrElse { emptyList() }
+        }.associateBy { it.packageName }
 
         if (summaries == _backupSummaries.value) return
         _backupSummaries.value = summaries

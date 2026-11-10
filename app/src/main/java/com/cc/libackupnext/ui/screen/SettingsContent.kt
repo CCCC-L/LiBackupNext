@@ -1,9 +1,6 @@
 package com.cc.libackupnext.ui.screen
 
-import com.cc.libackupnext.ui.util.rememberFolderPicker
-
 import android.content.ClipData
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -15,15 +12,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -50,12 +42,10 @@ import com.cc.libackupnext.ui.PageContentPadding
 import com.cc.libackupnext.ui.dialog.PruneProgressDialog
 import com.cc.libackupnext.ui.theme.dialogContainer
 import com.cc.libackupnext.ui.util.AppIconStore
-import com.cc.libackupnext.ui.util.RepoSetupForm
 import com.cc.libackupnext.ui.util.formatSize
 import com.cc.libackupnext.util.AppLog
 import com.cc.libackupnext.util.KeepAwake
 import com.cc.libackupnext.util.LogReport
-import com.cc.libackupnext.util.RepoPath
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -63,22 +53,25 @@ import kotlinx.coroutines.withContext
 /**
  * 设置页的内容：Rustic 仓库信息 + 备份行为。
  *
- * 仓库地址只读展示（灰色），点击弹确认框后重新选目录并初始化仓库，长按复制当前路径。
+ * 仓库地址只读展示（灰色，远程显示真实服务地址而非 remote:<id>: 逻辑标识），
+ * 点击进入「已添加仓库」列表页，长按复制当前地址；
+ * 配置 / 编辑仓库的弹窗由列表页持有，这里不再弹窗。
  *
  * 它是底栏的一个 tab，顶栏 / 底栏由主页提供，所以这里只有内容没有 Scaffold。
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun SettingsContent(
     modifier: Modifier = Modifier,
+    /** 当前仓库地址（展示用）：外层按仓库变化重新读 AppPrefs 后传进来，这里只展示。 */
+    repoAddress: String,
     /** 影响应用列表的设置项改动后通知外面重新加载。 */
-    onSettingChanged: () -> Unit = {}
+    onSettingChanged: () -> Unit = {},
+    /** 打开已添加仓库列表页。 */
+    onOpenRepoList: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboard.current
-
-    var repoPath by remember { mutableStateOf(AppPrefs.repoPath) }
     // 整理仓库（prune）
     var showCleanConfirm by remember { mutableStateOf(false) }
     var cleaning by remember { mutableStateOf(false) }
@@ -113,60 +106,9 @@ fun SettingsContent(
             val result = LogReport.writeTo(context, uri)
             withContext(Dispatchers.Main) {
                 exporting = false
-                Toast.makeText(
-                    context,
-                    if (result.isSuccess) "日志已导出" else
-                        "导出失败：${result.exceptionOrNull()?.message ?: "未知错误"}",
-                    Toast.LENGTH_SHORT
-                ).show()
+                AppLog.toastOnMain(if (result.isSuccess) "日志已导出" else
+                        "导出失败：${result.exceptionOrNull()?.message ?: "未知错误"}")
             }
-        }
-    }
-
-    // 选目录 + 初始化仓库的弹窗状态
-    var showDialog by remember { mutableStateOf(false) }
-    var dialogPath by remember { mutableStateOf("") }
-    var dialogPassword by remember { mutableStateOf("") }
-    var isInitializing by remember { mutableStateOf(false) }
-    var initError by remember { mutableStateOf<String?>(null) }
-
-    // 选完目录只回填路径，密码和初始化在弹窗里完成
-    val pickFolder = rememberFolderPicker { uri ->
-        val path = RepoPath.toFilesystemPath(uri.toString())
-        if (path == null) {
-            Toast.makeText(context, "无法解析该目录", Toast.LENGTH_SHORT).show()
-        } else {
-            dialogPath = path
-        }
-    }
-
-    fun startInit() {
-        if (isInitializing) return
-        if (dialogPath.isBlank()) {
-            Toast.makeText(context, "请先选择仓库目录", Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (dialogPassword.isBlank()) {
-            Toast.makeText(context, "请先输入仓库密码", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        scope.launch {
-            isInitializing = true
-            initError = null
-            RusticClient.initRepository(dialogPath, dialogPassword)
-                .onSuccess {
-                    repoPath = dialogPath
-                    showDialog = false
-                    Toast.makeText(context, "仓库初始化成功", Toast.LENGTH_SHORT).show()
-                    // 换仓库了：让列表重新读一次，别留着旧仓库的备份数
-                    onSettingChanged()
-                }
-                .onFailure {
-                    AppLog.e("仓库", "初始化失败", it)
-                    initError = it.message ?: "未知错误"
-                }
-            isInitializing = false
         }
     }
 
@@ -214,23 +156,15 @@ fun SettingsContent(
                     modifier = Modifier
                         .fillMaxWidth()
                         .combinedClickable(
-                            onClick = {
-                                dialogPath = repoPath
-                                dialogPassword = AppPrefs.repoPassword.ifBlank { "rustic" }
-                                showDialog = true
-                            },
+                            onClick = onOpenRepoList,
                             onLongClick = {
-                                if (repoPath.isNotBlank()) {
-                                    val path = repoPath
+                                if (repoAddress.isNotBlank()) {
+                                    val path = repoAddress
                                     scope.launch {
                                         clipboard.setClipEntry(
                                             ClipEntry(ClipData.newPlainText("仓库地址", path))
                                         )
-                                        Toast.makeText(
-                                            context,
-                                            "已复制仓库地址",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
+                                        AppLog.toastOnMain("已复制仓库地址")
                                     }
                                 }
                             }
@@ -245,7 +179,7 @@ fun SettingsContent(
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = repoPath.ifBlank { "未设置" },
+                        text = repoAddress.ifBlank { "未设置" },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -253,7 +187,7 @@ fun SettingsContent(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "点击选择并初始化仓库，长按复制地址",
+                        text = "查看 / 管理已添加的仓库，长按复制当前地址",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline
                     )
@@ -513,16 +447,12 @@ fun SettingsContent(
                             }
                             cleaning = false
                             val removedIcons = result.getOrDefault(0)
-                            Toast.makeText(
-                                context,
-                                when {
+                            AppLog.toastOnMain(when {
                                     result.isFailure ->
                                         "整理失败：${result.exceptionOrNull()?.message ?: "未知错误"}"
                                     removedIcons > 0 -> "整理完成，清理了 $removedIcons 个残留图标"
                                     else -> "整理完成"
-                                },
-                                Toast.LENGTH_SHORT
-                            ).show()
+                                })
                         }
                     }
                 ) {
@@ -541,75 +471,6 @@ fun SettingsContent(
         PruneProgressDialog()
     }
 
-    if (showDialog) {
-        AlertDialog(
-            containerColor = MaterialTheme.colorScheme.dialogContainer,
-            onDismissRequest = { if (!isInitializing) showDialog = false },
-            title = { Text("选择并初始化仓库") },
-            text = {
-                // 和引导页共用同一份实现（目录 + 密码 + 「请牢记密码」提示）
-                RepoSetupForm(
-                    path = dialogPath,
-                    onPickFolder = pickFolder,
-                    password = dialogPassword,
-                    onPasswordChange = { dialogPassword = it },
-                    enabled = !isInitializing,
-                    pathTextStyle = MaterialTheme.typography.bodyMedium
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = { startInit() },
-                    enabled = !isInitializing &&
-                            dialogPath.isNotBlank() &&
-                            dialogPassword.isNotBlank(),
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    )
-                ) {
-                    Text("初始化")
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = { showDialog = false },
-                    enabled = !isInitializing
-                ) {
-                    Text("取消")
-                }
-            }
-        )
-    }
-
-    if (isInitializing) {
-        AlertDialog(
-            containerColor = MaterialTheme.colorScheme.dialogContainer,
-            onDismissRequest = { },
-            title = { Text("初始化仓库") },
-            text = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    LoadingIndicator(modifier = Modifier.size(24.dp))
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text("正在初始化仓库…")
-                }
-            },
-            confirmButton = { }
-        )
-    }
-
-    initError?.let { message ->
-        AlertDialog(
-            containerColor = MaterialTheme.colorScheme.dialogContainer,
-            onDismissRequest = { initError = null },
-            title = { Text("初始化失败") },
-            text = { Text(message) },
-            confirmButton = {
-                TextButton(onClick = { initError = null }) {
-                    Text("确定")
-                }
-            }
-        )
-    }
 }
 
 @Composable

@@ -48,10 +48,13 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.cc.libackupnext.data.AppPrefs
 import com.cc.libackupnext.data.BackupTarget
+import com.cc.libackupnext.data.FolderPickerLauncher
 import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.entity.dirAppInfo
 import com.cc.libackupnext.ui.AppBottomBar
 import com.cc.libackupnext.ui.AppTopBar
+import com.cc.libackupnext.ui.BatchOrigin
+import com.cc.libackupnext.ui.dialog.PendingRetryDialog
 import com.cc.libackupnext.ui.HomeTab
 import com.cc.libackupnext.ui.MainViewModel
 import com.cc.libackupnext.ui.SortMenuExtra
@@ -74,7 +77,9 @@ private const val SCROLL_DOWN_SIGN = -1f
 fun AppListScreen(
     viewModel: MainViewModel = viewModel(),
     /** 崩溃续命后重建时直接落到设置 tab，保证导出日志立刻可达。 */
-    initialTab: HomeTab = HomeTab.APPS
+    initialTab: HomeTab = HomeTab.APPS,
+    /** 打开通用文件夹选择弹窗（窗口由 MainActivity 顶层持有）。 */
+    onOpenFolderPicker: (FolderPickerLauncher) -> Unit = {}
 ) {
     val context = LocalContext.current
     val appName = remember {
@@ -91,9 +96,19 @@ fun AppListScreen(
     val isSearching by viewModel.isSearching.collectAsState()
     val searchQueryText by viewModel.searchQuery.collectAsState()
     val scrollTrigger by viewModel.scrollToTopTrigger.collectAsState()
+    val pendingBatch by viewModel.pendingBatch.collectAsState()
+    val pendingRetryCount = pendingBatch?.items?.size ?: 0
+    // 点「继续未完成」先弹确认窗，不立刻开跑
+    var showPendingRetryDialog by remember { mutableStateOf(false) }
 
     // ==================== 页面栈 ====================
     var route by rememberSaveable { mutableStateOf(AppRoute.LIST) }
+    // 仓库清单 / 当前仓库位置：初始化、切换、编辑、删除后自增，触发重读 AppPrefs
+    var repoRevision by rememberSaveable { mutableStateOf(0) }
+    val savedRepos = remember(repoRevision) { AppPrefs.savedRepos }
+    // 业务比较用逻辑标识，展示 / 复制用真实地址，两者别混
+    val currentRepoLocation = remember(repoRevision) { AppPrefs.repoPath }
+    val currentRepoAddress = remember(repoRevision) { AppPrefs.currentRepoAddress }
     // 批量页的两个参数：模式 + 从哪个页签进来的（页签决定要列哪些目标）。
     // 以前是「一种组合一个布尔」，四种组合四个变量
     var batchMode by rememberSaveable { mutableStateOf(BackupBatchMode.CREATE) }
@@ -264,6 +279,14 @@ fun AppListScreen(
     }
 
     // ==================== 导航 ====================
+    /** 仓库清单变化：重读 AppPrefs，并让备份列表按新仓库重新加载。 */
+    fun onRepoChanged() {
+        repoRevision++
+        // 换了仓库，旧的 operationId / 快照 id 不通用，未完成批次直接作废
+        viewModel.clearPending()
+        viewModel.loadList(scrollToTop = false)
+    }
+
     fun openBatch(mode: BackupBatchMode, from: HomeTab) {
         if (isSearching) viewModel.toggleSearch()
         batchMode = mode
@@ -285,6 +308,30 @@ fun AppListScreen(
         detailFromBatch = false
     }
 
+    /** 确认窗点「继续」：跳回发起操作的页面，由那边的 LaunchedEffect 自动续跑。 */
+    fun resumePending() {
+        viewModel.pendingBatch.value?.let { batch ->
+            if (isSearching) viewModel.toggleSearch()
+            when (batch.origin) {
+                BatchOrigin.BATCH -> {
+                    batch.batchMode?.let { batchMode = it }
+                    batch.batchTab?.let { batchTab = it }
+                    route = AppRoute.BATCH
+                }
+
+                BatchOrigin.DETAIL -> {
+                    batch.detailApp?.let { app ->
+                        selectedApp = app
+                        selectedPackage = app.packageName
+                    }
+                    detailFromBatch = batch.detailFromBatch
+                    route = AppRoute.DETAIL
+                }
+            }
+            viewModel.resumeRequested.value = true
+        }
+    }
+
     // 搜索优先响应返回
     BackHandler(enabled = isSearching) {
         viewModel.toggleSearch()
@@ -292,6 +339,11 @@ fun AppListScreen(
 
     // 批量页：返回列表页。详情页自己处理返回（onBack）
     BackHandler(enabled = route == AppRoute.BATCH) {
+        route = AppRoute.LIST
+    }
+
+    // 仓库列表页：返回设置 tab
+    BackHandler(enabled = route == AppRoute.REPOS) {
         route = AppRoute.LIST
     }
 
@@ -308,6 +360,14 @@ fun AppListScreen(
         label = "PageTransition"
     ) { target ->
         when (target) {
+            AppRoute.REPOS -> RepoListScreen(
+                repos = savedRepos,
+                currentLocation = currentRepoLocation,
+                onBack = { route = AppRoute.LIST },
+                onOpenFolderPicker = onOpenFolderPicker,
+                onRepoChanged = ::onRepoChanged
+            )
+
             AppRoute.BATCH -> BackupBatchScreen(
                 viewModel = viewModel,
                 mode = batchMode,
@@ -351,7 +411,8 @@ fun AppListScreen(
                         }
                     } else {
                         null
-                    }
+                    },
+                    fromBatch = detailFromBatch
                 )
             }
 
@@ -426,7 +487,11 @@ fun AppListScreen(
 
                             // 设置页没有可刷新的内容
                             HomeTab.SETTINGS -> null
-                        }
+                        },
+                        pendingRetryCount = pendingRetryCount,
+                        onRetryPending = if (pendingRetryCount > 0) {
+                            { showPendingRetryDialog = true }
+                        } else null
                     )
                 }
             ) { paddingValues ->
@@ -461,6 +526,7 @@ fun AppListScreen(
                                     // 读回来是排好序的
                                     extraDirs = AppPrefs.extraDirs
                                 },
+                                onOpenFolderPicker = onOpenFolderPicker,
                                 modifier = Modifier.padding(paddingValues),
                                 isRefreshing = isRefreshing,
                                 onRefresh = {
@@ -498,9 +564,11 @@ fun AppListScreen(
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .padding(paddingValues),
+                                repoAddress = currentRepoAddress,
                                 onSettingChanged = {
                                     viewModel.loadList(scrollToTop = false)
-                                }
+                                },
+                                onOpenRepoList = { route = AppRoute.REPOS }
                             )
 
                             HomeTab.APPS -> when {
@@ -560,6 +628,22 @@ fun AppListScreen(
             }
         }
     }
+
+    // 确认窗放在页面栈之外：切页签 / 转场都不影响它
+    if (showPendingRetryDialog) {
+        PendingRetryDialog(
+            count = pendingRetryCount,
+            onDiscard = {
+                showPendingRetryDialog = false
+                viewModel.clearPending()
+            },
+            onCancel = { showPendingRetryDialog = false },
+            onContinue = {
+                showPendingRetryDialog = false
+                resumePending()
+            }
+        )
+    }
 }
 
 /**
@@ -572,6 +656,7 @@ fun AppListScreen(
  */
 private enum class AppRoute(val depth: Int) {
     LIST(0),
+    REPOS(1),
     BATCH(1),
     DETAIL(2)
 }

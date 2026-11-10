@@ -1,7 +1,6 @@
 package com.cc.libackupnext.ui.dialog
 
 import android.os.SystemClock
-import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,7 +25,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -34,6 +32,8 @@ import androidx.compose.ui.window.DialogProperties
 import com.cc.libackupnext.data.BackupStep
 import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.BackupStepStatus
+import com.cc.libackupnext.service.RusticClient
+import com.cc.libackupnext.util.AppLog
 
 /**
  * 进度弹窗里的一段：标题（应用名，可为空）+ 这一步的步骤。
@@ -64,7 +64,9 @@ fun BackupProgressDialog(
     isRestore: Boolean,
     error: String?,
     running: Boolean,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** 远程仓库连接中断：弹窗内改标题 + 一行红色提示。 */
+    connectionInterrupted: Boolean = false
 ) {
     Dialog(
         onDismissRequest = { /* 运行过程中不允许关闭 */ },
@@ -79,7 +81,11 @@ fun BackupProgressDialog(
         ) {
             Column(modifier = Modifier.padding(24.dp)) {
                 Text(
-                    text = if (!running && error == null) doneTitle else title,
+                    text = when {
+                        connectionInterrupted -> "远程仓库连接中断"
+                        !running && error == null -> doneTitle
+                        else -> title
+                    },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
@@ -142,10 +148,14 @@ fun BackupProgressDialog(
                     }
                 }
 
-                if (error != null) {
+                if (connectionInterrupted || error != null) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = error,
+                        text = if (connectionInterrupted) {
+                            RusticClient.REMOTE_INTERRUPTED_MESSAGE
+                        } else {
+                            error.orEmpty()
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
                     )
@@ -209,23 +219,9 @@ class DoubleClickGuard(
     }
 }
 
-private const val HINT_INTERVAL_MS = 1000L
-
 @Composable
-fun rememberDoubleClickGuard(hint: String = "双击执行"): DoubleClickGuard {
-    val context = LocalContext.current
-    return remember(hint) {
-        // 只保留一个 Toast 实例 + 一道时间闸门：
-        // 连点时如果提示还在显示，就不要再弹（否则会一条条排队弹出来）
-        val toast = Toast.makeText(context, hint, Toast.LENGTH_SHORT)
-        var lastShownAt = 0L
-
-        DoubleClickGuard {
-            val now = SystemClock.elapsedRealtime()
-            if (now - lastShownAt >= HINT_INTERVAL_MS) {
-                lastShownAt = now
-                toast.show()
-            }
-        }
+fun rememberDoubleClickGuard(hint: String = "双击执行"): DoubleClickGuard =
+    remember(hint) {
+        // 全应用共用的 Toast：上一条还在显示时不弹新的，也不会一条条排队
+        DoubleClickGuard { AppLog.toastOnMain(hint) }
     }
-}

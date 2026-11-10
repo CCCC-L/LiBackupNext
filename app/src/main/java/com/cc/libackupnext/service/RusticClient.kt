@@ -12,7 +12,9 @@ import com.cc.libackupnext.data.BackupSnapshot
 import com.cc.libackupnext.data.BackupStep
 import com.cc.libackupnext.data.BackupStepStatus
 import com.cc.libackupnext.data.BackupTarget
+import com.cc.libackupnext.data.RemoteRepo
 import com.cc.libackupnext.data.RepoOverview
+import com.cc.libackupnext.data.SavedRepo
 import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.SnapshotMeta
 import com.cc.libackupnext.data.SnapshotOverride
@@ -21,6 +23,7 @@ import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.service.util.SystemDataExporter
 import com.cc.libackupnext.util.AppLog
 import com.topjohnwu.superuser.Shell
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -39,6 +42,9 @@ object RusticClient {
 
     private const val TAG = "Rustic"
 
+    /** 远程断连时 UI 的唯一提示文案，也作为 [isRemoteConnectionFailure] 的判定标记。 */
+    const val REMOTE_INTERRUPTED_MESSAGE = "远程仓库暂时无法连接，请确认是否可以连接"
+
     private val manager by lazy {
         RootServiceManager<IRusticService>(RusticServer.Service::class.java) {
             IRusticService.Stub.asInterface(it)
@@ -48,13 +54,15 @@ object RusticClient {
     /** 不含凭据的空请求：仓库地址和密码只由 setRepo() 注入。 */
     private const val EMPTY_REQUEST = "{}"
 
-    // ==================== 仓库凭据 ====================
-    //
-    // AppPrefs 是唯一真源，Rust 侧有一份静态副本；root 侧 Kotlin 不留密码。
-    // 每次绑定（含服务被杀后重连）通过 setRepo() 注入一次，之后所有业务命令
-    // 都不带凭据。用 binder 身份 + 版本号判断是否需要重新注入，正常路径零额外 IPC。
-    // initRepo() 是唯一自带候选凭据的命令：只校验 / 建库，不改全局配置，
-    // 成功才由 initRepository() 保存 AppPrefs 并作废注入标记。
+    /** 初始化 / 切换远程仓库前测连：失败返回带原因的失败，由 UI 层提示。 */
+    private suspend fun testConnection(repo: RemoteRepo): Result<Unit> =
+        RcloneClient.testRemoteConnection(repo).fold(
+            onSuccess = { Result.success(Unit) },
+            onFailure = {
+                val message = "连接测试失败：${it.message ?: "未知错误"}"
+                Result.failure(IllegalStateException(message, it))
+            }
+        )
 
     private val credentialLock = Mutex()
 
@@ -68,25 +76,86 @@ object RusticClient {
         credentialVersion++
     }
 
+    /**
+     * 业务请求不再预先测连：注入凭据时 [RcloneClient.ensureServe] 已经建立起 rclone
+     * 后端连接，远端不可达会由第一笔真实请求失败暴露，再经 [remoteCall] 统一处理。
+     * 因此远程 rustic / rclone serve 报的任何失败都按「远程仓库连接不上」换成统一
+     * 文案交给 UI；原始异常留在 cause 里，[AppLog] 会连整条 Caused by 链写进日志。
+     * 本地仓库、协程取消、以及已经归一化的异常原样返回。
+     */
+    private suspend fun remoteFailure(t: Throwable): Throwable {
+        if (!AppPrefs.isRemote || t is CancellationException || isRemoteConnectionFailure(t)) {
+            return t
+        }
+        // 完整错误原文进 AppLog：正文给可读文本，throwable 再留一份完整 cause 链
+        AppLog.e(TAG, "远程仓库连接中断：${t.message.orEmpty()}", t)
+        invalidateCredentials()
+        // stopServe() 是 suspend：用 try/catch 吞掉它自己的异常，不能用 runCatching 包
+        try {
+            RcloneClient.stopServe()
+        } catch (t: Throwable) {
+            AppLog.w(TAG, "停止远程服务失败", t)
+        }
+        return IllegalStateException(REMOTE_INTERRUPTED_MESSAGE, t)
+    }
+
+    /** UI 只调这个判断是否断。 */
+    fun isRemoteConnectionFailure(t: Throwable?): Boolean =
+        t is IllegalStateException && t.message == REMOTE_INTERRUPTED_MESSAGE
+
+    /**
+     * 所有访问仓库的 rustic 调用都过这里：远程失败统一换成 [REMOTE_INTERRUPTED_MESSAGE]，
+     * 让 UI 认得出断连、批量能停批。各方法现有的 catch 不用改，拿到的已是归一化异常。
+     *
+     * block 必须是 suspend（里面要调 [getService]）；catch 里要调 suspend 的
+     * [remoteFailure]（停 serve），所以用 try/catch 而不是 runCatching。
+     */
+    private suspend fun <T> remoteCall(block: suspend () -> T): T = try {
+        block()
+    } catch (t: Throwable) {
+        throw remoteFailure(t)
+    }
+
+    /**
+     * root 侧把 rustic 的失败包成 error 字符串 / `ok=false` 返回，并不抛异常。
+     * 这些「软错误」同样要归一化，否则断连时 UI 认不出、批量不会停批。
+     */
+    private suspend fun remoteError(message: String): Throwable =
+        remoteFailure(IllegalStateException(message.ifBlank { "仓库操作失败" }))
+
+    /** 只绑定 root 服务：候选仓库校验、不碰仓库的本机操作都不需要注入当前凭据。 */
+    private suspend fun bindService(): IRusticService = manager.getService()
+
+    /**
+     * 绑定并按需注入凭据；所有访问仓库的 rustic 命令的唯一出口。
+     *
+     * 不再在每笔请求前测连：只有 [initRemoteRepository] 会显式测一次，好把
+     * 「连接测试失败」和「开库失败」分开、并保证失败不落盘。仓库访问一律走
+     * [remoteCall]；[verifyRepository] / [systemDataCounts] / [setWifiEnabled]
+     * 用 [bindService] 只拿 binder，不注入当前仓库的凭据。
+     */
     private suspend fun getService(): IRusticService {
-        val service = manager.getService()
+        val remote = if (AppPrefs.isRemote) {
+            AppPrefs.remoteRepos.first { repoPath.startsWith("remote:${it.id}:") }
+        } else null
+
+        val service = bindService()
         credentialLock.withLock {
             val binder = service.asBinder()
             if (injectedBinder !== binder || injectedVersion != credentialVersion) {
                 // 只记「注入了凭据」，绝不能把密码写进日志
                 AppLog.i(TAG, "绑定 root 服务，注入仓库凭据")
-                service.setRepo(repoPath, repoPassword)
+                // 远程仓库的地址由 rclone 服务临时起 serve 取回，只用于本次注入；
+                // 配置变化后 root 侧按 key 换服务，URL 含随机 token，绝不落盘。
+                val options = if (remote != null) {
+                    RemoteBackend.optionsFor(RcloneClient.ensureServe(remote).getOrThrow())
+                } else repoOptions
+                service.setRepo(repoPath, repoPassword, options)
                 injectedBinder = binder
                 injectedVersion = credentialVersion
             }
         }
         return service
-    }
-
-    /** 提前绑定 root 服务，避免点初始化时再等 su 握手。 */
-    suspend fun warmUp() {
-        runCatching { getService() }
-            .onFailure { AppLog.w(TAG, "warmUp 失败（root 服务暂不可用）", it) }
     }
 
     /**
@@ -107,22 +176,28 @@ object RusticClient {
      * 每个包的备份概况（次数 + 最近一次备份 + 最新 apk 快照）。
      * 不再拉「全量快照列表」：那样响应大小跟备份次数成正比，仓库大了会撑爆共享内存。
      * 概况只跟应用数量有关，200 个应用约 160KB。
+     * 失败以 `Result.failure` 返回（远程会带归一后的断连异常），由 UI 决定提示方式。
      */
-    suspend fun repoOverview(): List<RepoOverview> = withContext(Dispatchers.IO) {
-        if (!AppPrefs.hasRepository()) return@withContext emptyList()
+    suspend fun repoOverview(): Result<List<RepoOverview>> = withContext(Dispatchers.IO) {
+        if (!AppPrefs.hasRepository()) return@withContext Result.success(emptyList())
 
         try {
-            val json = JSONObject(getService().overview(EMPTY_REQUEST))
+            val json = JSONObject(remoteCall { getService().overview(EMPTY_REQUEST) })
             if (!json.optBoolean("ok", false)) {
-                AppLog.e(
-                    "备份概况",
-                    json.optString("error").ifBlank { "读取备份概况失败" }
-                )
-                return@withContext emptyList()
+                val message = json.optString("error").ifBlank { "读取备份概况失败" }
+                AppLog.e("备份概况", message)
+                // 远程软错误归一一次（停掉旧 serve，让下次请求重建连接），
+                // 作为 Result.failure 交给 UI 决定怎么提示；本地读失败仍退化为空列表
+                if (AppPrefs.isRemote) {
+                    return@withContext Result.failure(
+                        remoteFailure(IllegalStateException(message))
+                    )
+                }
+                return@withContext Result.success(emptyList())
             }
 
             val array = json.optJSONArray("packages") ?: JSONArray()
-            buildList {
+            Result.success(buildList {
                 for (index in 0 until array.length()) {
                     val item = array.getJSONObject(index)
                     val packageName = item.optString("package")
@@ -163,10 +238,10 @@ object RusticClient {
                         )
                     )
                 }
-            }
+            })
         } catch (t: Throwable) {
             AppLog.e(TAG, "repoOverview failed", t)
-            emptyList()
+            Result.failure(t)
         }
     }
 
@@ -183,10 +258,10 @@ object RusticClient {
                 put("package_name", packageName.orEmpty())
             }
 
-            val json = JSONObject(getService().listSnapshots(request.toString()))
+            val json = JSONObject(remoteCall { getService().listSnapshots(request.toString()) })
             if (!json.optBoolean("ok", false)) {
                 return@withContext Result.failure(
-                    IllegalStateException(json.optString("error").ifBlank { "查询快照失败" })
+                    remoteError(json.optString("error").ifBlank { "查询快照失败" })
                 )
             }
 
@@ -221,9 +296,9 @@ object RusticClient {
             val request = JSONObject().apply {
                 put("ids", JSONArray(ids))
             }
-            val error = getService().deleteSnapshots(request.toString())
+            val error = remoteCall { getService().deleteSnapshots(request.toString()) }
             if (error.isNullOrBlank()) Result.success(Unit)
-            else Result.failure(IllegalStateException(error))
+            else Result.failure(remoteError(error))
         } catch (t: Throwable) {
             AppLog.e(TAG, "deleteSnapshots failed", t)
             Result.failure(t)
@@ -240,6 +315,10 @@ object RusticClient {
         overrides: Map<String, SnapshotOverride> = emptyMap(),
         deleteIds: List<String> = emptyList(),
         batchId: String? = null,
+        /**
+         * 一次「逻辑操作」的标识，写进所有快照的 tag
+         */
+        operationId: Long = System.currentTimeMillis(),
         iconAlreadyBackedUp: Boolean? = null,
         parentIds: Map<SnapshotKind, String>? = null,
         onProgress: (BackupProgress) -> Unit
@@ -271,8 +350,7 @@ object RusticClient {
             // 批量备份时调用方已经知道答案（来自备份概况），不用再查一遍。
             val hasIcon = isDir || isFixed || iconAlreadyBackedUp ?: listSnapshots(
                 packageName = request.packageName
-            ).getOrNull()?.any { it.label == "${request.packageName}:${SnapshotKind.ICON.key}" }
-                ?: false
+            ).getOrThrow().any { it.label == "${request.packageName}:${SnapshotKind.ICON.key}" }
 
             val payload = JSONObject().apply {
                 // 透传到 :root，两侧日志用同一个 op 串起来
@@ -287,7 +365,7 @@ object RusticClient {
                 put(SnapshotKind.USER.key, request.backupUser)
                 put(SnapshotKind.DATA.key, request.backupData)
                 put(SnapshotKind.PERMISSIONS.key, request.backupPermissions)
-                put("timestamp", System.currentTimeMillis())
+                put("timestamp", operationId)
                 put("includeIcon", !hasIcon && !isDir)
                 if (!parentIds.isNullOrEmpty()) put("parents", JSONObject(parentIds.mapKeys { it.key.key }))
                 // 同批次的多个应用共用一次「打开仓库 + 读索引」
@@ -313,10 +391,10 @@ object RusticClient {
                 }
             }
 
-            val error = getService().backup(payload.toString(), callback)
+            val error = remoteCall { getService().backup(payload.toString(), callback) }
             if (!error.isNullOrBlank()) {
                 AppLog.finishOperation(op, "backup", request.packageName, startedAt, "failed: $error")
-                return@withContext Result.failure(IllegalStateException(error))
+                return@withContext Result.failure(remoteError(error))
             }
 
             // 覆盖备份：新的写成功了再删旧的
@@ -324,13 +402,13 @@ object RusticClient {
                 val deleteRequest = JSONObject().apply {
                     put("ids", JSONArray(deleteIds))
                 }
-                val deleteError = getService().deleteSnapshots(deleteRequest.toString())
+                val deleteError = remoteCall { getService().deleteSnapshots(deleteRequest.toString()) }
                 if (!deleteError.isNullOrBlank()) {
                     AppLog.finishOperation(
                         op, "backup", request.packageName, startedAt,
                         "failed: 删除旧快照 $deleteError"
                     )
-                    return@withContext Result.failure(IllegalStateException(deleteError))
+                    return@withContext Result.failure(remoteError(deleteError))
                 }
             }
 
@@ -339,7 +417,7 @@ object RusticClient {
         } catch (t: Throwable) {
             AppLog.e(TAG, "backup failed", t, op)
             AppLog.finishOperation(op, "backup", request.packageName, startedAt, "failed: ${t.message}")
-            Result.failure(t)
+            Result.failure(remoteFailure(t))
         }
     }
 
@@ -349,43 +427,156 @@ object RusticClient {
 
     private val repoPath: String get() = AppPrefs.repoPath
     private val repoPassword: String get() = AppPrefs.repoPassword
+    private val repoOptions: String get() = AppPrefs.repoOptions
+
+    /** 校验候选仓库：已有仓库密码正确时 open 成功，空仓库才尝试建库。 */
+    private suspend fun verifyRepository(
+        path: String,
+        password: String,
+        options: String
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        val op = AppLog.startOperation("initRepo", path)
+        val startedAt = System.currentTimeMillis()
+        try {
+            // 候选配置还没写进 AppPrefs：只拿 binder，不注入当前仓库的凭据，
+            // 免得旧仓库连不上时把刚起好的候选 serve 顶掉。initRepo 只读候选值，
+            // 这里也保留原始错误，好把「连接测试失败」和「开库失败」分开。
+            val error = bindService().initRepo(path, password, options)
+            if (error.isNullOrBlank()) {
+                AppLog.finishOperation(op, "initRepo", path, startedAt, "ok")
+                Result.success(Unit)
+            } else {
+                AppLog.finishOperation(op, "initRepo", path, startedAt, "failed: $error")
+                Result.failure(IllegalStateException(error))
+            }
+        } catch (t: Throwable) {
+            AppLog.e(TAG, "verifyRepository failed", t, op)
+            AppLog.finishOperation(op, "initRepo", path, startedAt, "failed: ${t.message}")
+            Result.failure(t)
+        }
+    }
+
+    /** 远程服务配置库：getService() 注入凭据时按 id 找回它重新派生 options。 */
+    private fun syncRemoteRepos(repo: RemoteRepo) {
+        AppPrefs.remoteRepos = AppPrefs.remoteRepos.filter { it.id != repo.id } + repo
+    }
+
+    /** 远程配置每次重新向 rclone 服务取地址：URL 只在本次会话内有效，不落盘。 */
+    private suspend fun remoteOptions(repo: RemoteRepo): Result<String> =
+        RcloneClient.ensureServe(repo).map { RemoteBackend.optionsFor(it) }
 
     /**
-     * 初始化 / 校验 rustic 仓库，成功后才记住地址和密码。
+     * 本地仓库先确认 config 存在：initRepo 的语义是「打开失败就在空目录建库」，
+     * 切换 / 编辑时不该因为路径写错而悄悄新建一个空仓库。
+     */
+    private fun localRepoError(location: String, isRemote: Boolean): String? =
+        if (!isRemote && !File(location, "config").isFile) {
+            "仓库目录里没有 rustic 配置：$location"
+        } else {
+            null
+        }
+
+    /**
+     * 初始化 / 校验 / 切换 rustic 仓库，成功后才记住地址、密码和后端选项。
      *
-     * 候选路径和密码只随 initRepo() 这一次请求下传，不写全局配置。
+     * 候选值只随 initRepo() 这一次请求下传，不写全局配置。
      * 因此失败时 AppPrefs 保持原样，root / Rust 侧也没被改过，不需要任何回滚。
      *
-     * @return 成功返回 Unit；失败返回带具体原因的错误。
+     * @param path 本地文件系统路径，或 RemoteRepo.location
+     * @param options rustic_backend 的后端选项 JSON；本地传默认的 "{}"
+     * @param remote 远程服务配置；非空时同步进 remoteRepos，本地传 null
+     * @param switching true 表示切换已有仓库：本地目录还必须有 config，避免误建空库
      */
-    suspend fun initRepository(path: String, password: String): Result<Unit> {
-        // 空目录 / 空密码都不该建仓库：空密码等于把备份完全敞开
+    suspend fun initRepository(
+        path: String,
+        password: String,
+        options: String = EMPTY_REQUEST,
+        remote: RemoteRepo? = null,
+        switching: Boolean = false
+    ): Result<Unit> {
+        // 空位置 / 空密码都不该建仓库：空密码等于把备份完全敞开
         if (path.isBlank()) {
             return Result.failure(IllegalStateException("请先选择仓库目录"))
         }
         if (password.isBlank()) {
             return Result.failure(IllegalStateException("请先输入仓库密码"))
         }
+        if (switching) {
+            localRepoError(path, remote != null)?.let {
+                return Result.failure(IllegalStateException(it))
+            }
+        }
 
-        return withContext(Dispatchers.IO) {
-            val op = AppLog.startOperation("initRepo", path)
-            val startedAt = System.currentTimeMillis()
-            try {
-                val error = getService().initRepo(path, password)
-                if (error.isNullOrBlank()) {
-                    AppPrefs.saveRepository(path, password)
-                    // 成功才让下一次 getService() 把新凭据注入到 root / Rust 侧
-                    invalidateCredentials()
-                    AppLog.finishOperation(op, "initRepo", path, startedAt, "ok")
-                    Result.success(Unit)
-                } else {
-                    AppLog.finishOperation(op, "initRepo", path, startedAt, "failed: $error")
-                    Result.failure(IllegalStateException(error))
-                }
-            } catch (t: Throwable) {
-                AppLog.e(TAG, "initRepository failed", t, op)
-                AppLog.finishOperation(op, "initRepo", path, startedAt, "failed: ${t.message}")
-                Result.failure(t)
+        return verifyRepository(path, password, options).onSuccess {
+            // 远程的 options 是本次会话的 rest_url（含随机 token），不能写进 AppPrefs；
+            // 下次绑定会重新向 rclone 服务取地址。
+            AppPrefs.saveRepository(
+                path, password, if (remote == null) options else EMPTY_REQUEST
+            )
+            if (!switching) {
+                AppPrefs.addSavedRepo(
+                    SavedRepo.of(path, password, remote, remote?.name.orEmpty())
+                )
+            }
+            if (remote != null) syncRemoteRepos(remote)
+            // 成功才让下一次 getService() 把新凭据注入到 root / Rust 侧
+            invalidateCredentials()
+        }
+    }
+
+    /**
+     * 初始化 / 切换远程仓库：位置和后端选项都由业务层从 [RemoteRepo] 派生，UI 只传数据。
+     *
+     * 非本地协议先测连接，失败直接返回、不落盘；测连过了才起 serve、才尝试 initRepo。
+     * 和 [initRepository] 一样是候选值语义，成功后才保存。
+     * 切换清单里已有的仓库时传 `switching = true`，语义见 [initRepository]。
+     */
+    suspend fun initRemoteRepository(
+        repo: RemoteRepo,
+        password: String,
+        switching: Boolean = false
+    ): Result<Unit> {
+        if (!repo.protocol.isLocal) {
+            testConnection(repo).getOrElse { return Result.failure(it) }
+        }
+        val options = remoteOptions(repo).getOrElse { return Result.failure(it) }
+        return initRepository(repo.location, password, options, repo, switching)
+    }
+
+    /**
+     * 编辑已添加的仓库：校验通过才更新清单；改的是当前仓库时同步当前凭据。
+     * 非当前仓库只改记录，不影响正在使用的仓库。
+     */
+    suspend fun updateSavedRepo(
+        old: SavedRepo,
+        form: RemoteRepo,
+        password: String
+    ): Result<Unit> {
+        val location = form.location
+        if (location.isBlank()) {
+            return Result.failure(IllegalStateException("请先选择仓库目录"))
+        }
+        if (password.isBlank()) {
+            return Result.failure(IllegalStateException("请先输入仓库密码"))
+        }
+        val remote = form.takeIf { !it.protocol.isLocal }
+        localRepoError(location, remote != null)?.let {
+            return Result.failure(IllegalStateException(it))
+        }
+        val options = if (remote != null) {
+            remoteOptions(remote).getOrElse { return Result.failure(it) }
+        } else EMPTY_REQUEST
+        val savedOptions = if (remote == null) options else EMPTY_REQUEST
+        val isCurrent = old.location == AppPrefs.repoPath
+        return verifyRepository(location, password, options).onSuccess {
+            AppPrefs.replaceSavedRepo(
+                old.location,
+                SavedRepo.of(location, password, remote, form.name)
+            )
+            if (remote != null) syncRemoteRepos(remote)
+            if (isCurrent) {
+                AppPrefs.saveRepository(location, password, savedOptions)
+                invalidateCredentials()
             }
         }
     }
@@ -414,7 +605,7 @@ object RusticClient {
         if (!AppPrefs.hasRepository()) return emptyList()
 
         // 调用方已经查过概况就直接用，避免列表页一次刷新查两遍仓库
-        return (overview ?: repoOverview())
+        return (overview ?: repoOverview().getOrElse { emptyList() })
             .asSequence()
             .filter { it.hasApk }
             .map { overview ->
@@ -446,23 +637,35 @@ object RusticClient {
     suspend fun backupOverview(
         appNames: Map<String, String>,
         overview: List<RepoOverview>? = null
-    ): List<AppBackupSummary> =
-        (overview ?: repoOverview()).map { overview ->
-            val version = SnapshotMeta.version(overview.tags)
-            AppBackupSummary(
-                packageName = overview.packageName,
-                count = overview.count,
-                latest = BackupEntry(
-                    title = appNames[overview.packageName] ?: overview.packageName,
-                    time = overview.time,
-                    description = overview.description,
-                    version = version,
-                    userName = SnapshotMeta.userName(overview.tags),
-                    snapshots = overview.snapshots
-                ),
-                hasIcon = overview.hasIcon
-            )
-        }.sortedByDescending { it.latest.time }
+    ): List<AppBackupSummary> = buildSummaries(
+        appNames,
+        overview ?: repoOverview().getOrElse { emptyList() }
+    )
+
+    suspend fun backupOverviewResult(
+        appNames: Map<String, String>
+    ): Result<List<AppBackupSummary>> =
+        repoOverview().map { buildSummaries(appNames, it) }
+
+    private fun buildSummaries(
+        appNames: Map<String, String>,
+        overview: List<RepoOverview>
+    ): List<AppBackupSummary> = overview.map { item ->
+        val version = SnapshotMeta.version(item.tags)
+        AppBackupSummary(
+            packageName = item.packageName,
+            count = item.count,
+            latest = BackupEntry(
+                title = appNames[item.packageName] ?: item.packageName,
+                time = item.time,
+                description = item.description,
+                version = version,
+                userName = SnapshotMeta.userName(item.tags),
+                snapshots = item.snapshots
+            ),
+            hasIcon = item.hasIcon
+        )
+    }.sortedByDescending { it.latest.time }
 
     /**
      * 取某个包备份里的图标（应用没装时用）。
@@ -488,9 +691,9 @@ object RusticClient {
                     put("id", icon.id)
                     put("dest", dir.absolutePath)
                 }
-                val error = getService().exportSnapshot(request.toString())
+                val error = remoteCall { getService().exportSnapshot(request.toString()) }
                 if (!error.isNullOrBlank()) {
-                    return@withContext Result.failure(IllegalStateException(error))
+                    return@withContext Result.failure(remoteError(error))
                 }
 
                 val file = dir.listFiles()?.firstOrNull { it.isFile }
@@ -531,10 +734,12 @@ object RusticClient {
     /**
      * 系统数据（Wi-Fi / 联系人 / 通话记录）各有多少条；读不到的类型不在结果里。
      * 三类都由 root 侧数（Wi-Fi 走 WifiManager，另外两类走 provider 的外部通道）。
+     * 只是借 root 进程权限读本机数据，不碰仓库：用 [bindService] 只拿 binder，
+     * 不走 [remoteCall]，也不注入当前仓库的凭据。
      */
     suspend fun systemDataCounts(): Map<SnapshotKind, Int> = withContext(Dispatchers.IO) {
         runCatching {
-            val counts = JSONObject(getService().systemDataCounts()).optJSONObject("counts")
+            val counts = JSONObject(bindService().systemDataCounts()).optJSONObject("counts")
                 ?: return@runCatching emptyMap<SnapshotKind, Int>()
 
             SystemDataExporter.SYSTEM_KINDS.mapNotNull { kind ->
@@ -543,10 +748,10 @@ object RusticClient {
         }.getOrDefault(emptyMap())
     }
 
-    /** 打开 / 关闭 Wi-Fi */
+    /** 打开 / 关闭 Wi-Fi；纯本机操作，不碰仓库，用 [bindService] 只拿 binder。 */
     suspend fun setWifiEnabled(enabled: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val error = getService().setWifiEnabled(enabled)
+            val error = bindService().setWifiEnabled(enabled)
             if (error.isNullOrBlank()) Result.success(Unit)
             else Result.failure(IllegalStateException(error))
         } catch (t: Throwable) {
@@ -558,12 +763,10 @@ object RusticClient {
         if (!AppPrefs.hasRepository()) return@withContext Result.success(0)
 
         try {
-            val json = JSONObject(getService().cleanOrphanIcons(EMPTY_REQUEST))
+            val json = JSONObject(remoteCall { getService().cleanOrphanIcons(EMPTY_REQUEST) })
             if (!json.optBoolean("ok", false)) {
                 return@withContext Result.failure(
-                    IllegalStateException(
-                        json.optString("error").ifBlank { "清理孤立图标失败" }
-                    )
+                    remoteError(json.optString("error").ifBlank { "清理孤立图标失败" })
                 )
             }
             Result.success(json.optInt("removed"))
@@ -597,12 +800,14 @@ object RusticClient {
      */
     suspend fun prune(): Result<Int> = withContext(Dispatchers.IO) {
         try {
-            // 删除孤儿图标后再整理空间
-            val removedIcons = cleanOrphanIcons().getOrDefault(0)
+            // 删除孤儿图标后再整理空间；前一步失败（含测连失败）直接中断
+            val removedIcons = cleanOrphanIcons().getOrElse {
+                return@withContext Result.failure(it)
+            }
 
-            val error = getService().prune(EMPTY_REQUEST)
+            val error = remoteCall { getService().prune(EMPTY_REQUEST) }
             if (!error.isNullOrBlank()) {
-                return@withContext Result.failure(IllegalStateException(error))
+                return@withContext Result.failure(remoteError(error))
             }
 
             Result.success(removedIcons)
@@ -619,14 +824,12 @@ object RusticClient {
      */
     suspend fun estimatePrune(): Result<Long> = withContext(Dispatchers.IO) {
         try {
-            val json = JSONObject(getService().pruneEstimate(EMPTY_REQUEST))
+            val json = JSONObject(remoteCall { getService().pruneEstimate(EMPTY_REQUEST) })
             if (json.optBoolean("ok", false)) {
                 Result.success(json.optLong("bytes", 0L))
             } else {
                 Result.failure(
-                    IllegalStateException(
-                        json.optString("error").ifBlank { "估算可回收空间失败" }
-                    )
+                    remoteError(json.optString("error").ifBlank { "估算可回收空间失败" })
                 )
             }
         } catch (t: Throwable) {
@@ -646,11 +849,11 @@ object RusticClient {
                     }
                 }
 
-                val error = getService().updateDescription(request.toString())
+                val error = remoteCall { getService().updateDescription(request.toString()) }
                 if (error.isNullOrBlank()) {
                     Result.success(Unit)
                 } else {
-                    Result.failure(IllegalStateException(error))
+                    Result.failure(remoteError(error))
                 }
             } catch (t: Throwable) {
                 AppLog.e(TAG, "updateEntryDescription failed", t)
@@ -666,6 +869,8 @@ object RusticClient {
         app: AppInfo,
         groups: Set<BackupGroup>,
         onProgress: (BackupProgress) -> Unit = {},
+        /** 一次逻辑操作的标识：重试沿用，主动新备份换新值。 */
+        operationId: Long = System.currentTimeMillis(),
         /**
          * 批量备份的批次标识：同一批里每个应用传同一个值。
          *
@@ -696,6 +901,7 @@ object RusticClient {
                 request(app, groups),
                 onProgress = onProgress,
                 batchId = batchId,
+                operationId = operationId,
                 iconAlreadyBackedUp = iconAlreadyBackedUp,
                 parentIds = parentIds
             )
@@ -716,7 +922,9 @@ object RusticClient {
         entry: BackupEntry,
         groups: Set<BackupGroup>,
         onProgress: (BackupProgress) -> Unit = {},
-        batchId: String? = null
+        batchId: String? = null,
+        /** 一次逻辑操作的标识：重试沿用，主动新备份换新值。 */
+        operationId: Long = System.currentTimeMillis()
     ): Result<Unit> {
         val selected = entry.selectedSnapshots(groups)
         if (selected.isEmpty()) {
@@ -739,7 +947,8 @@ object RusticClient {
                 overrides = overrides,
                 deleteIds = selected.map { it.id },
                 onProgress = onProgress,
-                batchId = batchId
+                batchId = batchId,
+                operationId = operationId
             )
         }
         // 覆盖备份也是备份：本程序可能已经升级过，仓库里那份得跟着换。
@@ -783,6 +992,8 @@ object RusticClient {
      */
     suspend fun exportSelfApk() = withContext(Dispatchers.IO) {
         if (!AppPrefs.backupSelf) return@withContext
+        // 远程仓库没有「根目录」可以 cp，跳过（不影响备份主流程）
+        if (AppPrefs.isRemote) return@withContext
         val dir = repoPath
         if (dir.isBlank()) return@withContext
 
@@ -881,10 +1092,10 @@ object RusticClient {
                     }
                 }
 
-                val error = getService().restoreSnapshots(request.toString(), callback)
+                val error = remoteCall { getService().restoreSnapshots(request.toString(), callback) }
                 if (!error.isNullOrBlank()) {
                     AppLog.finishOperation(op, "restore", app.packageName, startedAt, "failed: $error")
-                    return@withContext Result.failure(IllegalStateException(error))
+                    return@withContext Result.failure(remoteError(error))
                 }
 
                 AppLog.finishOperation(
@@ -895,7 +1106,7 @@ object RusticClient {
             } catch (t: Throwable) {
                 AppLog.e(TAG, "restore failed", t, op)
                 AppLog.finishOperation(op, "restore", app.packageName, startedAt, "failed: ${t.message}")
-                Result.failure(t)
+                Result.failure(remoteFailure(t))
             }
         }
     }

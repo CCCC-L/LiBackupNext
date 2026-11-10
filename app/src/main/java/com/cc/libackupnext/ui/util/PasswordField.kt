@@ -64,7 +64,7 @@ fun PasswordField(
         modifier = modifier.fillMaxWidth(),
         enabled = enabled,
         singleLine = true,
-        textStyle = MaterialTheme.typography.bodySmall.copy(
+        textStyle = MaterialTheme.typography.bodyLarge.copy(
             color = if (enabled) colors.onSurface else colors.fieldDisabledTextColor
         ),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),

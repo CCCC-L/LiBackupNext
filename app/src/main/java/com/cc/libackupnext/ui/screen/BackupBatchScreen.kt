@@ -1,6 +1,5 @@
 package com.cc.libackupnext.ui.screen
 
-import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
@@ -65,8 +64,12 @@ import com.cc.libackupnext.entity.isVersionChangedFrom
 import com.cc.libackupnext.service.BackupProgress
 import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.ui.AppTopBar
+import com.cc.libackupnext.ui.BatchAction
+import com.cc.libackupnext.ui.BatchItem
+import com.cc.libackupnext.ui.BatchOrigin
 import com.cc.libackupnext.ui.HomeTab
 import com.cc.libackupnext.ui.MainViewModel
+import com.cc.libackupnext.ui.PendingBatch
 import com.cc.libackupnext.ui.SortMenuExtra
 import com.cc.libackupnext.ui.SortType
 import com.cc.libackupnext.ui.dialog.BackupHelpDialog
@@ -91,7 +94,6 @@ import com.cc.libackupnext.util.AppLog
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.UUID
 import kotlin.math.roundToInt
 
 /** 勾选列的宽度：列头和数据行保持一致才能对齐。 */
@@ -169,6 +171,8 @@ fun BackupBatchScreen(
     var progressRestore by remember { mutableStateOf(false) }
     var progressError by remember { mutableStateOf<String?>(null) }
     var showProgress by remember { mutableStateOf(false) }
+    /** 远程仓库连接中断：弹窗改中断态，只留一行提示；错误原文走日志。 */
+    var connectionInterrupted by remember { mutableStateOf(false) }
 
     // 删除 / 覆盖备份要双击确认
     val doubleClickGuard = rememberDoubleClickGuard()
@@ -255,7 +259,16 @@ fun BackupBatchScreen(
     // displayApps 为空时（应用列表还没加载完）也要重跑一次，否则默认全选选不到东西
     LaunchedEffect(reloadKey, displayApps.isEmpty()) {
         val names = allApps.associate { it.packageName to it.name }
-        val list = RusticClient.backupOverview(names)
+        val result = RusticClient.backupOverviewResult(names)
+        result.onFailure { t ->
+            if (RusticClient.isRemoteConnectionFailure(t)) {
+                AppLog.toastOnMain(
+                    t.message ?: RusticClient.REMOTE_INTERRUPTED_MESSAGE,
+                    longToast = true
+                )
+            }
+        }
+        val list = result.getOrElse { emptyList() }
         overview = list.associateBy { it.packageName }
         viewModel.batchOverviewCache = overview
         // 概况已经是仓库的最新状态，临时记录可以清掉了
@@ -412,7 +425,7 @@ fun BackupBatchScreen(
         val matched = visibleApps.filter(predicate).mapTo(HashSet()) { it.packageName }
 
         if (matched.isEmpty()) {
-            Toast.makeText(context, emptyMessage, Toast.LENGTH_SHORT).show()
+            AppLog.toastOnMain(emptyMessage)
             return
         }
 
@@ -459,6 +472,37 @@ fun BackupBatchScreen(
     }
 
     /**
+     * 把这次勾选的目标连同选中的那条备份一起冻结成 [BatchItem]。
+     *
+     * 重试必须用这份快照，不能重新读 current 的 selected / overview.latest：
+     * 操作过程中勾选、deletedKinds、备份概况都会变，重算就会跑到别的项或别的版本上。
+     */
+    fun batchItems(): List<BatchItem> = targets().map { (app, kinds) ->
+        BatchItem(app, kinds, entryOf(app.packageName))
+    }
+
+    /** 新操作生成新 operationId 并登记待办；重试沿用旧 operationId 和剩余清单。 */
+    fun resolveBatch(action: BatchAction, resume: Boolean): Pair<List<BatchItem>, Long>? {
+        if (resume) {
+            return viewModel.pendingBatch.value?.let { it.items to it.operationId }
+        }
+        val items = batchItems()
+        if (items.isEmpty()) return null
+        val operationId = System.currentTimeMillis()
+        viewModel.setPending(
+            PendingBatch(
+                action = action,
+                items = items,
+                operationId = operationId,
+                origin = BatchOrigin.BATCH,
+                batchMode = mode,
+                batchTab = tab
+            )
+        )
+        return items to operationId
+    }
+
+    /**
      * 批量执行，逐个应用跑 [action]。
      *
      * 进度弹窗和应用详情页共用：显示当前应用的步骤，副标题是「3/10 应用名」。
@@ -469,20 +513,21 @@ fun BackupBatchScreen(
         title: String,
         doneTitle: String,
         isRestore: Boolean,
-        list: List<Pair<AppInfo, Set<BackupGroup>>>,
-        stepsOf: (AppInfo, Set<BackupGroup>) -> List<BackupStep>,
+        list: List<BatchItem>,
+        stepsOf: (BatchItem) -> List<BackupStep>,
         onFinished: (suspend (successCount: Int) -> Unit)? = null,
-        action: suspend (AppInfo, Set<BackupGroup>, (BackupProgress) -> Unit) -> Result<Unit>
+        action: suspend (BatchItem, (BackupProgress) -> Unit) -> Result<Unit>
     ) {
         if (list.isEmpty()) {
-            Toast.makeText(context, "请先勾选要操作的内容", Toast.LENGTH_SHORT).show()
+            AppLog.toastOnMain("请先勾选要操作的内容")
             return
         }
         progressTitle = title
         progressDoneTitle = doneTitle
         progressRestore = isRestore
         progressError = null
-        progressSubtitle = "开始:${list.first().first.packageName}"
+        connectionInterrupted = false
+        progressSubtitle = "开始:${list.first().app.packageName}"
         progressSections = emptyList()
         running = true
         showProgress = true
@@ -493,18 +538,22 @@ fun BackupBatchScreen(
         BackupNotifier.start(
             context = context,
             action = actionLabel,
-            appName = list.first().first.name,
-            packageName = list.first().first.packageName,
-            userId = list.first().first.userId,
+            appName = list.first().app.name,
+            packageName = list.first().app.packageName,
+            userId = list.first().app.userId,
             appIndex = 1,
             appTotal = list.size
         )
 
         scope.launch {
             var failed = 0
+            var aborted = false
+            // 未完成清单：每成功一项就划掉，失败和没跑到的原样留着
+            val remaining = list.toMutableList()
             try {
-                for ((app, kinds) in list) {
-                    val appSteps = stepsOf(app, kinds)
+                for (item in list) {
+                    val app = item.app
+                    val appSteps = stepsOf(item)
                     progressSubtitle = if (total > 1) {
                         "${finished + 1}/$total  ${app.name}"
                     } else {
@@ -528,7 +577,7 @@ fun BackupBatchScreen(
                         stageTotal = appSteps.size
                     )
 
-                    action(app, kinds) { progress ->
+                    action(item) { progress ->
                         val last = progressSections.last()
                         progressSections = progressSections.dropLast(1) +
                                 last.copy(steps = RusticClient.applyProgress(last.steps, progress))
@@ -546,30 +595,49 @@ fun BackupBatchScreen(
                             stageIndex = if (stepIndex >= 0) stepIndex + 1 else 1,
                             stageTotal = appSteps.size
                         )
-                    }.onFailure {
+                    }.onFailure { t ->
                         failed++
-                        AppLog.e(progressTitle, "${app.name} 失败", it)
-                        progressError = it.message ?: "操作失败"
+                        AppLog.e(progressTitle, "${app.name} 失败", t)
+                        if (RusticClient.isRemoteConnectionFailure(t)) {
+                            connectionInterrupted = true
+                            progressError = null
+                            aborted = true
+                        } else {
+                            progressError = t.message ?: "操作失败"
+                        }
                         val last = progressSections.last()
                         progressSections = progressSections.dropLast(1) +
                                 last.copy(steps = RusticClient.markFailed(last.steps))
+                    }.onSuccess {
+                        remaining.remove(item)
+                        viewModel.updatePendingItems(remaining.toList())
                     }
                     finished++
+                    if (aborted) break
                 }
             } finally {
+                // 停批 / 页面销毁时也要把最终剩余清单写回，tab 页的「继续未完成」才能拿到
+                viewModel.updatePendingItems(remaining.toList())
                 // 宿主销毁（转屏 / 切深色模式）会把 scope 一起取消，
                 // 已经备份成功的那些应用仍然需要这份 apk，收尾不能跟着丢
                 if (onFinished != null) {
-                    withContext(NonCancellable) { onFinished(total - failed) }
+                    withContext(NonCancellable) { onFinished(finished - failed) }
                 }
             }
             running = false
-            progressSubtitle = if (failed == 0) {
-                "完成 $total/$total"
-            } else {
-                "完成 ${total - failed}/$total，失败 $failed 个"
+            // 停批后有应用没跑到，成功数不能用 total - failed 反推
+            val succeeded = finished - failed
+            val notRun = total - finished
+            progressSubtitle = buildString {
+                append("完成 $succeeded/$total")
+                if (failed > 0) append("，失败 $failed 个")
+                if (notRun > 0) append("，未执行 $notRun 个")
             }
-            BackupNotifier.finish(context, actionLabel, failed, total)
+            if (aborted) {
+                BackupNotifier.abort(context, actionLabel)
+            } else {
+                BackupNotifier.finish(context, actionLabel, failed, total)
+            }
             // 勾选保留，方便连续操作
             reloadKey++
 
@@ -584,91 +652,116 @@ fun BackupBatchScreen(
         }
     }
 
-    fun startCreate() {
-        // 整批共用一个批次标识：仓库只打开一次（scrypt + 读索引 563ms），
-        // 后面的应用直接复用，几十个应用能省几十秒
-        val batchId = UUID.randomUUID().toString()
+    fun startCreate(resume: Boolean = false) {
+        val (items, operationId) = resolveBatch(BatchAction.CREATE, resume) ?: return
+        // 整批共用一个批次标识：仓库只打开一次（scrypt + 读索引 563ms）。
+        // 重试沿用同一个值，中途已写入的快照和补齐的快照时间戳相同，不会多出一条备份。
+        val batchId = operationId.toString()
 
         runBatch(
             title = "正在备份",
             doneTitle = "备份成功",
             isRestore = false,
-            list = targets(),
-            stepsOf = { _, kinds -> RusticClient.backupSteps(kinds) },
+            list = items,
+            stepsOf = { item -> RusticClient.backupSteps(item.kinds) },
             onFinished = { successCount ->
                 if (successCount > 0) RusticClient.exportSelfApk()
             }
-        ) { app, kinds, onProgress ->
+        ) { item, onProgress ->
             // 图标有没有备份过，概况里已经带了，不用每个应用再查一次仓库
             RusticClient.backup(
-                app = app,
-                groups = kinds,
+                app = item.app,
+                groups = item.kinds,
                 onProgress = onProgress,
+                operationId = operationId,
                 batchId = batchId,
-                iconAlreadyBackedUp = overview[app.packageName]?.hasIcon,
+                iconAlreadyBackedUp = overview[item.app.packageName]?.hasIcon,
                 // 同类型最新快照的 id：给 rustic 当 parent，省掉它自己列一遍全部快照
-                parentIds = overview[app.packageName]?.latest?.snapshots
+                parentIds = overview[item.app.packageName]?.latest?.snapshots
                     ?.mapNotNull { snapshot -> snapshot.kind()?.let { it to snapshot.id } }
                     ?.toMap()
             )
         }
     }
 
-    fun startDelete() {
+    fun startDelete(resume: Boolean = false) {
+        val (items, _) = resolveBatch(BatchAction.DELETE, resume) ?: return
         runBatch(
             title = "正在删除",
             doneTitle = "删除成功",
             isRestore = false,
-            list = targets(),
-            stepsOf = { _, _ -> emptyList() }
-        ) { app, kinds, _ ->
-            val entry = entryOf(app.packageName)
+            list = items,
+            stepsOf = { emptyList() }
+        ) { item, _ ->
+            val entry = item.entry
                 ?: return@runBatch Result.failure(IllegalStateException("没有可删除的备份"))
 
-            RusticClient.deleteSelected(entry, kinds).onSuccess {
+            RusticClient.deleteSelected(entry, item.kinds).onSuccess {
                 // 删掉的类型立刻取消勾选并禁止再勾：仓库里已经没有它们了
-                selected[app.packageName] = kindsOf(app.packageName) - kinds
+                selected[item.app.packageName] = kindsOf(item.app.packageName) - item.kinds
                 deletedKinds = deletedKinds +
-                        (app.packageName to deletedKinds[app.packageName].orEmpty() + kinds)
+                        (item.app.packageName to deletedKinds[item.app.packageName].orEmpty() + item.kinds)
                 // 详情页选过来的那条备份已经变了，别再用它算「可勾选类型」
-                viewModel.selectedEntries.remove(app.packageName)
+                viewModel.selectedEntries.remove(item.app.packageName)
             }
         }
     }
 
-    fun startOverwrite() {
-        val batchId = UUID.randomUUID().toString()
+    fun startOverwrite(resume: Boolean = false) {
+        val (items, operationId) = resolveBatch(BatchAction.OVERWRITE, resume) ?: return
+        val batchId = operationId.toString()
 
         runBatch(
             title = "正在覆盖备份",
             doneTitle = "覆盖成功",
             isRestore = false,
-            list = targets(),
-            stepsOf = { _, kinds -> RusticClient.backupSteps(kinds) },
+            list = items,
+            stepsOf = { item -> RusticClient.backupSteps(item.kinds) },
             onFinished = { successCount ->
                 if (successCount > 0) RusticClient.exportSelfApk()
             }
-        ) { app, kinds, onProgress ->
-            val entry = entryOf(app.packageName)
+        ) { item, onProgress ->
+            val entry = item.entry
                 ?: return@runBatch Result.failure(IllegalStateException("没有可覆盖的备份"))
-            RusticClient.overwrite(app, entry, kinds, onProgress, batchId)
+            RusticClient.overwrite(item.app, entry, item.kinds, onProgress, batchId, operationId)
         }
     }
 
-    fun startRestore() {
+    fun startRestore(resume: Boolean = false) {
+        val (items, _) = resolveBatch(BatchAction.RESTORE, resume) ?: return
         runBatch(
             title = "正在恢复",
             doneTitle = "恢复成功",
             isRestore = true,
-            list = targets(),
-            stepsOf = { app, kinds ->
-                val entry = entryOf(app.packageName)
-                if (entry == null) emptyList() else RusticClient.restoreSteps(entry, kinds)
+            list = items,
+            stepsOf = { item ->
+                item.entry?.let { RusticClient.restoreSteps(it, item.kinds) } ?: emptyList()
             }
-        ) { app, kinds, onProgress ->
-            val entry = entryOf(app.packageName)
+        ) { item, onProgress ->
+            val entry = item.entry
                 ?: return@runBatch Result.failure(IllegalStateException("没有可恢复的备份"))
-            RusticClient.restore(app, entry, kinds, installed = !app.onlyInBackup, onProgress = onProgress)
+            RusticClient.restore(
+                app = item.app,
+                entry = entry,
+                groups = item.kinds,
+                installed = !item.app.onlyInBackup,
+                onProgress = onProgress
+            )
+        }
+    }
+
+    // 从 tab 页「更多」菜单点「继续未完成」跳回来后自动续跑
+    val resumeRequested by viewModel.resumeRequested.collectAsState()
+    LaunchedEffect(resumeRequested) {
+        if (!resumeRequested) return@LaunchedEffect
+        viewModel.resumeRequested.value = false
+        val pending = viewModel.pendingBatch.value ?: return@LaunchedEffect
+        if (pending.origin != BatchOrigin.BATCH) return@LaunchedEffect
+        when (pending.action) {
+            BatchAction.CREATE -> startCreate(resume = true)
+            BatchAction.OVERWRITE -> startOverwrite(resume = true)
+            BatchAction.RESTORE -> startRestore(resume = true)
+            BatchAction.DELETE -> startDelete(resume = true)
         }
     }
 
@@ -955,7 +1048,11 @@ fun BackupBatchScreen(
             isRestore = progressRestore,
             error = progressError,
             running = running,
-            onDismiss = { showProgress = false }
+            onDismiss = {
+                showProgress = false
+                connectionInterrupted = false
+            },
+            connectionInterrupted = connectionInterrupted
         )
     }
 

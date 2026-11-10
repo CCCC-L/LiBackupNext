@@ -198,6 +198,29 @@ object BackupNotifier {
         }
     }
 
+    /**
+     * 远程连接导致整批中断：既不是完成也不是普通失败，单独给一条「已中断」通知。
+     * 收尾顺序和 [finish] 一致，避免部分 ROM 把进度快照重画回来。
+     */
+    fun abort(context: Context, action: String) {
+        running = false
+
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        val notification = build(
+            context = context,
+            packageName = null,
+            userId = 0,
+            title = "${action}已中断",
+            text = "操作未完成，可在「更多」菜单里继续",
+            shortText = "",
+            ongoing = false,
+            promoted = false
+        )
+        runCatching { ProgressService.instance?.finishAndStop() }
+        runCatching { manager.cancel(NOTIFICATION_ID) }
+        runCatching { manager.notify(NOTIFICATION_ID, notification) }
+    }
+
     fun cancel(context: Context) {
         running = false
 

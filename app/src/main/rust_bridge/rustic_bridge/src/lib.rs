@@ -15,6 +15,7 @@
 //! 响应：`{"ok":true}` 或 `{"ok":false,"error":"..."}`
 //! 进度：`{"stage":"apk","done":123,"total":456,"finished":false}`
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -24,7 +25,7 @@ use std::time::{Duration, Instant};
 use jni::objects::{JByteBuffer, JObject, JString};
 use jni::sys::jint;
 use jni::EnvUnowned;
-use rustic_backend::LocalBackend;
+use rustic_backend::choose::BackendOptions;
 use rustic_core::{
     BackupOptions, ConfigOptions, Credentials, KeyOptions, LsOptions, PathList, Repository,
     RepositoryBackends, RepositoryOptions, SnapshotOptions, StringList,
@@ -181,10 +182,14 @@ struct BackupItem {
 }
 
 /// 初始化 / 校验仓库用的**候选**凭据：只跟着这一次请求走，不写全局配置。
+/// `path` 现在既可以是本地路径，也可以是带协议前缀的仓库位置。
 #[derive(Deserialize)]
 struct InitRequest {
     path: String,
     password: String,
+    /// 透传给 BackendOptions.options；本地仓库为空 map。
+    #[serde(default)]
+    options: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -264,7 +269,7 @@ impl BridgeResponse {
 
 // ==================== 仓库凭据 ====================
 
-/// 仓库地址和密码：由 `nativeSetRepo` 在绑定 / 初始化成功 / 换仓库时写入一次。
+/// 仓库地址、密码和后端选项：由 `nativeSetRepo` 在绑定 / 初始化成功 / 换仓库时写入一次。
 ///
 /// 业务请求 JSON 里不再带 path / password，都从这里读；`initRepo` 是例外，
 /// 它自带的候选凭据只用于本次建库 / 校验，不写进这里。
@@ -272,8 +277,11 @@ impl BridgeResponse {
 /// 即使缓存没来得及清，也不会错误复用旧仓库实例。
 #[derive(Clone)]
 struct RepoConfig {
+    /// 本地文件系统路径，或逻辑仓库标识（remote: 等）
     path: String,
     password: String,
+    /// 透传给 BackendOptions.options 的后端选项
+    options: BTreeMap<String, String>,
     generation: u64,
 }
 
@@ -281,7 +289,7 @@ static REPO_CONFIG: Mutex<Option<RepoConfig>> = Mutex::new(None);
 static REPO_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// 空路径 / 空密码视为「没有配置」，避免拿半截凭据去开仓库。
-fn set_repo(path: &str, password: &str) {
+fn set_repo(path: &str, password: &str, options: BTreeMap<String, String>) {
     let generation = REPO_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     if let Ok(mut guard) = REPO_CONFIG.lock() {
         *guard = if path.is_empty() || password.is_empty() {
@@ -290,12 +298,14 @@ fn set_repo(path: &str, password: &str) {
             Some(RepoConfig {
                 path: path.to_string(),
                 password: password.to_string(),
+                options,
                 generation,
             })
         };
     }
 
-    // 换了仓库 / 密码，三级缓存里的 Repository 全部作废
+    // 换了仓库 / 密码 / 后端选项：三级缓存里的 Repository 全部作废。
+    // restic 服务由 rclone_bridge 按 key（位置 + inline 配置）自行切换，这里不再碰。
     clear_repo_cache();
     invalidate_indexed_repo();
     invalidate_backup_repo();
@@ -314,18 +324,24 @@ fn repo_key(config: &RepoConfig) -> String {
     format!("{}\0{}", config.path, config.generation)
 }
 
-/// `RusticServer.nativeSetRepo(path: String, password: String): Int`
+/// `RusticServer.nativeSetRepo(path, password, options): Int`
+///
+/// options 是 JSON 对象字符串；空串 / 非法 JSON 都退化成空 map（本地仓库就是这种情况）。
 #[no_mangle]
 pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeSetRepo<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     path: JString<'local>,
     password: JString<'local>,
+    options: JString<'local>,
 ) -> jint {
     let outcome = env.with_env(|env| -> Result<jint, jni::errors::Error> {
         let path: String = env.get_string(&path)?.into();
         let password: String = env.get_string(&password)?.into();
-        set_repo(&path, &password);
+        let options: String = env.get_string(&options)?.into();
+        let options: BTreeMap<String, String> =
+            serde_json::from_str(&options).unwrap_or_default();
+        set_repo(&path, &password, options);
         Ok(0)
     });
 
@@ -336,8 +352,8 @@ pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeSetRe
 
 /// `RusticServer.nativeInitRepo(buffer: ByteBuffer): Int`
 ///
-/// 请求：`{"path":"仓库目录","password":"候选密码"}`，只用于本次建库 / 校验密码，
-/// 不读写全局仓库凭据。返回 0 成功，1 业务失败，2 共享内存不可用。
+/// 请求：`{"path":"仓库位置","password":"候选密码","options":{}}`，只用于本次建库 /
+/// 校验密码，不读写全局仓库凭据。返回 0 成功，1 业务失败，2 共享内存不可用。
 #[no_mangle]
 pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeInitRepo<'local>(
     mut env: EnvUnowned<'local>,
@@ -369,7 +385,7 @@ fn handle_init(ptr: *mut u8, capacity: usize) -> jint {
         }
     };
 
-    match init_repo(&request.path, &request.password) {
+    match init_repo(&request.path, &request.password, &request.options) {
         Ok(()) => {
             write_response(ptr, capacity, &BridgeResponse::ok());
             0
@@ -385,47 +401,40 @@ fn handle_init(ptr: *mut u8, capacity: usize) -> jint {
 ///
 /// 主进程拿到成功结果后才会保存 AppPrefs 并通过 `setRepo()` 注入新凭据；
 /// 失败时全局状态原封不动，所以不需要任何回滚。
-fn init_repo(path: &str, password: &str) -> Result<(), String> {
-    let dir = std::path::Path::new(path);
-    if !dir.exists() {
-        return Err(format!("仓库目录不存在：{}", path));
-    }
-    if !dir.is_dir() {
-        return Err(format!("所选路径不是目录：{}", path));
-    }
-
-    let backend = LocalBackend::new(path, Vec::<(String, String)>::new())
-        .map_err(|e| format!("无法打开仓库目录：{}", describe_error(&e)))?;
-
-    let backends = RepositoryBackends::new(Arc::new(backend), None);
-
-    let options = repo_options();
-
-    let repository = Repository::new(&options, &backends)
-        .map_err(|e| format!("无法访问仓库目录：{}", describe_error(&e)))?;
-
+fn init_repo(
+    path: &str,
+    password: &str,
+    options: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    // 本地路径和 remote:/rest:/opendal: 走同一个工厂，不再用文件系统判断仓库是否存在
+    let backends = repository_backends(path, options)?;
+    let repo_opts = repo_options();
     let credentials = Credentials::password(password);
 
-    // 目录里已经有 config 说明是现成的 rustic 仓库，此时只校验密码
-    if dir.join("config").is_file() {
-        repository.open(&credentials).map_err(|e| {
-            format!(
-                "该目录已经是 rustic 仓库，但密码校验失败：{}",
-                describe_error(&e)
-            )
-        })?;
+    // 已有仓库且密码正确时 open 成功；否则尝试 init：空仓库会成功，
+    // config 已存在时 init 会失败。把两次原因都带出来，便于区分「密码错」和「连不上」。
+    let opened = Repository::new(&repo_opts, &backends)
+        .map_err(|e| format!("无法访问仓库：{}", describe_error(&e)))?
+        .open(&credentials);
+    if opened.is_ok() {
         return Ok(());
     }
+    let open_error = opened.err().map(|e| describe_error(&e)).unwrap_or_default();
 
-    repository
+    Repository::new(&repo_opts, &backends)
+        .map_err(|e| format!("无法访问仓库：{}", describe_error(&e)))?
         .init(
             &credentials,
             &KeyOptions::default(),
             &ConfigOptions::default(),
         )
-        .map_err(|e| format!("创建仓库失败：{}", describe_error(&e)))?;
-
-    Ok(())
+        .map(|_| ())
+        .map_err(|e| {
+            format!(
+                "仓库不可用：打开失败（{open_error}）；尝试初始化也失败（{}）",
+                describe_error(&e)
+            )
+        })
 }
 
 // ==================== 查询快照 ====================
@@ -606,16 +615,47 @@ fn repo_options() -> RepositoryOptions {
     options
 }
 
+/// 按仓库 location + options 构造后端。init / 打开 / 备份缓存都复用这一个工厂。
+///
+/// `remote:` 是本项目自己定义的逻辑前缀（持久化在 AppPrefs 里，不含端口和凭据）：
+/// 先让 librclone 起一个只监听 127.0.0.1 的 restic 服务，再换成 `rest:<url>`
+/// 交给 rustic_backend 现成的 RestBackend。自定义 option 不会透传给后端。
+/// 其余前缀（本地路径 / rest: / opendal:）照旧由 rustic_backend 分派。
+fn repository_backends(
+    location: &str,
+    options: &BTreeMap<String, String>,
+) -> Result<RepositoryBackends, String> {
+    let mut effective = location.to_string();
+    let mut backend_options = options.clone();
+
+    if location.starts_with("remote:") {
+        // rest_url 由主进程向 RcloneService.ensureServe 临时取回，含本次会话的
+        // 随机 token 与端口；这里只做字符串拼接，不再加载或调用 librclone。
+        let url = backend_options
+            .remove("rest_url")
+            .ok_or_else(|| "缺少远程服务地址".to_string())?;
+        effective = format!("rest:{url}");
+
+        backend_options
+            .entry("retry".to_string())
+            .or_insert_with(|| "off".to_string());
+        backend_options
+            .entry("timeout".to_string())
+            .or_insert_with(|| "120s".to_string());
+    }
+
+    BackendOptions::default()
+        .repository(effective.as_str())
+        .options(backend_options)
+        .to_backends()
+        .map_err(|e| format!("无法打开仓库：{}", describe_error(&e)))
+}
+
 /// 打开仓库（不需要索引，列表/改备注都够用）。
 fn open_repo(config: &RepoConfig) -> Result<rustic_core::Repository<rustic_core::OpenStatus>, String> {
-    let backend = LocalBackend::new(&config.path, Vec::<(String, String)>::new())
-        .map_err(|e| format!("无法打开仓库目录：{}", describe_error(&e)))?;
+    let backends = repository_backends(&config.path, &config.options)?;
 
-    let backends = RepositoryBackends::new(Arc::new(backend), None);
-
-    let options = repo_options();
-
-    Repository::new(&options, &backends)
+    Repository::new(&repo_options(), &backends)
         .map_err(|e| format!("无法访问仓库：{}", describe_error(&e)))?
         .open(&Credentials::password(&config.password))
         .map_err(|e| format!("打开仓库失败（密码是否正确？）：{}", describe_error(&e)))
@@ -767,9 +807,7 @@ fn open_backup_repo_cached(
             format!("{}\0batch\0{batch}", repo_key(&config))
         }
         _ => {
-            let backend = LocalBackend::new(&config.path, Vec::<(String, String)>::new())
-                .map_err(|e| format!("无法打开仓库目录：{}", describe_error(&e)))?;
-            let backends = RepositoryBackends::new(Arc::new(backend), None);
+            let backends = repository_backends(&config.path, &config.options)?;
             let repository = Repository::new(&repo_options(), &backends)
                 .map_err(|e| format!("无法访问仓库：{}", describe_error(&e)))?;
             return Ok(Arc::new(
@@ -796,9 +834,7 @@ fn open_backup_repo_cached(
         *guard = None;
     }
 
-    let backend = LocalBackend::new(&config.path, Vec::<(String, String)>::new())
-        .map_err(|e| format!("无法打开仓库目录：{}", describe_error(&e)))?;
-    let backends = RepositoryBackends::new(Arc::new(backend), None);
+    let backends = repository_backends(&config.path, &config.options)?;
     let repository = Repository::new(&repo_options(), &backends)
         .map_err(|e| format!("无法访问仓库：{}", describe_error(&e)))?;
 
@@ -2217,6 +2253,111 @@ fn escape_json(value: &str) -> String {
         .replace('\n', " ")
 }
 
+// ==================== 远程仓库连接错误 ====================
+
+/// rclone serve restic 返回 4xx / 5xx、超时或连接失败时，rustic_backend 的
+/// `construct_backoff_error()` 会把对应的 reqwest 错误挂成 RusticError 的 source。
+/// 远程操作事先都测过连，所以这里不再区分状态码，一律当作远程仓库连接不上；
+/// 本地仓库不走 rest backend，source 链里不会有 reqwest::Error。
+/// 原始错误全文仍完整保留，只是前面补一句明确结论。
+struct RemoteBackendFailure {
+    status: Option<u16>,
+    endpoint: String,
+    reason: String,
+}
+
+impl RemoteBackendFailure {
+    /// 错误文本的第一行：日志里先给一句明确结论，后面才是原始错误全文。
+    fn headline(&self) -> String {
+        let mut detail = vec![self.reason.clone()];
+        if let Some(status) = self.status {
+            detail.push(format!("HTTP {status}"));
+        }
+        if !self.endpoint.is_empty() {
+            detail.push(self.endpoint.clone());
+        }
+        format!("无法连接到远程仓库（{}）", detail.join(" · "))
+    }
+}
+
+/// 只要 source 链里出现 reqwest::Error（HTTP 4xx / 5xx / 超时 / 连接失败），
+/// 就判定为远程仓库连接不上；不再按状态码区分。
+fn classify_backend_error(error: &rustic_core::RusticError) -> Option<RemoteBackendFailure> {
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(current) = cause {
+        if let Some(http) = current.downcast_ref::<reqwest::Error>() {
+            let status = http.status().map(|code| code.as_u16());
+            let reason = match status {
+                Some(code) => format!("远程仓库返回 HTTP {code}"),
+                None if http.is_timeout() => "请求超时".to_string(),
+                None if http.is_connect() => "本地仓库服务连接被拒绝".to_string(),
+                None => "HTTP 请求失败".to_string(),
+            };
+
+            // rest_url 带本次会话的 basic-auth token，只留 host:port/path，
+            // 别让凭据进日志。
+            let endpoint = http
+                .url()
+                .map(|url| {
+                    let host = url.host_str().unwrap_or("127.0.0.1");
+                    let port = url.port().map(|p| format!(":{p}")).unwrap_or_default();
+                    format!("{host}{port}{}", url.path())
+                })
+                .unwrap_or_default();
+
+            return Some(RemoteBackendFailure {
+                status,
+                endpoint,
+                reason,
+            });
+        }
+        cause = current.source();
+    }
+
+    // 上游若换了错误包装方式，source 链里取不到 reqwest::Error 时，
+    // 按 HTTP 状态/请求特征兜底，4xx 与 5xx 一视同仁。
+    let text = error.to_string();
+    if text.contains("HTTP status")
+        || text.contains("status server error")
+        || text.contains("status client error")
+        || text.contains("error sending request for url")
+    {
+        return Some(RemoteBackendFailure {
+            status: None,
+            endpoint: String::new(),
+            reason: "HTTP 请求失败".to_string(),
+        });
+    }
+    None
+}
+
+/// rustic 的错误全文里可能带 `http://user:pass@host/...` 形式的 rest_url，
+/// 抹掉 userinfo 再交给 Kotlin（这段文本只进日志）。
+fn redact_userinfo(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(scheme) = rest.find("://") {
+        let head = &rest[..scheme + 3];
+        let after = &rest[scheme + 3..];
+        match after.find('@') {
+            Some(at)
+                if !after[..at].contains('/')
+                    && !after[..at].chars().any(char::is_whitespace) =>
+            {
+                out.push_str(head);
+                out.push_str("***@");
+                rest = &after[at + 1..];
+            }
+            _ => {
+                out.push_str(head);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// rustic 的 Display 里混了文档链接、issue 模板等噪音，这里只保留错误本身。
 fn describe_error(error: &rustic_core::RusticError) -> String {
     let text = error.to_string();
@@ -2249,11 +2390,14 @@ fn describe_error(error: &rustic_core::RusticError) -> String {
         out.push('\n');
     }
 
-    let out = out.trim().to_string();
-    if out.is_empty() {
-        text
-    } else {
-        out
+    let cleaned = out.trim().to_string();
+    let full = if cleaned.is_empty() { text } else { cleaned };
+    let full = redact_userinfo(&full);
+
+    // 远程 HTTP / 连接失败时，在完整原文前面补一句明确结论。
+    match classify_backend_error(error) {
+        Some(failure) => format!("{}\n{}", failure.headline(), full),
+        None => full,
     }
 }
 
@@ -2267,8 +2411,8 @@ mod tests {
 
     fn setup_repo(path: &str) -> std::sync::MutexGuard<'static, ()> {
         let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        set_repo(path, "rustic");
-        init_repo(path, "rustic").expect("init 应该成功");
+        set_repo(path, "rustic", Default::default());
+        init_repo(path, "rustic", &Default::default()).expect("init 应该成功");
         guard
     }
 
@@ -2373,9 +2517,7 @@ mod tests {
         backup_repo(&request, progress).expect("backup 应该成功");
 
         // 用仓库 API 读回快照，确认两个源目录的内容都进去了
-        let backend = rustic_backend::LocalBackend::new(&repo, Vec::<(String, String)>::new())
-            .unwrap();
-        let backends = rustic_core::RepositoryBackends::new(Arc::new(backend), None);
+        let backends = super::repository_backends(&repo, &Default::default()).unwrap();
         let mut options = rustic_core::RepositoryOptions::default();
         options.no_cache = true;
         let opened = rustic_core::Repository::new(&options, &backends)

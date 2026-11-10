@@ -1,5 +1,12 @@
 package com.cc.libackupnext.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -23,12 +30,25 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.cc.libackupnext.data.FolderPickerLauncher
+import com.cc.libackupnext.data.FolderPickerMode
+import com.cc.libackupnext.data.RemoteRepo
+import com.cc.libackupnext.data.RepoProtocol
+import com.cc.libackupnext.service.RcloneClient
+import com.cc.libackupnext.service.RusticClient
+import com.cc.libackupnext.ui.theme.SearchBarDurationMs
 import com.cc.libackupnext.ui.theme.dialogContainer
 import com.cc.libackupnext.ui.theme.rootCardGrantedBackground
 import com.cc.libackupnext.ui.theme.rootCardGrantedTextColor
@@ -36,7 +56,8 @@ import com.cc.libackupnext.ui.theme.rootCardGrantedTextVariant
 import com.cc.libackupnext.ui.theme.rootGrantedButtonBackground
 import com.cc.libackupnext.ui.theme.rootGrantedButtonContent
 import com.cc.libackupnext.ui.util.RepoSetupForm
-import com.cc.libackupnext.ui.util.rememberFolderPicker
+import kotlinx.coroutines.launch
+import com.cc.libackupnext.util.AppLog
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -50,15 +71,32 @@ fun WelcomeScreen(
     rusticPassword: String,
     onRusticPasswordChange: (String) -> Unit,
     onRequestRoot: () -> Unit,
-    onInitRusticRepo: () -> Unit,
+    /** 位置 / 仓库密码 / 远程配置（本地页传 null）；后端选项由业务层派生。 */
+    onInitRusticRepo: (String, String, RemoteRepo?) -> Unit,
+    /** 打开通用全屏文件夹选择弹窗；选中的路径回填到当前表单。 */
+    onOpenFolderPicker: (FolderPickerLauncher) -> Unit,
     onEnterApp: () -> Unit,
     initError: String?,
     onDismissError: () -> Unit
 ) {
     val colors = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
 
-    // 从主题里读取所有颜色
+    // 本地 / 远程共用一份配置，协议在服务协议下拉里切换，不再左右滑动分页
+    var repo by remember {
+        mutableStateOf(RemoteRepo(protocol = RepoProtocol.LOCAL, path = rusticPath))
+    }
+    var testing by remember { mutableStateOf(false) }
+    val isLocal = repo.protocol.isLocal
+
+    // MainActivity 仍持有本地目录状态，两边保持同步
+    LaunchedEffect(rusticPath) {
+        if (repo.protocol.isLocal && repo.path != rusticPath) {
+            repo = repo.copy(path = rusticPath)
+        }
+    }
+
     val pageBackground = colors.surfaceContainerLow
     val cardBackground = colors.surfaceContainer
     val rootCardBackground =
@@ -70,30 +108,33 @@ fun WelcomeScreen(
     val accentColor = colors.primary
     val onAccentColor = colors.onPrimary
 
-    // Rustic 区域是否可用：仅在已获得 Root 后
+    // 远程同样跑在 :root 进程里，Root 仍是硬前提
     val rusticEnabled = hasRoot
 
-    // 目录为空、密码为空、或者已经初始化成功时都不允许再点初始化
-    val canInitRepo = rusticEnabled &&
-            rusticPath.isNotBlank() &&
-            rusticPassword.isNotBlank() &&
-            !isInitializing &&
-            !isRepoReady
-
-    // 文件夹选择器：契约与 URI 权限持久化由 FolderPicker 统一处理
-    val pickFolder = rememberFolderPicker { uri -> onRusticPathChange(uri.toString()) }
+    /** 远程路径浏览的前置门禁 / 手动测试连接：测连接成功才执行 action，结果用 Toast 提示。 */
+    fun runWhenConnected(action: () -> Unit = {}) {
+        if (testing || !repo.isComplete()) return
+        scope.launch {
+            testing = true
+            val result = RcloneClient.testRemoteConnection(repo)
+            AppLog.toastOnMain(result.fold(
+                    onSuccess = { "连接成功" },
+                    onFailure = { "连接失败：${it.message ?: "未知错误"}" }
+                ))
+            testing = false
+            if (result.isSuccess) action()
+        }
+    }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = pageBackground
     ) {
-        // 外层：可滚动。内容不足一屏时不滚动，超过一屏时可滚动。
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
         ) {
-            // 内层：至少一屏高，用 SpaceEvenly 均分剩余空间，保证竖屏大屏时视觉依然舒展
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -109,73 +150,92 @@ fun WelcomeScreen(
                     color = MaterialTheme.colorScheme.onSurface
                 )
 
-                // Root 权限
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 12.dp),
-                    shape = MaterialTheme.shapes.large,
-                    color = rootCardBackground
+                // 只有本地协议显示 Root 卡片。切换到远程时高度收缩 + 上移淡出，
+                // 下面的 Rustic 卡片顺势顶上来，看起来像 Root 卡片被挤走而不是硬切消失。
+                AnimatedVisibility(
+                    visible = isLocal,
+                    enter = expandVertically(
+                        animationSpec = tween(SearchBarDurationMs),
+                        expandFrom = Alignment.Top
+                    ) + fadeIn(animationSpec = tween(SearchBarDurationMs)),
+                    exit = shrinkVertically(
+                        animationSpec = tween(SearchBarDurationMs),
+                        shrinkTowards = Alignment.Top
+                    ) + slideOutVertically(animationSpec = tween(SearchBarDurationMs)) { -it / 3 } +
+                            fadeOut(animationSpec = tween(200))
                 ) {
-                    Row(
+                    Surface(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(20.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(vertical = 12.dp),
+                        shape = MaterialTheme.shapes.large,
+                        color = rootCardBackground
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Root 权限",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = onRootCardColor
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = when {
-                                    hasRoot -> "已获取 Root 权限"
-                                    isRequesting -> "正在请求 Root 权限..."
-                                    else -> "获取 Root 权限"
-                                },
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = onRootCardVariant
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Button(
-                            onClick = onRequestRoot,
-                            enabled = !hasRoot && !isRequesting,
-                            shape = MaterialTheme.shapes.extraLarge,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = accentColor,
-                                contentColor = onAccentColor,
-                                disabledContainerColor = colors.rootGrantedButtonBackground,
-                                disabledContentColor = colors.rootGrantedButtonContent
-                            ),
-                            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(20.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (isRequesting) {
-                                LoadingIndicator(
-                                    modifier = Modifier
-                                        .width(18.dp)
-                                        .height(18.dp),
-                                    color = onAccentColor
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Root 权限",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = onRootCardColor
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = when {
+                                        hasRoot -> "已获取 Root 权限"
+                                        isRequesting -> "正在请求 Root 权限..."
+                                        else -> "获取 Root 权限"
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = onRootCardVariant
+                                )
                             }
-                            Text(
-                                text = when {
-                                    hasRoot -> "已授权"
-                                    isRequesting -> "请求中"
-                                    else -> "获取权限"
-                                },
-                                fontWeight = FontWeight.Medium
-                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Button(
+                                onClick = onRequestRoot,
+                                enabled = !hasRoot && !isRequesting,
+                                shape = MaterialTheme.shapes.extraLarge,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = accentColor,
+                                    contentColor = onAccentColor,
+                                    disabledContainerColor = colors.rootGrantedButtonBackground,
+                                    disabledContentColor = colors.rootGrantedButtonContent
+                                ),
+                                contentPadding = PaddingValues(
+                                    horizontal = 20.dp,
+                                    vertical = 12.dp
+                                )
+                            ) {
+                                if (isRequesting) {
+                                    LoadingIndicator(
+                                        modifier = Modifier
+                                            .width(18.dp)
+                                            .height(18.dp),
+                                        color = onAccentColor
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                                Text(
+                                    text = when {
+                                        hasRoot -> "已授权"
+                                        isRequesting -> "请求中"
+                                        else -> "获取权限"
+                                    },
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
                         }
                     }
                 }
+                // 非本地协议：整块 Root 卡片连同任何 Root 字样都不显示。
+                // acquireRoot() 仍照常在 MainActivity 里跑，hasRoot 依旧是进入主页面的门槛。
 
-                // Rustic 配置
+                // Rustic 配置：本地和远程共用一个窗口，字段随服务协议变化
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -185,67 +245,83 @@ fun WelcomeScreen(
                 ) {
                     Column(modifier = Modifier.padding(20.dp)) {
                         Text(
-                            text = "Rustic",
+                            text = if (isLocal) "Rustic 本地仓库" else "Rustic 远程仓库",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        // 目录 + 密码 + 密码提示：和设置页共用同一份实现
                         RepoSetupForm(
-                            path = rusticPath,
-                            onPickFolder = pickFolder,
+                            repo = repo,
+                            onRepoChange = { next ->
+                                // 切回本地时把已选目录带回来，不让用户重选一次
+                                repo = if (next.protocol.isLocal && next.path.isBlank()) {
+                                    next.copy(path = rusticPath)
+                                } else next
+                            },
                             password = rusticPassword,
                             onPasswordChange = onRusticPasswordChange,
-                            enabled = rusticEnabled
+                            enabled = rusticEnabled && !isInitializing,
+                            onPickFolder = {
+                                onOpenFolderPicker(
+                                    FolderPickerLauncher(
+                                        mode = FolderPickerMode.LOCAL,
+                                        initialPath = repo.path,
+                                        onPick = { picked ->
+                                            repo = repo.copy(path = picked)
+                                            onRusticPathChange(picked)
+                                        }
+                                    )
+                                )
+                            },
+                            onBrowseRemotePath = {
+                                onOpenFolderPicker(
+                                    FolderPickerLauncher(
+                                        mode = FolderPickerMode.REMOTE,
+                                        repo = repo,
+                                        initialPath = repo.path,
+                                        onPick = { picked -> repo = repo.copy(path = picked) }
+                                    )
+                                )
+                            },
+                            onConnectedAction = { action -> runWhenConnected(action) },
+                            isTesting = testing,
+                            onInit = {
+                                if (isLocal) {
+                                    onInitRusticRepo(repo.path, rusticPassword, null)
+                                } else {
+                                    onInitRusticRepo(repo.location, rusticPassword, repo)
+                                }
+                            }
                         )
 
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        // 初始化 rustic 仓库按钮
-                        Button(
-                            onClick = onInitRusticRepo,
-                            enabled = canInitRepo,
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = MaterialTheme.shapes.medium,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = accentColor,
-                                contentColor = onAccentColor
-                            ),
-                            contentPadding = PaddingValues(vertical = 12.dp)
-                        ) {
-                            if (isInitializing) {
+                        if (isInitializing) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
                                 LoadingIndicator(
-                                    modifier = Modifier
-                                        .width(18.dp)
-                                        .height(18.dp),
-                                    color = onAccentColor
+                                    modifier = Modifier.width(18.dp).height(18.dp),
+                                    color = accentColor
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "初始化中…",
-                                    fontWeight = FontWeight.Medium
-                                )
-                            } else if (isRepoReady) {
-                                Text(
-                                    text = "已初始化",
-                                    fontWeight = FontWeight.Medium
-                                )
-                            } else {
-                                Text(
-                                    text = "初始化 rustic 仓库",
-                                    fontWeight = FontWeight.Medium
-                                )
+                                Text("初始化中…", style = MaterialTheme.typography.bodyMedium)
                             }
+                        } else if (isRepoReady) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text("已初始化", style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                 }
 
                 // 完成引导：需要 Root 权限 + rustic 仓库已就绪
+                // 非本地时底部也不出现「请先获取 Root 权限」这类字样
                 if (!hasRoot || !isRepoReady) {
                     Text(
-                        text = if (!hasRoot) "请先获取 Root 权限" else "请先初始化 rustic 仓库",
+                        text = when {
+                            !hasRoot && isLocal -> "请先获取 Root 权限"
+                            !isLocal -> "请先初始化 rustic 仓库"
+                            else -> "请先初始化 rustic 仓库"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(bottom = 4.dp)

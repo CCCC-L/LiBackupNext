@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -27,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import com.cc.libackupnext.data.AppPrefs
+import com.cc.libackupnext.data.FolderPickerLauncher
 import com.cc.libackupnext.service.AppManagerService
 import com.cc.libackupnext.service.RootManager
 import com.cc.libackupnext.data.ReleaseInfo
@@ -36,9 +36,9 @@ import com.cc.libackupnext.ui.HomeTab
 import com.cc.libackupnext.ui.WelcomeScreen
 import com.cc.libackupnext.ui.dialog.UpdateDialog
 import com.cc.libackupnext.ui.screen.AppListScreen
+import com.cc.libackupnext.ui.dialog.FolderPickerDialog
 import com.cc.libackupnext.ui.theme.AppManagerTheme
 import com.cc.libackupnext.util.AppLog
-import com.cc.libackupnext.util.RepoPath
 import com.topjohnwu.superuser.Shell
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -103,11 +103,7 @@ private fun AppRoot(crashRecovery: Boolean) {
     // 上次运行异常退出（含 native abort / 系统杀进程）：下次启动稳定补一次提示
     LaunchedEffect(Unit) {
         if (AppLog.hasPendingCrash()) {
-            Toast.makeText(
-                context,
-                "上次运行出现异常，日志已保存，可在 设置 → 导出日志 查看",
-                Toast.LENGTH_LONG
-            ).show()
+            AppLog.toastOnMain("上次运行出现异常，日志已保存，可在 设置 → 导出日志 查看", longToast = true)
             AppLog.consumePendingCrash()
         }
     }
@@ -131,10 +127,17 @@ private fun AppRoot(crashRecovery: Boolean) {
     var hasEnteredApp by rememberSaveable { mutableStateOf(crashRecovery) }
     var initError by remember { mutableStateOf<String?>(null) }
 
+    // 文件夹选择弹窗由 Activity 顶层持有：底层表单状态不会因为开关弹窗被 dispose 掉
+    var folderPickerLauncher by remember { mutableStateOf<FolderPickerLauncher?>(null) }
+    val openFolderPicker: (FolderPickerLauncher) -> Unit = { folderPickerLauncher = it }
+
     // rustic 仓库是否已就绪（初始化过 / 校验过密码）
     var isRepoReady by remember { mutableStateOf(AppPrefs.hasRepository()) }
 
-    var rusticPath by rememberSaveable { mutableStateOf(AppPrefs.repoPath) }
+    // 远程仓库没有本地目录，切回本地页时别把逻辑标识当成路径显示
+    var rusticPath by rememberSaveable {
+        mutableStateOf(if (AppPrefs.isRemote) "" else AppPrefs.repoPath)
+    }
     var rusticPassword by rememberSaveable {
         mutableStateOf(AppPrefs.repoPassword.ifBlank { "rustic" })
     }
@@ -146,19 +149,23 @@ private fun AppRoot(crashRecovery: Boolean) {
         AppLog.breadcrumb("启动", "root 授权结果=$granted")
         if (granted) {
             hasRoot = true
-            // 提前把两个 root 服务绑好，后面调用不用再等 su 握手
+            // 提前绑定 root 服务，后面调用不用再等 su 握手
             scope.launch(Dispatchers.IO) {
                 // 升级后旧进程还在跑上一版代码，先断开、等它真正退出再绑定
                 AppManagerService.restart()
                 RusticClient.restart()
                 delay(800.milliseconds)
                 AppManagerService.warmUp()
-                RusticClient.warmUp()
                 // 上次备份如果被强杀，目标应用可能还停在 SIGSTOP 状态，这里恢复
                 runCatching { AppManagerService.resumeAllPaused() }
             }
         }
         granted
+    }
+
+    // 老版本升级：清单为空但已有当前仓库时补一条，避免「已添加仓库」页一片空白
+    LaunchedEffect(Unit) {
+        AppPrefs.ensureCurrentRepoRecorded()
     }
 
     LaunchedEffect(Unit) {
@@ -170,6 +177,13 @@ private fun AppRoot(crashRecovery: Boolean) {
     LaunchedEffect(hasRoot, isChecking) {
         if (isChecking || !hasRoot) return@LaunchedEffect
         if (!isRepoReady || !AppPrefs.hasRepository()) return@LaunchedEffect
+
+        // 远程仓库没有本地目录可查，交给后续连接验证；本地才做目录自检
+        if (AppPrefs.isRemote) {
+            AppLog.breadcrumb("启动", "远程仓库，跳过欢迎页，进入主页面")
+            hasEnteredApp = true
+            return@LaunchedEffect
+        }
 
         // 仓库目录可能被删掉、或所在存储没挂载：跳过欢迎页前先确认它还在
         val path = AppPrefs.repoPath
@@ -184,73 +198,100 @@ private fun AppRoot(crashRecovery: Boolean) {
             // 目录不在了就停在欢迎页，要求重新选择 / 初始化
             AppLog.breadcrumb("启动", "仓库目录不存在，停在欢迎页：$path")
             isRepoReady = false
-            Toast.makeText(
-                context,
-                "仓库目录不存在：$path",
-                Toast.LENGTH_LONG
-            ).show()
+            AppLog.toastOnMain("仓库目录不存在：$path", longToast = true)
         }
     }
 
-    when {
-        isChecking -> Box(modifier = Modifier.fillMaxSize())
+    Box(modifier = Modifier.fillMaxSize()) {
+        when {
+            isChecking -> Box(modifier = Modifier.fillMaxSize())
 
-        hasEnteredApp -> AppListScreen(
-            initialTab = if (crashRecovery) HomeTab.SETTINGS else HomeTab.APPS
-        )
+            hasEnteredApp -> AppListScreen(
+                initialTab = if (crashRecovery) HomeTab.SETTINGS else HomeTab.APPS,
+                onOpenFolderPicker = openFolderPicker
+            )
 
-        else -> WelcomeScreen(
-            hasRoot = hasRoot,
-            isRequesting = isRequesting,
-            isInitializing = isInitializing,
-            isRepoReady = isRepoReady,
-            rusticPath = rusticPath,
-            onRusticPathChange = { raw ->
-                val path = RepoPath.toFilesystemPath(raw)
-                if (path == null) {
-                    Toast.makeText(context, "无法解析该目录", Toast.LENGTH_SHORT).show()
-                } else {
+            else -> WelcomeScreen(
+                hasRoot = hasRoot,
+                isRequesting = isRequesting,
+                isInitializing = isInitializing,
+                isRepoReady = isRepoReady,
+                rusticPath = rusticPath,
+                // 弹窗直接回填绝对路径，不再走 SAF 的 tree Uri 转换
+                onRusticPathChange = { path ->
                     rusticPath = path
                     // 换目录后必须重新初始化并验证密码。只有初始化成功才会覆盖
                     // AppPrefs 里保存的仓库地址和密码，失败时保留原来的配置
                     isRepoReady = false
-                }
-            },
-            rusticPassword = rusticPassword,
-            onRusticPasswordChange = { rusticPassword = it },
-            onRequestRoot = {
-                if (!isRequesting && !hasRoot) {
-                    isRequesting = true
-                    scope.launch {
-                        acquireRoot()
-                        isRequesting = false
+                },
+                rusticPassword = rusticPassword,
+                onRusticPasswordChange = { rusticPassword = it },
+                onRequestRoot = {
+                    if (!isRequesting && !hasRoot) {
+                        isRequesting = true
+                        scope.launch {
+                            acquireRoot()
+                            isRequesting = false
+                        }
                     }
-                }
-            },
-            onInitRusticRepo = {
-                if (!isInitializing && rusticPath.isNotBlank()) {
-                    isInitializing = true
-                    initError = null
-                    scope.launch {
-                        val result = RusticClient.initRepository(rusticPath, rusticPassword)
-                        isInitializing = false
+                },
+                onInitRusticRepo = { path, password, remote ->
+                    if (!isInitializing && path.isNotBlank()) {
+                        isInitializing = true
+                        initError = null
+                        scope.launch {
+                            // 远程的位置与后端选项都由业务层派生；本地沿用用户选的目录
+                            val result = if (remote != null) {
+                                RusticClient.initRemoteRepository(remote, password)
+                            } else {
+                                RusticClient.initRepository(path, password)
+                            }
+                            isInitializing = false
 
-                        result
-                            .onSuccess {
-                                isRepoReady = true
-                                Toast.makeText(context, "仓库初始化成功", Toast.LENGTH_SHORT).show()
-                            }
-                            .onFailure {
-                                initError = it.message ?: "未知错误"
-                            }
+                            result
+                                .onSuccess {
+                                    // 远程配置和「已添加仓库」清单都由业务层在成功后统一写入
+                                    if (remote == null) rusticPath = path
+                                    isRepoReady = true
+                                    AppLog.toastOnMain("仓库初始化成功")
+                                }
+                                .onFailure {
+                                    val message = it.message ?: "未知错误"
+                                    initError = message
+                                    AppLog.toastOnMain(message, longToast = true)
+                                }
+                        }
                     }
-                }
+                },
+                onOpenFolderPicker = openFolderPicker,
+                onEnterApp = {
+                    if (hasRoot && isRepoReady) hasEnteredApp = true
+                },
+                initError = initError,
+                onDismissError = { initError = null }
+            )
+        }
+
+    }
+
+    // 文件夹选择弹窗是独立窗口，挂在 Activity 顶层；底层页面保持挂载，表单数据不丢。
+    // 不管选中还是返回都要 onClose，让底层「配置远程仓库 / 选择并初始化仓库」弹窗
+    // 重新显示并拿到回填值。
+    folderPickerLauncher?.let { launcher ->
+        FolderPickerDialog(
+            mode = launcher.mode,
+            repo = launcher.repo,
+            initialPath = launcher.initialPath,
+            allowRoot = launcher.allowRoot,
+            onPick = { path ->
+                launcher.onPick(path)
+                folderPickerLauncher = null
+                launcher.onClose()
             },
-            onEnterApp = {
-                if (hasRoot && isRepoReady) hasEnteredApp = true
-            },
-            initError = initError,
-            onDismissError = { initError = null }
+            onBack = {
+                folderPickerLauncher = null
+                launcher.onClose()
+            }
         )
     }
 

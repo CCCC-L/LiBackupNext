@@ -7,26 +7,31 @@ import com.cc.libackupnext.service.IBackupProgressCallback;
 interface IRusticService {
 
   /**
-   * 注入仓库地址和密码（业务命令唯一的凭据来源）。
+   * 注入仓库地址、密码和后端选项（业务命令唯一的凭据来源）。
    *
    * 主进程在每次绑定（含 root 服务重启后的重连）时调一次，初始化成功 / 改密码 /
    * 清配置时再调。Rust 侧留一份类级副本，root 侧 Kotlin 不保存密码；
    * 之后所有业务命令的请求 JSON 都不再带凭据。传空串表示清空凭据。
+   *
+   * path 既可以是本地文件系统路径，也可以是逻辑仓库标识（remote:<id>:<path>）。
+   * options 是 JSON 对象字符串：remote: 前缀由 Rust 侧解释（从 rest_url 换成
+   * rest:<url>，URL 由 IRcloneService.ensureServe 临时取回），其余透传给
+   * rustic_backend 的 BackendOptions.options；本地传 "{}" 即可。
    */
-  void setRepo(String path, String password);
+  void setRepo(String path, String password, String options);
 
   /**
    * 初始化 / 校验 rustic 仓库。
    *
-   * - 目录为空：创建新仓库
-   * - 目录已是 rustic 仓库：校验密码
+   * - 位置为空仓库：创建新仓库
+   * - 位置已是 rustic 仓库：校验密码
    *
-   * 这两个参数只用于本次校验，不写入 Rust 侧的全局凭据，也不会污染当前仓库配置。
+   * 这三个参数只用于本次校验，不写入 Rust 侧的全局凭据，也不会污染当前仓库配置。
    * 主进程按返回值决定是否保存：成功才更新 AppPrefs 并重新注入，失败什么都不改。
    *
    * @return 成功返回空字符串；失败返回具体错误信息（可直接展示给用户）。
    */
-  String initRepo(String path, String password);
+  String initRepo(String path, String password, String options);
 
   /**
    * 备份一个应用。
@@ -108,6 +113,5 @@ interface IRusticService {
    * @return 成功返回空字符串；失败返回具体原因
    */
   String setWifiEnabled(boolean enabled);
-
 
 }

@@ -75,7 +75,7 @@ jobs:
       - name: 缓存 Rust 产物
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: app/src/main/rustic_bridge
+          workspaces: app/src/main/rust_bridge
 
       - name: 安装 cargo-ndk
         run: cargo install cargo-ndk
