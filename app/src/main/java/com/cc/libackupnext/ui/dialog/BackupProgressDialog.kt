@@ -222,6 +222,6 @@ class DoubleClickGuard(
 @Composable
 fun rememberDoubleClickGuard(hint: String = "双击执行"): DoubleClickGuard =
     remember(hint) {
-        // 全应用共用的 Toast：上一条还在显示时不弹新的，也不会一条条排队
+        // 全应用共用的 Toast：新提示会替换上一条，不会一条条排队
         DoubleClickGuard { AppLog.toastOnMain(hint) }
     }

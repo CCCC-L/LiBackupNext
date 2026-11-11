@@ -9,10 +9,10 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
-import android.os.SystemClock
 import android.system.Os
 import android.util.Log
 import android.widget.Toast
+import androidx.compose.material3.Snackbar
 import com.cc.libackupnext.BuildConfig
 import com.cc.libackupnext.data.AppPrefs
 import kotlinx.coroutines.CancellationException
@@ -367,35 +367,20 @@ object AppLog {
     }
 
     // ==================== 全应用 Toast ====================
-    //
-    // 只保留一个 Toast 实例 + 一道时间闸门：上一条还在屏幕上时直接丢掉新提示，
-    // 不排队、不叠文字（双击守卫里原来就是这套做法，现在提到全局共用）。
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var toast: Toast? = null   // 只在主线程读写
 
-    /** LENGTH_SHORT / LENGTH_LONG 在系统里的显示时长，用来判断上一条是否还在显示。 */
-    private const val TOAST_SHORT_MILLIS = 2000L
-    private const val TOAST_LONG_MILLIS = 3500L
-
-    private val toastLock = Any()
-    private var toast: Toast? = null
-    private var toastUntil = 0L
-
-    /** 全应用共用的吐司提示：上一条还在弹出时不再弹新的。可从任意线程调用。 */
+    /** 全应用共用的吐司提示：先关掉上一条，再显示新的一条。可从任意线程调用。 */
     fun toastOnMain(text: String, longToast: Boolean = false) {
-        runCatching {
-            Handler(Looper.getMainLooper()).post {
-                val now = SystemClock.elapsedRealtime()
-                synchronized(toastLock) {
-                    if (now < toastUntil) return@synchronized
-                    val duration = if (longToast) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
-                    val t = toast ?: Toast.makeText(appContext, text, duration).also { toast = it }
-                    t.setText(text)
-                    t.duration = duration
-                    t.show()
-                    toastUntil = now +
-                            if (longToast) TOAST_LONG_MILLIS else TOAST_SHORT_MILLIS
-                }
+        val duration = if (longToast) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
+        val block = {
+            try {
+                toast?.cancel()
+                toast = Toast.makeText(appContext, text, duration).also { it.show() }
+            } catch (e: Exception) {
             }
         }
+        if (Looper.myLooper() == Looper.getMainLooper()) block() else mainHandler.post(block)
     }
 
     private fun writeCrashReport(thread: Thread, error: Throwable) {
