@@ -39,6 +39,8 @@ fun AppItemCard(
     /** 只在备份里存在（未安装）：标题划线、图标置灰。 */
     dimmed: Boolean = false,
     trailingContent: (@Composable () -> Unit)? = null,
+    /** 标题文字后面的附加内容（如「当前使用中」标签），默认没有。 */
+    titleTrailing: (@Composable () -> Unit)? = null,
     titleStyle: TextStyle = MaterialTheme.typography.titleMedium,
     titleFontWeight: FontWeight = FontWeight.Bold,
     /** 标题颜色；null 用默认（不存在时灰、否则 onSurface）。系统应用传红色。 */
@@ -101,13 +103,13 @@ fun AppItemCard(
                         textDecoration = if (dimmed) TextDecoration.LineThrough else null,
                         modifier = Modifier.weight(1f, fill = false)
                     )
+                    titleTrailing?.invoke()
                 }
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
                     color = subtitleColor,
-                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Spacer(modifier = Modifier.height(2.dp))
