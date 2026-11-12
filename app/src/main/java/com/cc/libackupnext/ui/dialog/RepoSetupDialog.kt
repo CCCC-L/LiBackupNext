@@ -178,7 +178,13 @@ fun RepoSetupDialog(
     val showForm = visible
 
     if (showForm) {
-        Dialog(onDismissRequest = { if (!isInitializing) onDismiss() }) {
+        Dialog(
+            onDismissRequest = { if (!isInitializing) onDismiss() },
+            properties = DialogProperties(
+                dismissOnBackPress = true,
+                dismissOnClickOutside = false
+            )
+        ) {
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
