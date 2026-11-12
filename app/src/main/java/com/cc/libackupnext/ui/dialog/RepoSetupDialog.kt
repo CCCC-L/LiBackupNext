@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.cc.libackupnext.data.AppPrefs
 import com.cc.libackupnext.data.FolderPickerLauncher
 import com.cc.libackupnext.data.FolderPickerMode
@@ -73,12 +74,18 @@ fun RepoSetupDialog(
     var dialogRepo by remember(editing) {
         mutableStateOf(editing?.toForm() ?: RemoteRepo())
     }
+    // 新增不预填默认密码；编辑仍带出记录里保存的真实密码（不是默认值）
     var dialogPassword by remember(editing) {
-        mutableStateOf(editing?.password?.ifBlank { "rustic" } ?: "rustic")
+        mutableStateOf(editing?.password.orEmpty())
     }
+    // 确认栏每次打开都留空：新增和编辑都必须手动再输一次才解锁初始化 / 保存
+    var dialogConfirmPassword by remember(editing) { mutableStateOf("") }
     var isInitializing by remember { mutableStateOf(false) }
     var initError by remember { mutableStateOf<String?>(null) }
     var testing by remember { mutableStateOf(false) }
+    // 按钮置灰和 startInit 的防御共用这一个判定，别两处各写一遍
+    val passwordsMatch = dialogPassword.isNotBlank() &&
+            dialogPassword == dialogConfirmPassword
 
     // 本地目录浏览：先收起本弹窗，关闭时再恢复
     val pickFolder: () -> Unit = {
@@ -121,6 +128,10 @@ fun RepoSetupDialog(
         }
         if (dialogPassword.isBlank()) {
             AppLog.toastOnMain("请先输入仓库密码")
+            return
+        }
+        if (!passwordsMatch) {
+            AppLog.toastOnMain("两次输入的密码不一致")
             return
         }
 
@@ -171,7 +182,7 @@ fun RepoSetupDialog(
     val submit: () -> Unit = { startInit() }
     // 远程路径没选过时按钮置灰：空路径会把整个服务根当成仓库
     val canSubmit = !isInitializing && !testing &&
-            dialogRepo.canInit() && dialogPassword.isNotBlank()
+            dialogRepo.canInit() && passwordsMatch
 
     // 初始化中和失败时都保持弹窗，只有成功（onFinished）才关闭；
     // 删除改成双击执行，没有确认弹窗，表单也就不用收起
@@ -216,6 +227,11 @@ fun RepoSetupDialog(
                             password = dialogPassword,
                             onPasswordChange = {
                                 dialogPassword = it
+                                initError = null
+                            },
+                            confirmPassword = dialogConfirmPassword,
+                            onConfirmPasswordChange = {
+                                dialogConfirmPassword = it
                                 initError = null
                             },
                             enabled = !isInitializing,

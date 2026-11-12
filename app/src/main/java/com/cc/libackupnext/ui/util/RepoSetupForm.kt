@@ -53,6 +53,8 @@ fun RepoSetupForm(
     onRepoChange: (RemoteRepo) -> Unit,
     password: String,
     onPasswordChange: (String) -> Unit,
+    confirmPassword: String,
+    onConfirmPasswordChange: (String) -> Unit,
     enabled: Boolean,
     onPickFolder: () -> Unit,
     onBrowseRemotePath: () -> Unit,
@@ -70,6 +72,7 @@ fun RepoSetupForm(
     val isLocal = repo.protocol.isLocal
     val authOptions = repo.protocol.authOptions()
     val effectiveAuth = repo.effectiveAuth()
+    val passwordsMatch = password.isNotBlank() && password == confirmPassword
 
     Column(modifier = modifier.fillMaxWidth()) {
         // 服务协议 + 名称：本地和远程共用这一行
@@ -269,6 +272,22 @@ fun RepoSetupForm(
 
         Spacer(Modifier.height(10.dp))
         RepoPasswordField(password, onPasswordChange, enabled)
+        Spacer(Modifier.height(10.dp))
+        RepoPasswordField(
+            confirmPassword,
+            onConfirmPasswordChange,
+            enabled,
+            label = "确认 rustic 仓库密码"
+        )
+        if (confirmPassword.isNotEmpty() && confirmPassword != password) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "两次输入的密码不一致",
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.error,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            )
+        }
         Spacer(Modifier.height(6.dp))
         PasswordWarning("请牢记 rustic 仓库密码，丢失后无法恢复备份。")
 
@@ -277,7 +296,7 @@ fun RepoSetupForm(
             if (isLocal) {
                 Button(
                     onClick = onInit,
-                    enabled = enabled && repo.canInit() && password.isNotBlank() && !isTesting,
+                    enabled = enabled && repo.canInit() && passwordsMatch && !isTesting,
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("初始化 rustic 仓库") }
             } else {
@@ -293,7 +312,7 @@ fun RepoSetupForm(
                     ) { Text(if (isTesting) "测试中…" else "测试连接") }
                     Button(
                         onClick = onInit,
-                        enabled = enabled && repo.canInit() && password.isNotBlank() && !isTesting,
+                        enabled = enabled && repo.canInit() && passwordsMatch && !isTesting,
                         modifier = Modifier.weight(1f)
                     ) { Text("初始化 rustic 仓库") }
                 }

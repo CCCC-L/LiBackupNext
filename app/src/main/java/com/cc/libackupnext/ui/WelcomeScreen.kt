@@ -88,6 +88,7 @@ fun WelcomeScreen(
         mutableStateOf(RemoteRepo(protocol = RepoProtocol.LOCAL, path = rusticPath))
     }
     var testing by remember { mutableStateOf(false) }
+    var confirmPassword by remember { mutableStateOf("") }
     val isLocal = repo.protocol.isLocal
 
     // MainActivity 仍持有本地目录状态，两边保持同步
@@ -262,6 +263,8 @@ fun WelcomeScreen(
                             },
                             password = rusticPassword,
                             onPasswordChange = onRusticPasswordChange,
+                            confirmPassword = confirmPassword,
+                            onConfirmPasswordChange = { confirmPassword = it },
                             enabled = rusticEnabled && !isInitializing,
                             onPickFolder = {
                                 onOpenFolderPicker(

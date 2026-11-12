@@ -139,7 +139,7 @@ private fun AppRoot(crashRecovery: Boolean) {
         mutableStateOf(if (AppPrefs.isRemote) "" else AppPrefs.repoPath)
     }
     var rusticPassword by rememberSaveable {
-        mutableStateOf(AppPrefs.repoPassword.ifBlank { "rustic" })
+        mutableStateOf(AppPrefs.repoPassword)
     }
 
     val acquireRoot: suspend () -> Boolean = {
