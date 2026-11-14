@@ -35,6 +35,9 @@ import com.cc.libackupnext.data.json.UpdateDescriptionRequest
 import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.service.json.parseJson
 import com.cc.libackupnext.service.json.toJsonText
+import com.cc.libackupnext.service.util.BackendMessage
+import com.cc.libackupnext.service.util.BackendRawException
+import com.cc.libackupnext.service.util.BackendSource
 import com.cc.libackupnext.service.util.SystemDataExporter
 import com.cc.libackupnext.util.AppLog
 import com.topjohnwu.superuser.Shell
@@ -90,26 +93,48 @@ object RusticClient {
     }
 
     /**
+     * rustic 失败的统一收敛：完整原文进日志，UI 只显示底层 message。
+     */
+    private fun backendFailure(
+        label: String,
+        raw: String,
+        cause: Throwable? = null
+    ): IllegalStateException {
+        val brief = BackendMessage.record(
+            source = BackendSource.RUSTIC,
+            raw = raw,
+            error = raw,
+            ok = false,
+            label = label
+        )
+        return IllegalStateException(
+            brief.text.ifBlank { "操作失败" },
+            cause ?: BackendRawException(BackendSource.RUSTIC, raw)
+        )
+    }
+
+    /**
      * 业务请求不再预先测连：注入凭据时 [RcloneClient.ensureServe] 已经建立起 rclone
      * 后端连接，远端不可达会由第一笔真实请求失败暴露，再经 [remoteCall] 统一处理。
-     * 因此远程 rustic / rclone serve 报的任何失败都按「远程仓库连接不上」换成统一
-     * 文案交给 UI；原始异常留在 cause 里，[AppLog] 会连整条 Caused by 链写进日志。
-     * 本地仓库、协程取消、以及已经归一化的异常原样返回。
      */
     private suspend fun remoteFailure(t: Throwable): Throwable {
-        if (!AppPrefs.isRemote || t is CancellationException || isRemoteConnectionFailure(t)) {
-            return t
-        }
-        // 完整错误原文进 AppLog：正文给可读文本，throwable 再留一份完整 cause 链
-        AppLog.e(TAG, "远程仓库连接中断：${t.message.orEmpty()}", t)
+        if (t is CancellationException || isRemoteConnectionFailure(t)) return t
+
+        // 部分异常没有 message（NPE / 解析异常）：至少把异常类型记进原文
+        val raw = t.message?.takeIf { it.isNotBlank() } ?: t.toString()
+        val concise = backendFailure("remoteFailure", raw, t)
+        if (!AppPrefs.isRemote) return concise
+
+        // 原始异常的整条 Caused by 链仍写一份；正文带原文，完整原文另见 RusticResponse
+        AppLog.e(TAG, "远程仓库连接中断：${concise.message}", t)
         invalidateCredentials()
         // stopServe() 是 suspend：用 try/catch 吞掉它自己的异常，不能用 runCatching 包
         try {
             RcloneClient.stopServe()
-        } catch (t: Throwable) {
-            AppLog.w(TAG, "停止远程服务失败", t)
+        } catch (stopError: Throwable) {
+            AppLog.w(TAG, "停止远程服务失败", stopError)
         }
-        return IllegalStateException(REMOTE_INTERRUPTED_MESSAGE, t)
+        return IllegalStateException(REMOTE_INTERRUPTED_MESSAGE, concise)
     }
 
     /** UI 只调这个判断是否断。 */
@@ -406,19 +431,20 @@ object RusticClient {
         try {
             // 候选配置还没写进 AppPrefs：只拿 binder，不注入当前仓库的凭据，
             // 免得旧仓库连不上时把刚起好的候选 serve 顶掉。initRepo 只读候选值，
-            // 这里也保留原始错误，好把「连接测试失败」和「开库失败」分开。
+            // 这里不归一，好把「连接测试失败」和「开库失败」分开；原文仍完整写日志。
             val error = bindService().initRepo(path, password, options)
             if (error.isNullOrBlank()) {
                 AppLog.finishOperation(op, "initRepo", path, startedAt, "ok")
                 Result.success(Unit)
             } else {
                 AppLog.finishOperation(op, "initRepo", path, startedAt, "failed: $error")
-                Result.failure(IllegalStateException(error))
+                Result.failure(backendFailure("initRepo", error))
             }
         } catch (t: Throwable) {
             AppLog.e(TAG, "verifyRepository failed", t, op)
             AppLog.finishOperation(op, "initRepo", path, startedAt, "failed: ${t.message}")
-            Result.failure(t)
+            val raw = t.message?.takeIf { it.isNotBlank() } ?: t.toString()
+            Result.failure(backendFailure("initRepo 异常", raw, t))
         }
     }
 
@@ -716,7 +742,7 @@ object RusticClient {
         try {
             val error = bindService().setWifiEnabled(enabled)
             if (error.isNullOrBlank()) Result.success(Unit)
-            else Result.failure(IllegalStateException(error))
+            else Result.failure(backendFailure("setWifiEnabled", error.orEmpty()))
         } catch (t: Throwable) {
             Result.failure(t)
         }

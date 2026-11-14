@@ -8,6 +8,9 @@ import com.cc.libackupnext.data.json.ListDirsResponse
 import com.cc.libackupnext.data.json.OkResponse
 import com.cc.libackupnext.service.json.parseJson
 import com.cc.libackupnext.service.json.toJsonText
+import com.cc.libackupnext.service.util.BackendMessage
+import com.cc.libackupnext.service.util.BackendRawException
+import com.cc.libackupnext.service.util.BackendSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -30,6 +33,32 @@ object RcloneClient {
     private suspend fun getService(): IRcloneService = manager.getService()
 
     /**
+     * 所有 AIDL 调用的唯一出口：完整响应写日志（rclone 先脱敏），失败只把去噪限长后的原文抛给 UI。
+     */
+    private suspend fun call(
+        label: String,
+        invoke: (IRcloneService) -> String
+    ): String = withContext(Dispatchers.IO) {
+        val raw = invoke(getService())
+        val envelope = runCatching { raw.parseJson<OkResponse>() }
+            .getOrDefault(OkResponse(ok = false, error = raw))
+        val brief = BackendMessage.record(
+            source = BackendSource.RCLONE,
+            raw = raw,
+            error = envelope.error,
+            ok = envelope.ok,
+            label = label
+        )
+        if (!envelope.ok) {
+            throw IllegalStateException(
+                brief.text.ifBlank { "远程操作失败" },
+                BackendRawException(BackendSource.RCLONE, raw)
+            )
+        }
+        raw
+    }
+
+    /**
      * 列一层子目录：本地 / 远程共用同一条 AIDL + rclone RC 通道。
      *
      * inline 配置随本次请求下传，不依赖已保存的仓库，所以初始化之前也能浏览。
@@ -50,12 +79,11 @@ object RcloneClient {
                 create = create,
                 fixup = fixupPath
             )
-            val response = getService().listDirs(request.toJsonText())
-                .parseJson<ListDirsResponse>()
-            if (!response.ok) {
-                error(response.error.orEmpty().ifBlank { "列目录失败" })
+            val requestJson = request.toJsonText()
+            val raw = call("listDirs path=$path create=${create != null}") {
+                it.listDirs(requestJson)
             }
-            response.dirs
+            raw.parseJson<ListDirsResponse>().dirs
         }
     }
 
@@ -118,22 +146,17 @@ object RcloneClient {
                 fs = fs,
                 key = "${repo.location}|$fs"
             )
-            val response = getService().ensureServe(request.toJsonText())
-                .parseJson<EnsureServeResponse>()
-            if (!response.ok) {
-                error(response.error.orEmpty().ifBlank { "启动远程服务失败" })
-            }
-            response.url?.takeIf { it.isNotBlank() } ?: error("启动远程服务失败")
+            val requestJson = request.toJsonText()
+            val raw = call("ensureServe") { it.ensureServe(requestJson) }
+            raw.parseJson<EnsureServeResponse>().url?.takeIf { it.isNotBlank() }
+                ?: error("启动远程服务失败")
         }
     }
 
     /** 手动停掉当前的 serve restic（配置切换一般由 key 变化自动完成）。 */
     suspend fun stopServe(): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            val response = getService().stopServe().parseJson<OkResponse>()
-            if (!response.ok) {
-                error(response.error.orEmpty().ifBlank { "停止远程服务失败" })
-            }
+            call("stopServe") { it.stopServe() }
             Unit
         }
     }

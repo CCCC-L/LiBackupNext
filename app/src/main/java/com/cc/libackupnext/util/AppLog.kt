@@ -188,6 +188,18 @@ object AppLog {
     fun e(tag: String, message: String, throwable: Throwable? = null, op: String? = null) =
         log(Level.ERROR, tag, message, throwable, op)
 
+    /**
+     * 长文本完整落盘：按分片编号写入，绕过 [format] 的单条 MAX_MESSAGE 截断。
+     */
+    fun logLong(level: Level, tag: String, message: String, op: String? = null) {
+        val clean = message.replace('\n', ' ').replace('\r', ' ')
+        val chunkSize = MAX_MESSAGE - 24
+        val chunks = clean.chunked(chunkSize).ifEmpty { listOf("") }
+        chunks.forEachIndexed { index, chunk ->
+            log(level, tag, "[${index + 1}/${chunks.size}] $chunk", null, op)
+        }
+    }
+
     private fun log(
         level: Level,
         tag: String,

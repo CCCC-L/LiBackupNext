@@ -2267,7 +2267,6 @@ struct RemoteBackendFailure {
 }
 
 impl RemoteBackendFailure {
-    /// 错误文本的第一行：日志里先给一句明确结论，后面才是原始错误全文。
     fn headline(&self) -> String {
         let mut detail = vec![self.reason.clone()];
         if let Some(status) = self.status {
@@ -2276,7 +2275,7 @@ impl RemoteBackendFailure {
         if !self.endpoint.is_empty() {
             detail.push(self.endpoint.clone());
         }
-        format!("无法连接到远程仓库（{}）", detail.join(" · "))
+        format!("Cannot connect to remote repository ({})", detail.join(" · "))
     }
 }
 
@@ -2288,10 +2287,10 @@ fn classify_backend_error(error: &rustic_core::RusticError) -> Option<RemoteBack
         if let Some(http) = current.downcast_ref::<reqwest::Error>() {
             let status = http.status().map(|code| code.as_u16());
             let reason = match status {
-                Some(code) => format!("远程仓库返回 HTTP {code}"),
-                None if http.is_timeout() => "请求超时".to_string(),
-                None if http.is_connect() => "本地仓库服务连接被拒绝".to_string(),
-                None => "HTTP 请求失败".to_string(),
+                Some(code) => format!("Remote repository returned HTTP {code}"),
+                None if http.is_timeout() => "Request timed out".to_string(),
+                None if http.is_connect() => "Local repository service connection refused".to_string(),
+                None => "HTTP request failed".to_string(),
             };
 
             // rest_url 带本次会话的 basic-auth token，只留 host:port/path，
@@ -2325,7 +2324,7 @@ fn classify_backend_error(error: &rustic_core::RusticError) -> Option<RemoteBack
         return Some(RemoteBackendFailure {
             status: None,
             endpoint: String::new(),
-            reason: "HTTP 请求失败".to_string(),
+            reason: "HTTP request failed".to_string(),
         });
     }
     None
@@ -2358,7 +2357,7 @@ fn redact_userinfo(text: &str) -> String {
     out
 }
 
-/// rustic 的 Display 里混了文档链接、issue 模板等噪音，这里只保留错误本身。
+/// rustic 的 Display 里混了文档链接、issue 模板、Backtrace 等噪音，这里只保留错误本身。
 fn describe_error(error: &rustic_core::RusticError) -> String {
     let text = error.to_string();
     let mut out = String::new();
@@ -2371,6 +2370,11 @@ fn describe_error(error: &rustic_core::RusticError) -> String {
                 out.push('\n');
             }
             continue;
+        }
+
+        // Backtrace 是 Display 的最后一节，从这里起后面全部丢掉（含栈帧和那句提示）。
+        if line.starts_with("Backtrace:") {
+            break;
         }
 
         if line.starts_with("For more information, see:")
@@ -2403,8 +2407,25 @@ fn describe_error(error: &rustic_core::RusticError) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{backup_repo, init_repo, read_frame_at, set_repo, BackupItem, BackupRequest, ProgressCtx};
+    use super::{
+        backup_repo, describe_error, init_repo, read_frame_at, set_repo, BackupItem, BackupRequest,
+        ProgressCtx,
+    };
     use std::sync::{Arc, Mutex};
+
+    /// Backtrace 是 Display 的最后一节，从源头截断，日志和 UI 都不再出现这一段。
+    #[test]
+    fn describe_error_drops_backtrace_section() {
+        let err = rustic_core::RusticError::new(
+            rustic_core::ErrorKind::Other,
+            "No space left on device",
+        );
+        let text = describe_error(&err);
+        assert!(text.contains("No space left on device"), "{text}");
+        assert!(!text.contains("Backtrace"), "{text}");
+        assert!(!text.contains("disabled backtrace"), "{text}");
+        assert!(!text.contains("RUST_BACKTRACE"), "{text}");
+    }
 
     /// 凭据现在是进程级静态状态，测试必须串行跑，否则会互相覆盖仓库路径。
     static TEST_LOCK: Mutex<()> = Mutex::new(());
