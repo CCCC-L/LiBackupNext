@@ -5,6 +5,12 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.cc.libackupnext.App
 import androidx.core.content.edit
+import com.cc.libackupnext.data.json.RemoteRepoDto
+import com.cc.libackupnext.data.json.SavedRepoDto
+import com.cc.libackupnext.data.json.toDto
+import com.cc.libackupnext.data.json.toModel
+import com.cc.libackupnext.service.json.parseJson
+import com.cc.libackupnext.service.json.toJsonText
 
 /**
  * 本地配置：已初始化的 rustic 仓库信息 + 列表排序偏好。
@@ -61,14 +67,12 @@ object AppPrefs {
     /** 已保存的远程服务，按「名称」便捷切换用。 */
     var remoteRepos: List<RemoteRepo>
         get() = runCatching {
-            val array = org.json.JSONArray(prefs.getString(KEY_REMOTE_REPOS, "[]").orEmpty())
-            (0 until array.length()).map { RemoteRepo.fromJson(array.getJSONObject(it)) }
+            prefs.getString(KEY_REMOTE_REPOS, "[]").orEmpty()
+                .parseJson<List<RemoteRepoDto>>()
+                .map { it.toModel() }
         }.getOrDefault(emptyList())
         set(value) = prefs.edit {
-            putString(
-                KEY_REMOTE_REPOS,
-                org.json.JSONArray().apply { value.forEach { put(it.toJson()) } }.toString()
-            )
+            putString(KEY_REMOTE_REPOS, value.map { it.toDto() }.toJsonText())
         }
 
     /**
@@ -77,14 +81,12 @@ object AppPrefs {
      */
     var savedRepos: List<SavedRepo>
         get() = runCatching {
-            val array = org.json.JSONArray(prefs.getString(KEY_SAVED_REPOS, "[]").orEmpty())
-            (0 until array.length()).map { SavedRepo.fromJson(array.getJSONObject(it)) }
+            prefs.getString(KEY_SAVED_REPOS, "[]").orEmpty()
+                .parseJson<List<SavedRepoDto>>()
+                .map { it.toModel() }
         }.getOrDefault(emptyList())
         private set(value) = prefs.edit {
-            putString(
-                KEY_SAVED_REPOS,
-                org.json.JSONArray().apply { value.forEach { put(it.toJson()) } }.toString()
-            )
+            putString(KEY_SAVED_REPOS, value.map { it.toDto() }.toJsonText())
         }
 
     /** 初始化成功：同位置的老记录先删掉，再追加最新的（密码可能改过）。 */

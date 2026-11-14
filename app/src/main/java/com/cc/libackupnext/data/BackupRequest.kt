@@ -1,5 +1,7 @@
 package com.cc.libackupnext.data
 
+import kotlinx.serialization.Serializable
+
 /**
  * 一次备份请求。
  *
@@ -23,13 +25,14 @@ data class BackupRequest(
  * @param tags 逗号分隔的 tag 串
  * @param time 快照时间（毫秒）
  */
+@Serializable
 data class BackupSnapshot(
-    val id: String,
-    val label: String,
-    val tags: String,
-    val time: Long,
-    val size: Long,
-    val description: String?
+    val id: String = "",
+    val label: String = "",
+    val tags: String = "",
+    val time: Long = 0,
+    val size: Long = 0,
+    val description: String? = null
 )
 
 /**

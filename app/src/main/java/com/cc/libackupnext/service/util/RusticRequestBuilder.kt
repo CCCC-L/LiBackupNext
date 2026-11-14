@@ -6,16 +6,18 @@ import android.os.UserManagerHidden
 import androidx.core.graphics.drawable.toBitmap
 import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.data.SnapshotKind
+import com.cc.libackupnext.data.json.BackupItemDto
+import com.cc.libackupnext.data.json.BackupOptions
+import com.cc.libackupnext.data.json.RusticBackupRequest
 import dev.rikka.tools.refine.Refine
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 
 /**
- * 把备份请求（options）翻译成 rustic 的请求 JSON。
+ * 把备份请求（options）翻译成 rustic 的请求结构。
  *
  * 顺便把要进快照的源文件写好：图标、权限 / appops / 白名单、apk 路径。
+ * 真正序列化成 JSON 交给 Rust 的动作在 [com.cc.libackupnext.service.RusticServer]。
  */
 
 /** 外部存储路径换成 /data/media 视角（root 进程里读得到）。 */
@@ -59,19 +61,18 @@ internal class RusticRequestBuilder(
     private val appState: AppState
 ) {
 
-
-    fun build(options: JSONObject): String? {
-        val packageName = options.getString("packageName")
-        val userId = options.optInt("userId", 0)
-        val timestamp = options.optLong("timestamp", System.currentTimeMillis())
+    fun build(options: BackupOptions): RusticBackupRequest? {
+        val packageName = options.packageName
+        val userId = options.userId
+        val timestamp = options.timestamp.takeIf { it > 0 } ?: System.currentTimeMillis()
         val userName = userNameOf(userId)
 
-        val appName = options.optString("appName").ifBlank { packageName }
-        val version = options.optString("version")
-        val overrides = options.optJSONObject("overrides")
+        val appName = options.appName.ifBlank { packageName }
+        val version = options.version
+        val overrides = options.overrides
 
         // 类型 -> 上一次同类快照的 id，作为 rustic 的 parent 做增量备份
-        val parents = options.optJSONObject("parents")
+        val parents = options.parents
 
         // 拼成一个 tag：应用名|版本|用户名|时间戳
         // rustic 的 tags 是集合会排序，拆成多个就丢顺序了
@@ -82,42 +83,39 @@ internal class RusticRequestBuilder(
 
         // 覆盖备份时沿用旧快照的 label / tag / 备注
         fun labelOf(kind: String, fallback: String): String =
-            overrides?.optJSONObject(kind)?.optString("label")?.takeIf { it.isNotBlank() }
-                ?: fallback
+            overrides?.get(kind)?.label?.takeIf { it.isNotBlank() } ?: fallback
 
         fun tagsOf(kind: String, fallback: List<String>): List<String> {
-            val raw = overrides?.optJSONObject(kind)?.optString("tags").orEmpty()
+            val raw = overrides?.get(kind)?.tags.orEmpty()
             if (raw.isBlank()) return fallback
             return raw.split(',').filter { it.isNotBlank() }
         }
 
         fun descriptionOf(kind: String): String? =
-            overrides?.optJSONObject(kind)?.optString("description")?.takeIf { it.isNotBlank() }
+            overrides?.get(kind)?.description?.takeIf { it.isNotBlank() }
+
+        val batch = options.batch?.takeIf { it.isNotBlank() }
+
         // 目录备份：一个目录就是一个快照，label 固定为 `dir:<绝对路径>`。
         // 快照里顶层目录名用文件夹名（as_path），恢复时落到父目录即可还原。
         if (packageName.startsWith('/')) {
             val dir = File(packageName)
-            val dirItems = JSONArray().put(
-                item(
-                    SnapshotKind.DIR.key,
-                    "$packageName:${SnapshotKind.DIR.key}",
-                    tags,
-                    // 备份走真实路径：/sdcard 是 FUSE 视图，root 读写会被权限限制
-                    listOf(mediaPath(packageName)),
-                    dir.name,
-                    if (dir.isDirectory) null else "目录不存在",
-                    descriptionOf(SnapshotKind.DIR.key)
-                )
+            val dirItem = item(
+                stage = SnapshotKind.DIR.key,
+                label = "$packageName:${SnapshotKind.DIR.key}",
+                tags = tags,
+                // 备份走真实路径：/sdcard 是 FUSE 视图，root 读写会被权限限制
+                sources = listOf(mediaPath(packageName)),
+                asPath = dir.name,
+                skipReason = if (dir.isDirectory) null else "目录不存在",
+                description = descriptionOf(SnapshotKind.DIR.key)
             )
-            return JSONObject().apply {
-                put("items", dirItems)
+            return RusticBackupRequest(
+                items = listOf(dirItem),
                 // 不备份.thumbnails 文件夹和 .trashed开头的文件
-                put(
-                    "excludes",
-                    JSONArray().put("!.thumbnails").put("!.trashed*")
-                )
-                options.optString("batch").takeIf { it.isNotBlank() }?.let { put("batch", it) }
-            }.toString()
+                excludes = listOf("!.thumbnails", "!.trashed*"),
+                batch = batch
+            )
         }
 
         // 系统数据（Wi-Fi / 联系人 / 通话记录）：内容由 root 侧导出成 JSON。
@@ -126,53 +124,47 @@ internal class RusticRequestBuilder(
             .firstOrNull { it.fixedId != null && it.fixedId == packageName }
         if (fixedTarget != null) {
             val kind = fixedTarget.kinds.first().kinds.first()
-
             val systemItem = item(
-                kind.key,
-                labelOf(kind.key, "$packageName:${kind.key}"),
-                tagsOf(kind.key, tags),
+                stage = kind.key,
+                label = labelOf(kind.key, "$packageName:${kind.key}"),
+                tags = tagsOf(kind.key, tags),
                 sources = emptyList(),
                 asPath = "$packageName.json",
                 description = descriptionOf(kind.key)
-            ).put("system", true)
+            ).copy(
+                system = true,
+                parent = parents?.get(kind.key)?.takeIf { it.isNotBlank() }
+            )
 
-            parents?.optString(kind.key)?.takeIf { it.isNotBlank() }?.let {
-                systemItem.put("parent", it)
-            }
-
-            return JSONObject().apply {
-                put("items", JSONArray().put(systemItem))
-                options.optString("batch").takeIf { it.isNotBlank() }?.let { put("batch", it) }
-            }.toString()
+            return RusticBackupRequest(items = listOf(systemItem), batch = batch)
         }
 
-        val items = JSONArray()
+        val items = mutableListOf<BackupItemDto>()
 
         // 图标：仓库里已经有同 label 的快照就不再备份（策略在 service 层判断）
-        val includeIcon = options.optBoolean("includeIcon", true)
-        if (includeIcon) writeIcon(packageName)?.let { iconPath ->
-            items.put(
+        if (options.includeIcon) writeIcon(packageName)?.let { iconPath ->
+            items.add(
                 item(
-                    SnapshotKind.ICON.key,
-                    "$packageName:${SnapshotKind.ICON.key}",
-                    listOf(packageName),
-                    listOf(iconPath),
+                    stage = SnapshotKind.ICON.key,
+                    label = "$packageName:${SnapshotKind.ICON.key}",
+                    tags = listOf(packageName),
+                    sources = listOf(iconPath),
                     asPath = File(iconPath).name
                 )
             )
         }
 
         // 即使某个来源暂时不存在也要带上，Rust 侧会回报「跳过」
-        if (options.optBoolean(SnapshotKind.APK.key, false)) {
+        if (options.apk) {
             val installDir = apkPaths(packageName)
                 .firstOrNull()
                 ?.let { File(it).parentFile?.absolutePath }
-            items.put(
+            items.add(
                 item(
-                    SnapshotKind.APK.key,
-                    labelOf(SnapshotKind.APK.key, "$packageName:${SnapshotKind.APK.key}"),
-                    tagsOf(SnapshotKind.APK.key, tags),
-                    listOfNotNull(installDir),
+                    stage = SnapshotKind.APK.key,
+                    label = labelOf(SnapshotKind.APK.key, "$packageName:${SnapshotKind.APK.key}"),
+                    tags = tagsOf(SnapshotKind.APK.key, tags),
+                    sources = listOfNotNull(installDir),
                     asPath = "/",
                     skipReason = if (installDir == null) "找不到 APK" else null,
                     description = descriptionOf(SnapshotKind.APK.key),
@@ -181,14 +173,14 @@ internal class RusticRequestBuilder(
             )
         }
 
-        if (options.optBoolean(SnapshotKind.OBB.key, false)) {
+        if (options.obb) {
             val obbPath = "/data/media/$userId/Android/obb/$packageName"
-            items.put(
+            items.add(
                 item(
-                    SnapshotKind.OBB.key,
-                    labelOf(SnapshotKind.OBB.key, "$packageName:${SnapshotKind.OBB.key}"),
-                    tagsOf(SnapshotKind.OBB.key, tags),
-                    listOf(obbPath),
+                    stage = SnapshotKind.OBB.key,
+                    label = labelOf(SnapshotKind.OBB.key, "$packageName:${SnapshotKind.OBB.key}"),
+                    tags = tagsOf(SnapshotKind.OBB.key, tags),
+                    sources = listOf(obbPath),
                     asPath = packageName,
                     skipReason = skipReasonOf(obbPath),
                     description = descriptionOf(SnapshotKind.OBB.key)
@@ -197,17 +189,17 @@ internal class RusticRequestBuilder(
         }
 
         // 已授予的运行时权限：写成 permissions.json 一起进仓库。
-        if (options.optBoolean(SnapshotKind.PERMISSIONS.key, false)) {
+        if (options.permissions) {
             val permissionFile = appState.write(packageName, userId)
-            items.put(
+            items.add(
                 item(
-                    SnapshotKind.PERMISSIONS.key,
-                    labelOf(
+                    stage = SnapshotKind.PERMISSIONS.key,
+                    label = labelOf(
                         SnapshotKind.PERMISSIONS.key,
                         "$packageName:${SnapshotKind.PERMISSIONS.key}"
                     ),
-                    tagsOf(SnapshotKind.PERMISSIONS.key, tags),
-                    listOfNotNull(permissionFile),
+                    tags = tagsOf(SnapshotKind.PERMISSIONS.key, tags),
+                    sources = listOfNotNull(permissionFile),
                     asPath = "permissions.json",
                     skipReason = if (permissionFile == null) "没有已授予的运行时权限" else null,
                     description = descriptionOf(SnapshotKind.PERMISSIONS.key)
@@ -215,27 +207,30 @@ internal class RusticRequestBuilder(
             )
         }
 
-        if (options.optBoolean(SnapshotKind.USER.key, false)) {
+        if (options.user) {
             val userDataPath = "/data/user/$userId/$packageName"
             val userDePath = "/data/user_de/$userId/$packageName"
 
-            items.put(
+            items.add(
                 item(
-                    SnapshotKind.USER.key,
-                    labelOf(SnapshotKind.USER.key, "$packageName:${SnapshotKind.USER.key}"),
-                    tagsOf(SnapshotKind.USER.key, tags),
-                    listOf(userDataPath),
+                    stage = SnapshotKind.USER.key,
+                    label = labelOf(SnapshotKind.USER.key, "$packageName:${SnapshotKind.USER.key}"),
+                    tags = tagsOf(SnapshotKind.USER.key, tags),
+                    sources = listOf(userDataPath),
                     asPath = packageName,
                     skipReason = skipReasonOf(userDataPath),
                     description = descriptionOf(SnapshotKind.USER.key)
                 )
             )
-            items.put(
+            items.add(
                 item(
-                    SnapshotKind.USER_DE.key,
-                    labelOf(SnapshotKind.USER_DE.key, "$packageName:${SnapshotKind.USER_DE.key}"),
-                    tagsOf(SnapshotKind.USER_DE.key, tags),
-                    listOf(userDePath),
+                    stage = SnapshotKind.USER_DE.key,
+                    label = labelOf(
+                        SnapshotKind.USER_DE.key,
+                        "$packageName:${SnapshotKind.USER_DE.key}"
+                    ),
+                    tags = tagsOf(SnapshotKind.USER_DE.key, tags),
+                    sources = listOf(userDePath),
                     asPath = packageName,
                     skipReason = skipReasonOf(userDePath),
                     description = descriptionOf(SnapshotKind.USER_DE.key)
@@ -243,14 +238,14 @@ internal class RusticRequestBuilder(
             )
         }
 
-        if (options.optBoolean(SnapshotKind.DATA.key, false)) {
+        if (options.data) {
             val dataPath = "/data/media/$userId/Android/data/$packageName"
-            items.put(
+            items.add(
                 item(
-                    SnapshotKind.DATA.key,
-                    labelOf(SnapshotKind.DATA.key, "$packageName:${SnapshotKind.DATA.key}"),
-                    tagsOf(SnapshotKind.DATA.key, tags),
-                    listOf(dataPath),
+                    stage = SnapshotKind.DATA.key,
+                    label = labelOf(SnapshotKind.DATA.key, "$packageName:${SnapshotKind.DATA.key}"),
+                    tags = tagsOf(SnapshotKind.DATA.key, tags),
+                    sources = listOf(dataPath),
                     asPath = packageName,
                     skipReason = skipReasonOf(dataPath),
                     description = descriptionOf(SnapshotKind.DATA.key)
@@ -258,23 +253,23 @@ internal class RusticRequestBuilder(
             )
         }
 
-        if (items.length() == 0) return null
+        if (items.isEmpty()) return null
 
         // 把 parent 挂到对应类型的 item 上：rustic 有了显式 parent 就不用
         // 「列一遍仓库里所有快照找最新」了（那是每个类型一次的全量扫描）
-        parents?.let { map ->
-            for (index in 0 until items.length()) {
-                val item = items.getJSONObject(index)
-                val parent = map.optString(item.optString("stage"))
-                if (parent.isNotBlank()) item.put("parent", parent)
+        val withParents = parents?.let { map ->
+            items.map { item ->
+                map[item.stage]?.takeIf { it.isNotBlank() }?.let { parent ->
+                    item.copy(parent = parent)
+                } ?: item
             }
-        }
+        } ?: items
 
-        return JSONObject().apply {
-            put("items", items)
-            put("excludes", JSONArray(BACKUP_EXCLUDES))
-            options.optString("batch").takeIf { it.isNotBlank() }?.let { put("batch", it) }
-        }.toString()
+        return RusticBackupRequest(
+            items = withParents,
+            excludes = BACKUP_EXCLUDES,
+            batch = batch
+        )
     }
 
     private fun skipReasonOf(path: String): String? =
@@ -297,25 +292,16 @@ internal class RusticRequestBuilder(
         skipReason: String? = null,
         description: String? = null,
         excludes: List<String>? = null
-    ): JSONObject = JSONObject().apply {
-        put("stage", stage)
-        put("label", label)
-        put("tags", JSONArray(tags))
-        put("sources", JSONArray(sources))
-        if (asPath != null) {
-            put("as_path", asPath)
-        }
-        if (skipReason != null) {
-            put("skip_reason", skipReason)
-        }
-        if (description != null) {
-            put("description", description)
-        }
-        if (excludes != null) {
-            put("excludes", JSONArray(excludes))
-        }
-    }
-
+    ): BackupItemDto = BackupItemDto(
+        stage = stage,
+        label = label,
+        tags = tags,
+        sources = sources,
+        asPath = asPath,
+        skipReason = skipReason,
+        description = description,
+        excludes = excludes.orEmpty()
+    )
 
     /**
      * 把应用图标导出成 PNG，作为 icon 快照的源文件。

@@ -7,6 +7,7 @@ espressoCore = "3.5.1"
 lifecycleRuntimeKtx = "2.11.0"
 activityCompose = "1.8.0"
 kotlin = "2.2.10"
+kotlinxSerialization = "1.9.0"
 composeBom = "2026.09.00"
 
 viewmodelCompose = "2.11.0"
@@ -51,9 +52,15 @@ androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 rikkax-parcelablelist = { module = "dev.rikka.rikkax.parcelablelist:parcelablelist", version.ref = "parcelablelist" }
 
+# core / json 必须同版本：其他依赖会传递带入 kotlinx-serialization-core，
+# 用 BOM 统一，避免 json 1.9.0 配上 core 1.11.0 的运行时 NoSuchMethodError
+kotlinx-serialization-bom = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-bom", version.ref = "kotlinxSerialization" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 
 android-library = { id = "com.android.library", version.ref = "agp" }
 

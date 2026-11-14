@@ -1,5 +1,7 @@
 package com.cc.libackupnext.entity
 
+import kotlinx.serialization.Serializable
+
 /**
  * 应用列表的纯元数据。
  *
@@ -7,18 +9,19 @@ package com.cc.libackupnext.entity
  * 应用数量多时还会撑爆 root 服务进程。图标改由 [com.cc.libackupnext.ui.util.AppIconStore]
  * 按需异步加载。
  */
+@Serializable
 data class AppInfo(
 
-    val name: String,
-    val packageName: String,
-    val version: String,
-    val versionCode: Long,
-    val installTime: Long,
-    val updateTime: Long,
-    val userId: Int,
-    val isSystem: Boolean,
+    val name: String = "",
+    val packageName: String = "",
+    val version: String = "",
+    val versionCode: Long = 0,
+    val installTime: Long = 0,
+    val updateTime: Long = 0,
+    val userId: Int = 0,
+    val isSystem: Boolean = false,
     /** 是否已被冻结（ApplicationInfo.enabled == false）。 */
-    val isFrozen: Boolean,
+    val isFrozen: Boolean = false,
 
     /** 只在 rustic 备份里存在、当前用户并没有安装。 */
     val onlyInBackup: Boolean = false

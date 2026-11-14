@@ -19,7 +19,22 @@ import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.SnapshotMeta
 import com.cc.libackupnext.data.SnapshotOverride
 import com.cc.libackupnext.data.kind
+import com.cc.libackupnext.data.json.BackupOptions
+import com.cc.libackupnext.data.json.CleanupResponse
+import com.cc.libackupnext.data.json.DeleteSnapshotsRequest
+import com.cc.libackupnext.data.json.EstimateResponse
+import com.cc.libackupnext.data.json.ExportSnapshotRequest
+import com.cc.libackupnext.data.json.ListSnapshotsRequest
+import com.cc.libackupnext.data.json.ListSnapshotsResponse
+import com.cc.libackupnext.data.json.OverviewResponse
+import com.cc.libackupnext.data.json.RestoreKindItem
+import com.cc.libackupnext.data.json.RestoreSnapshotsRequest
+import com.cc.libackupnext.data.json.SnapshotOverrideDto
+import com.cc.libackupnext.data.json.SystemDataCountsResponse
+import com.cc.libackupnext.data.json.UpdateDescriptionRequest
 import com.cc.libackupnext.entity.AppInfo
+import com.cc.libackupnext.service.json.parseJson
+import com.cc.libackupnext.service.json.toJsonText
 import com.cc.libackupnext.service.util.SystemDataExporter
 import com.cc.libackupnext.util.AppLog
 import com.topjohnwu.superuser.Shell
@@ -28,8 +43,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.File
 
 /**
@@ -182,9 +195,10 @@ object RusticClient {
         if (!AppPrefs.hasRepository()) return@withContext Result.success(emptyList())
 
         try {
-            val json = JSONObject(remoteCall { getService().overview(EMPTY_REQUEST) })
-            if (!json.optBoolean("ok", false)) {
-                val message = json.optString("error").ifBlank { "读取备份概况失败" }
+            val response = remoteCall { getService().overview(EMPTY_REQUEST) }
+                .parseJson<OverviewResponse>()
+            if (!response.ok) {
+                val message = response.error.orEmpty().ifBlank { "读取备份概况失败" }
                 AppLog.e("备份概况", message)
                 // 远程软错误归一一次（停掉旧 serve，让下次请求重建连接），
                 // 作为 Result.failure 交给 UI 决定怎么提示；本地读失败仍退化为空列表
@@ -196,48 +210,32 @@ object RusticClient {
                 return@withContext Result.success(emptyList())
             }
 
-            val array = json.optJSONArray("packages") ?: JSONArray()
-            Result.success(buildList {
-                for (index in 0 until array.length()) {
-                    val item = array.getJSONObject(index)
-                    val packageName = item.optString("package")
-                    if (packageName.isBlank()) continue
-
-                    val tags = item.optString("tags")
-                    val time = item.optLong("time")
-                    val description = item.optString("description").takeIf { it.isNotBlank() }
-
-                    val snapshots = item.optJSONArray("snapshots") ?: JSONArray()
-                    add(
-                        RepoOverview(
-                            packageName = packageName,
-                            count = item.optInt("count"),
-                            time = time,
-                            tags = tags,
-                            description = description,
-                            snapshots = buildList {
-                                for (i in 0 until snapshots.length()) {
-                                    val snapshot = snapshots.getJSONObject(i)
-                                    add(
-                                        BackupSnapshot(
-                                            id = snapshot.optString("id"),
-                                            label = snapshot.optString("label"),
-                                            // 同一次备份里这些字段都一样，Rust 侧只回传一份
-                                            tags = tags,
-                                            time = time,
-                                            size = snapshot.optLong("size"),
-                                            description = description
-                                        )
-                                    )
-                                }
-                            },
-                            hasApk = item.optBoolean("has_apk"),
-                            apkTags = item.optString("apk_tags").takeIf { it.isNotBlank() },
-                            apkTime = item.optLong("apk_time"),
-                            hasIcon = item.optBoolean("has_icon")
+            Result.success(response.packages.mapNotNull { item ->
+                val packageName = item.packageName
+                if (packageName.isBlank()) return@mapNotNull null
+                // 同一次备份里 tag / 时间 / 备注都一样，Rust 侧只回传一份
+                val description = item.description?.takeIf { it.isNotBlank() }
+                RepoOverview(
+                    packageName = packageName,
+                    count = item.count,
+                    time = item.time,
+                    tags = item.tags,
+                    description = description,
+                    snapshots = item.snapshots.map { snapshot ->
+                        BackupSnapshot(
+                            id = snapshot.id,
+                            label = snapshot.label,
+                            tags = item.tags,
+                            time = item.time,
+                            size = snapshot.size,
+                            description = description
                         )
-                    )
-                }
+                    },
+                    hasApk = item.hasApk,
+                    apkTags = item.apkTags?.takeIf { it.isNotBlank() },
+                    apkTime = item.apkTime,
+                    hasIcon = item.hasIcon
+                )
             })
         } catch (t: Throwable) {
             AppLog.e(TAG, "repoOverview failed", t)
@@ -254,32 +252,24 @@ object RusticClient {
         packageName: String? = null
     ): Result<List<BackupSnapshot>> = withContext(Dispatchers.IO) {
         try {
-            val request = JSONObject().apply {
-                put("package_name", packageName.orEmpty())
-            }
-
-            val json = JSONObject(remoteCall { getService().listSnapshots(request.toString()) })
-            if (!json.optBoolean("ok", false)) {
+            val request = ListSnapshotsRequest(packageName = packageName.orEmpty())
+            val response = remoteCall { getService().listSnapshots(request.toJsonText()) }
+                .parseJson<ListSnapshotsResponse>()
+            if (!response.ok) {
                 return@withContext Result.failure(
-                    remoteError(json.optString("error").ifBlank { "查询快照失败" })
+                    remoteError(response.error.orEmpty().ifBlank { "查询快照失败" })
                 )
             }
 
-            val array = json.optJSONArray("snapshots") ?: JSONArray()
-            val snapshots = buildList {
-                for (index in 0 until array.length()) {
-                    val item = array.getJSONObject(index)
-                    add(
-                        BackupSnapshot(
-                            id = item.optString("id"),
-                            label = item.optString("label"),
-                            tags = item.optString("tags"),
-                            time = item.optLong("time"),
-                            size = item.optLong("size"),
-                            description = item.optString("description").takeIf { it.isNotBlank() }
-                        )
-                    )
-                }
+            val snapshots = response.snapshots.map { item ->
+                BackupSnapshot(
+                    id = item.id,
+                    label = item.label,
+                    tags = item.tags,
+                    time = item.time,
+                    size = item.size,
+                    description = item.description?.takeIf { it.isNotBlank() }
+                )
             }
             Result.success(snapshots)
         } catch (t: Throwable) {
@@ -293,10 +283,8 @@ object RusticClient {
         ids: List<String>
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val request = JSONObject().apply {
-                put("ids", JSONArray(ids))
-            }
-            val error = remoteCall { getService().deleteSnapshots(request.toString()) }
+            val request = DeleteSnapshotsRequest(ids = ids)
+            val error = remoteCall { getService().deleteSnapshots(request.toJsonText()) }
             if (error.isNullOrBlank()) Result.success(Unit)
             else Result.failure(remoteError(error))
         } catch (t: Throwable) {
@@ -328,17 +316,7 @@ object RusticClient {
         try {
             val callback = object : IBackupProgressCallback.Stub() {
                 override fun onProgress(progress: String) {
-                    runCatching {
-                        val json = JSONObject(progress)
-                        onProgress(
-                            BackupProgress(
-                                stage = json.optString("stage"),
-                                state = json.optString("state"),
-                                files = json.optLong("files"),
-                                reason = json.optString("reason")
-                            )
-                        )
-                    }
+                    runCatching { onProgress(progress.parseJson<BackupProgress>()) }
                 }
             }
 
@@ -352,46 +330,34 @@ object RusticClient {
                 packageName = request.packageName
             ).getOrThrow().any { it.label == "${request.packageName}:${SnapshotKind.ICON.key}" }
 
-            val payload = JSONObject().apply {
-                // 透传到 :root，两侧日志用同一个 op 串起来
-                put("op", op)
-                put("packageName", request.packageName)
-                put("appName", request.appName)
-                put("version", request.version)
-                put("userId", request.userId)
-                // 这些 key 就是 RusticRequestBuilder 里 optBoolean 读的那些
-                put(SnapshotKind.APK.key, request.backupApk)
-                put(SnapshotKind.OBB.key, request.backupObb)
-                put(SnapshotKind.USER.key, request.backupUser)
-                put(SnapshotKind.DATA.key, request.backupData)
-                put(SnapshotKind.PERMISSIONS.key, request.backupPermissions)
-                put("timestamp", operationId)
-                put("includeIcon", !hasIcon && !isDir)
-                if (!parentIds.isNullOrEmpty()) put("parents", JSONObject(parentIds.mapKeys { it.key.key }))
+            // op 透传到 :root，两侧日志用同一个 op 串起来
+            val payload = BackupOptions(
+                op = op,
+                packageName = request.packageName,
+                appName = request.appName,
+                version = request.version,
+                userId = request.userId,
+                // 这些 key 就是 RusticRequestBuilder 里读取的那几项
+                apk = request.backupApk,
+                obb = request.backupObb,
+                user = request.backupUser,
+                data = request.backupData,
+                permissions = request.backupPermissions,
+                timestamp = operationId,
+                includeIcon = !hasIcon && !isDir,
+                parents = parentIds?.takeIf { it.isNotEmpty() }?.mapKeys { it.key.key },
                 // 同批次的多个应用共用一次「打开仓库 + 读索引」
-                if (!batchId.isNullOrBlank()) put("batch", batchId)
-                if (overrides.isNotEmpty()) {
-                    put(
-                        "overrides",
-                        JSONObject().apply {
-                            overrides.forEach { (kind, override) ->
-                                put(
-                                    kind,
-                                    JSONObject().apply {
-                                        put("label", override.label)
-                                        put("tags", override.tags)
-                                        if (override.description != null) {
-                                            put("description", override.description)
-                                        }
-                                    }
-                                )
-                            }
-                        }
+                batch = batchId?.takeIf { it.isNotBlank() },
+                overrides = overrides.takeIf { it.isNotEmpty() }?.mapValues { (_, override) ->
+                    SnapshotOverrideDto(
+                        label = override.label,
+                        tags = override.tags,
+                        description = override.description
                     )
                 }
-            }
+            )
 
-            val error = remoteCall { getService().backup(payload.toString(), callback) }
+            val error = remoteCall { getService().backup(payload.toJsonText(), callback) }
             if (!error.isNullOrBlank()) {
                 AppLog.finishOperation(op, "backup", request.packageName, startedAt, "failed: $error")
                 return@withContext Result.failure(remoteError(error))
@@ -399,10 +365,10 @@ object RusticClient {
 
             // 覆盖备份：新的写成功了再删旧的
             if (deleteIds.isNotEmpty()) {
-                val deleteRequest = JSONObject().apply {
-                    put("ids", JSONArray(deleteIds))
+                val deleteRequest = DeleteSnapshotsRequest(ids = deleteIds)
+                val deleteError = remoteCall {
+                    getService().deleteSnapshots(deleteRequest.toJsonText())
                 }
-                val deleteError = remoteCall { getService().deleteSnapshots(deleteRequest.toString()) }
                 if (!deleteError.isNullOrBlank()) {
                     AppLog.finishOperation(
                         op, "backup", request.packageName, startedAt,
@@ -687,11 +653,8 @@ object RusticClient {
             }
 
             try {
-                val request = JSONObject().apply {
-                    put("id", icon.id)
-                    put("dest", dir.absolutePath)
-                }
-                val error = remoteCall { getService().exportSnapshot(request.toString()) }
+                val request = ExportSnapshotRequest(id = icon.id, dest = dir.absolutePath)
+                val error = remoteCall { getService().exportSnapshot(request.toJsonText()) }
                 if (!error.isNullOrBlank()) {
                     return@withContext Result.failure(remoteError(error))
                 }
@@ -739,11 +702,11 @@ object RusticClient {
      */
     suspend fun systemDataCounts(): Map<SnapshotKind, Int> = withContext(Dispatchers.IO) {
         runCatching {
-            val counts = JSONObject(bindService().systemDataCounts()).optJSONObject("counts")
-                ?: return@runCatching emptyMap<SnapshotKind, Int>()
+            val counts = bindService().systemDataCounts()
+                .parseJson<SystemDataCountsResponse>().counts
 
             SystemDataExporter.SYSTEM_KINDS.mapNotNull { kind ->
-                counts.optInt(kind.key, -1).takeIf { it >= 0 }?.let { kind to it }
+                counts[kind.key]?.takeIf { it >= 0 }?.let { kind to it }
             }.toMap()
         }.getOrDefault(emptyMap())
     }
@@ -763,13 +726,14 @@ object RusticClient {
         if (!AppPrefs.hasRepository()) return@withContext Result.success(0)
 
         try {
-            val json = JSONObject(remoteCall { getService().cleanOrphanIcons(EMPTY_REQUEST) })
-            if (!json.optBoolean("ok", false)) {
+            val response = remoteCall { getService().cleanOrphanIcons(EMPTY_REQUEST) }
+                .parseJson<CleanupResponse>()
+            if (!response.ok) {
                 return@withContext Result.failure(
-                    remoteError(json.optString("error").ifBlank { "清理孤立图标失败" })
+                    remoteError(response.error.orEmpty().ifBlank { "清理孤立图标失败" })
                 )
             }
-            Result.success(json.optInt("removed"))
+            Result.success(response.removed)
         } catch (t: Throwable) {
             AppLog.e(TAG, "cleanOrphanIcons failed", t)
             Result.failure(t)
@@ -824,12 +788,13 @@ object RusticClient {
      */
     suspend fun estimatePrune(): Result<Long> = withContext(Dispatchers.IO) {
         try {
-            val json = JSONObject(remoteCall { getService().pruneEstimate(EMPTY_REQUEST) })
-            if (json.optBoolean("ok", false)) {
-                Result.success(json.optLong("bytes", 0L))
+            val response = remoteCall { getService().pruneEstimate(EMPTY_REQUEST) }
+                .parseJson<EstimateResponse>()
+            if (response.ok) {
+                Result.success(response.bytes)
             } else {
                 Result.failure(
-                    remoteError(json.optString("error").ifBlank { "估算可回收空间失败" })
+                    remoteError(response.error.orEmpty().ifBlank { "估算可回收空间失败" })
                 )
             }
         } catch (t: Throwable) {
@@ -842,14 +807,8 @@ object RusticClient {
     suspend fun updateEntryDescription(entry: BackupEntry, description: String?): Result<Unit> =
         withContext(Dispatchers.IO) {
             try {
-                val request = JSONObject().apply {
-                    put("ids", JSONArray(entry.ids))
-                    if (description != null) {
-                        put("description", description)
-                    }
-                }
-
-                val error = remoteCall { getService().updateDescription(request.toString()) }
+                val request = UpdateDescriptionRequest(ids = entry.ids, description = description)
+                val error = remoteCall { getService().updateDescription(request.toJsonText()) }
                 if (error.isNullOrBlank()) {
                     Result.success(Unit)
                 } else {
@@ -1060,39 +1019,26 @@ object RusticClient {
             val op = AppLog.startOperation("restore", app.packageName)
             val startedAt = System.currentTimeMillis()
             try {
-                val request = JSONObject().apply {
-                    put("op", op)
-                    put("userId", app.userId)
-                    put("packageName", app.packageName)
-                    put("delete", true)
-                    put(
-                        "items",
-                        JSONArray().apply {
-                            selected.forEach { snapshot ->
-                                snapshot.kind()?.let { kind ->
-                                    put(JSONObject().put("kind", kind.key).put("id", snapshot.id))
-                                }
-                            }
+                val request = RestoreSnapshotsRequest(
+                    op = op,
+                    userId = app.userId,
+                    packageName = app.packageName,
+                    delete = true,
+                    items = selected.mapNotNull { snapshot ->
+                        snapshot.kind()?.let { kind ->
+                            RestoreKindItem(kind = kind.key, id = snapshot.id)
                         }
-                    )
-                }
+                    }
+                )
                 val callback = object : IBackupProgressCallback.Stub() {
                     override fun onProgress(progress: String) {
-                        runCatching {
-                            val json = JSONObject(progress)
-                            onProgress(
-                                BackupProgress(
-                                    stage = json.optString("stage"),
-                                    state = json.optString("state"),
-                                    files = json.optLong("files"),
-                                    reason = json.optString("reason")
-                                )
-                            )
-                        }
+                        runCatching { onProgress(progress.parseJson<BackupProgress>()) }
                     }
                 }
 
-                val error = remoteCall { getService().restoreSnapshots(request.toString(), callback) }
+                val error = remoteCall {
+                    getService().restoreSnapshots(request.toJsonText(), callback)
+                }
                 if (!error.isNullOrBlank()) {
                     AppLog.finishOperation(op, "restore", app.packageName, startedAt, "failed: $error")
                     return@withContext Result.failure(remoteError(error))

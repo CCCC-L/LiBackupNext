@@ -1,7 +1,5 @@
 package com.cc.libackupnext.data
 
-import org.json.JSONObject
-
 /**
  * 已添加的仓库记录：本地和远程共用一份清单。
  *
@@ -50,23 +48,7 @@ data class SavedRepo(
         path = location
     )
 
-    fun toJson(): JSONObject = JSONObject().apply {
-        put("id", id)
-        put("name", name)
-        put("location", location)
-        put("password", password)
-        if (remote != null) put("remote", remote.toJson())
-    }
-
     companion object {
-        fun fromJson(o: JSONObject): SavedRepo = SavedRepo(
-            id = o.optString("id"),
-            name = o.optString("name"),
-            location = o.optString("location"),
-            password = o.optString("password"),
-            remote = o.optJSONObject("remote")?.let { RemoteRepo.fromJson(it) }
-        )
-
         /** 初始化 / 编辑成功后由业务层构造一条记录；本地名称可由表单带过来。 */
         fun of(
             location: String,

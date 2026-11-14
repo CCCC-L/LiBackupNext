@@ -3,21 +3,26 @@ package com.cc.libackupnext.service.util
 import android.content.ContentProviderOperation
 import android.content.ContentValues
 import android.content.Context
-import android.net.wifi.WifiConfiguration
 import android.net.IpConfiguration
 import android.net.ProxyInfo
 import android.net.Uri
+import android.net.wifi.WifiConfiguration
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiManagerHidden
 import android.os.Build
-import android.os.Parcel
 import android.provider.CallLog
 import android.provider.ContactsContract
 import android.util.Log
 import com.cc.libackupnext.data.SnapshotKind
+import com.cc.libackupnext.data.json.CallsBackup
+import com.cc.libackupnext.data.json.ContactDataDto
+import com.cc.libackupnext.data.json.ContactsBackup
+import com.cc.libackupnext.data.json.ProxyDto
+import com.cc.libackupnext.data.json.StaticIpDto
+import com.cc.libackupnext.data.json.WifiBackup
+import com.cc.libackupnext.data.json.WifiNetworkDto
+import com.cc.libackupnext.service.json.parseJson
 import dev.rikka.tools.refine.Refine
-import org.json.JSONArray
-import org.json.JSONObject
 
 /**
  * 把 [SystemDataExporter] 导出的 JSON 写回系统。
@@ -38,11 +43,11 @@ internal object SystemDataRestorer {
         val total: Int get() = added + skipped + failed
     }
 
-    fun restore(context: Context, kind: SnapshotKind, json: JSONObject): Result = try {
+    fun restore(context: Context, kind: SnapshotKind, text: String): Result = try {
         when (kind) {
-            SnapshotKind.WIFI -> restoreWifi(context, json)
-            SnapshotKind.CONTACTS -> restoreContacts(context, json)
-            SnapshotKind.CALLS -> restoreCalls(context, json)
+            SnapshotKind.WIFI -> restoreWifi(context, text.parseJson<WifiBackup>())
+            SnapshotKind.CONTACTS -> restoreContacts(context, text.parseJson<ContactsBackup>())
+            SnapshotKind.CALLS -> restoreCalls(context, text.parseJson<CallsBackup>())
             else -> Result(0, 0)
         }
     } catch (t: Throwable) {
@@ -53,7 +58,7 @@ internal object SystemDataRestorer {
     // ==================== Wi-Fi ====================
 
     @Suppress("DEPRECATION")
-    private fun restoreWifi(context: Context, root: JSONObject): Result {
+    private fun restoreWifi(context: Context, backup: WifiBackup): Result {
         val manager = context.getSystemService(Context.WIFI_SERVICE) as? WifiManager
             ?: return Result(0, 0)
         val hidden = Refine.unsafeCast<WifiManagerHidden>(manager)
@@ -63,14 +68,12 @@ internal object SystemDataRestorer {
             .mapNotNull { it.SSID }
             .mapTo(HashSet()) { unquote(it) }
 
-        val networks = root.optJSONArray("networks") ?: JSONArray()
         var added = 0
         var skipped = 0
         var failed = 0
 
-        for (index in 0 until networks.length()) {
-            val json = networks.getJSONObject(index)
-            val ssid = json.optString("ssid")
+        for (network in backup.networks) {
+            val ssid = network.ssid
             if (ssid.isBlank()) {
                 failed++
                 continue
@@ -80,7 +83,7 @@ internal object SystemDataRestorer {
                 continue
             }
 
-            val config = buildWifiConfig(json)
+            val config = buildWifiConfig(network)
             if (config == null) {
                 // 企业网要 enterpriseConfig，公开 API 拼不全；数据坏了也一样
                 Log.w(TAG, "跳过无法恢复的 Wi-Fi：$ssid")
@@ -104,44 +107,41 @@ internal object SystemDataRestorer {
      * 按导出的字段重建一个 [WifiConfiguration]；重建不了（企业网）返回 null。
      */
     @Suppress("DEPRECATION")
-    private fun buildWifiConfig(json: JSONObject): WifiConfiguration? {
-        val keyMgmt = ArrayList<Int>()
-        json.optJSONArray("key_mgmt")?.let { array ->
-            for (index in 0 until array.length()) keyMgmt += array.optInt(index, -1)
-        }
+    private fun buildWifiConfig(network: WifiNetworkDto): WifiConfiguration? {
+        val keyMgmt = network.keyMgmt
         if (keyMgmt.any { it in ENTERPRISE_KEY_MGMT }) return null
 
         val config = WifiConfiguration()
-        config.SSID = quote(json.optString("ssid"))
-        config.hiddenSSID = json.optBoolean("hidden", false)
+        config.SSID = quote(network.ssid)
+        config.hiddenSSID = network.hidden
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             config.macRandomizationSetting =
-                json.optInt("mac_random", WifiConfiguration.RANDOMIZATION_AUTO)
+                network.macRandom ?: WifiConfiguration.RANDOMIZATION_AUTO
         }
 
-        json.optString("password").takeIf { it.isNotEmpty() }?.let { password ->
+        network.password.takeIf { it.isNotEmpty() }?.let { password ->
             config.preSharedKey = quote(password)
         }
 
-        json.optJSONArray("wep_keys")?.let { keys ->
+        network.wepKeys?.let { keys ->
             val slots = arrayOfNulls<String>(WIFI_WEP_KEY_COUNT)
-            for (index in 0 until minOf(keys.length(), WIFI_WEP_KEY_COUNT)) {
-                val key = keys.optString(index)
+            for (index in 0 until minOf(keys.size, WIFI_WEP_KEY_COUNT)) {
+                val key = keys[index]
                 if (key.isNotEmpty()) slots[index] = quote(key)
             }
             config.wepKeys = slots
-            config.wepTxKeyIndex = json.optInt("wep_tx_key", 0)
+            config.wepTxKeyIndex = network.wepTxKey ?: 0
         }
 
         keyMgmt.forEach { if (it >= 0) config.allowedKeyManagement.set(it) }
 
-        json.optJSONObject("proxy")?.let { proxy ->
+        network.proxy?.let { proxy ->
             config.httpProxy = buildProxy(proxy)
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            json.optJSONObject("ip")?.let { ip ->
+            network.ip?.let { ip ->
                 // 只有 setter，没有公开 getter，不能写属性语法
                 buildIpConfiguration(ip)?.let { config.setIpConfiguration(it) }
             }
@@ -151,15 +151,13 @@ internal object SystemDataRestorer {
     }
 
     @Suppress("DEPRECATION")
-    private fun buildProxy(json: JSONObject): ProxyInfo? {
-        val pac = json.optString("pac").takeIf { it.isNotBlank() }
+    private fun buildProxy(proxy: ProxyDto): ProxyInfo? {
+        val pac = proxy.pac?.takeIf { it.isNotBlank() }
         if (pac != null) return ProxyInfo.buildPacProxy(Uri.parse(pac))
 
-        val host = json.optString("host").takeIf { it.isNotBlank() } ?: return null
-        val port = json.optInt("port")
-        val exclusions = json.optJSONArray("exclusions")?.let { array ->
-            (0 until array.length()).map { array.optString(it) }
-        }
+        val host = proxy.host?.takeIf { it.isNotBlank() } ?: return null
+        val port = proxy.port ?: 0
+        val exclusions = proxy.exclusions
 
         return if (exclusions.isNullOrEmpty()) {
             ProxyInfo.buildDirectProxy(host, port)
@@ -171,16 +169,13 @@ internal object SystemDataRestorer {
     /**
      * 按可读字段拼一个 [IpConfiguration]；拼不出来返回 null。
      */
-    private fun buildIpConfiguration(json: JSONObject): IpConfiguration? {
-        val dns = json.optJSONArray("dns")?.let { array ->
-            (0 until array.length()).map { array.optString(it) }
-        }
+    private fun buildIpConfiguration(ip: StaticIpDto): IpConfiguration? {
         // Java 方法不能用具名参数
         return StaticIpFactory.build(
-            json.optString("address").takeIf { it.isNotBlank() },
-            json.optString("gateway").takeIf { it.isNotBlank() },
-            dns,
-            json.optString("domains").takeIf { it.isNotBlank() }
+            ip.address?.takeIf { it.isNotBlank() },
+            ip.gateway?.takeIf { it.isNotBlank() },
+            ip.dns,
+            ip.domains?.takeIf { it.isNotBlank() }
         )
     }
 
@@ -212,7 +207,7 @@ internal object SystemDataRestorer {
      * 同名的联系人已经存在时**不新建**，只把它缺的号码补进去（合并）；
      * 没名字的条目只能按号码判重，号码也重复就跳过。
      */
-    private fun restoreContacts(context: Context, root: JSONObject): Result {
+    private fun restoreContacts(context: Context, backup: ContactsBackup): Result {
         // 现有联系人：姓名 -> 该联系人已有的号码（只比数字），姓名 -> raw contact id
         val numbersByName = HashMap<String, MutableSet<String>>()
         val rawIdByName = HashMap<String, Long>()
@@ -238,14 +233,12 @@ internal object SystemDataRestorer {
             }
         }
 
-        val contacts = root.optJSONArray("contacts") ?: JSONArray()
         var added = 0
         var skipped = 0
         var failed = 0
 
-        for (index in 0 until contacts.length()) {
-            val contact = contacts.getJSONObject(index)
-            val data = contact.optJSONArray("data") ?: JSONArray()
+        for (contact in backup.contacts) {
+            val data = contact.data
             val names = nameCandidates(data)
             val phoneRows = phoneRowsOf(data)
 
@@ -254,7 +247,7 @@ internal object SystemDataRestorer {
             val existingRawId = matchedName?.let { rawIdByName[it] }
             if (matchedName != null && existingRawId != null) {
                 val known = numbersByName.getOrPut(matchedName) { HashSet() }
-                val missing = phoneRows.filter { digitsOf(it.optString("data1")) !in known }
+                val missing = phoneRows.filter { digitsOf(it["data1"]) !in known }
 
                 if (missing.isEmpty()) {
                     skipped++
@@ -270,7 +263,7 @@ internal object SystemDataRestorer {
                     ProviderAccess.applyBatch(context, ContactsContract.AUTHORITY, ops)
                 }.getOrNull() != null
                 if (ok) {
-                    missing.forEach { known += digitsOf(it.optString("data1")) }
+                    missing.forEach { known += digitsOf(it["data1"]) }
                     added++
                 } else {
                     failed++
@@ -279,7 +272,7 @@ internal object SystemDataRestorer {
             }
 
             // 2. 没名字的条目只能按号码判重
-            val firstNumber = digitsOf(phoneRows.firstOrNull()?.optString("data1"))
+            val firstNumber = digitsOf(phoneRows.firstOrNull()?.get("data1"))
             if (names.isEmpty() && firstNumber.isNotEmpty() && firstNumber in allNumbers) {
                 skipped++
                 continue
@@ -291,27 +284,24 @@ internal object SystemDataRestorer {
                 ContentProviderOperation.newInsert(ContactsContract.RawContacts.CONTENT_URI)
                     .withValue(
                         ContactsContract.RawContacts.ACCOUNT_TYPE,
-                        contact.optString("account_type").takeIf { it.isNotBlank() }
+                        contact.accountType?.takeIf { it.isNotBlank() }
                     )
                     .withValue(
                         ContactsContract.RawContacts.ACCOUNT_NAME,
-                        contact.optString("account_name").takeIf { it.isNotBlank() }
+                        contact.accountName?.takeIf { it.isNotBlank() }
                     )
                     .build()
             )
 
-            for (dataIndex in 0 until data.length()) {
-                val row = data.getJSONObject(dataIndex)
-                val mimeType = row.optString("mimetype")
+            for (row in data) {
+                val mimeType = row.mimetype
                 if (mimeType.isBlank()) continue
-                val fields = row.optJSONObject("fields") ?: continue
+                val fields = row.fields
 
                 val op = ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
                     .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, 0)
                     .withValue(ContactsContract.Data.MIMETYPE, mimeType)
-                for (key in fields.keys()) {
-                    op.withValue(key, fields.optString(key))
-                }
+                fields.forEach { (key, value) -> op.withValue(key, value) }
                 ops.add(op.build())
             }
 
@@ -327,7 +317,7 @@ internal object SystemDataRestorer {
 
             // 同一次恢复里再来一条同名的，也走「合并」而不是再建一条
             val newRawId = results.firstOrNull()?.uri?.lastPathSegment?.toLongOrNull()
-            val numbers = phoneRows.map { digitsOf(it.optString("data1")) }
+            val numbers = phoneRows.map { digitsOf(it["data1"]) }
             allNumbers += numbers
             if (newRawId != null) {
                 for (name in names) {
@@ -340,30 +330,22 @@ internal object SystemDataRestorer {
     }
 
     /** 备份里所有「电话」类型的 Data 行，只留 fields，方便直接取 data1。 */
-    private fun phoneRowsOf(data: JSONArray): List<JSONObject> = buildList {
-        for (index in 0 until data.length()) {
-            val row = data.getJSONObject(index)
-            if (row.optString("mimetype") !=
-                ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE
-            ) {
-                continue
-            }
-            row.optJSONObject("fields")?.let { add(it) }
+    private fun phoneRowsOf(data: List<ContactDataDto>): List<Map<String, String>> = buildList {
+        for (row in data) {
+            if (row.mimetype != ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE) continue
+            add(row.fields)
         }
     }
 
     /** 往已有联系人里补一个号码。 */
-    private fun phoneValues(rawContactId: Long, fields: JSONObject): ContentValues =
+    private fun phoneValues(rawContactId: Long, fields: Map<String, String>): ContentValues =
         ContentValues().apply {
-            put(
-                ContactsContract.Data.RAW_CONTACT_ID,
-                rawContactId
-            )
+            put(ContactsContract.Data.RAW_CONTACT_ID, rawContactId)
             put(
                 ContactsContract.Data.MIMETYPE,
                 ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE
             )
-            for (key in fields.keys()) put(key, fields.optString(key))
+            fields.forEach { (key, value) -> put(key, value) }
         }
 
     private fun digitsOf(number: String?): String = number.orEmpty().filter { it.isDigit() }
@@ -379,22 +361,19 @@ internal object SystemDataRestorer {
      * 「姓 名」，英文名拼成「名 姓」—— 只比一种写法会在另一种上匹配不到，
      * 所以三种都算候选。
      */
-    private fun nameCandidates(data: JSONArray): List<String> {
+    private fun nameCandidates(data: List<ContactDataDto>): List<String> {
         var display: String? = null
         var given: String? = null
         var family: String? = null
 
-        for (index in 0 until data.length()) {
-            val row = data.getJSONObject(index)
-            if (row.optString("mimetype") !=
-                ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE
-            ) {
+        for (row in data) {
+            if (row.mimetype != ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE) {
                 continue
             }
-            val fields = row.optJSONObject("fields") ?: continue
-            display = fields.optString("data1").takeIf { it.isNotBlank() }
-            given = fields.optString("data2").takeIf { it.isNotBlank() }
-            family = fields.optString("data3").takeIf { it.isNotBlank() }
+            val fields = row.fields
+            display = fields["data1"]?.takeIf { it.isNotBlank() }
+            given = fields["data2"]?.takeIf { it.isNotBlank() }
+            family = fields["data3"]?.takeIf { it.isNotBlank() }
         }
 
         return listOfNotNull(
@@ -406,7 +385,7 @@ internal object SystemDataRestorer {
 
     // ==================== 通话记录 ====================
 
-    private fun restoreCalls(context: Context, root: JSONObject): Result {
+    private fun restoreCalls(context: Context, backup: CallsBackup): Result {
         val existing = HashSet<String>()
         ProviderAccess.query(
             context,
@@ -424,16 +403,14 @@ internal object SystemDataRestorer {
             }
         }
 
-        val calls = root.optJSONArray("calls") ?: JSONArray()
         var skipped = 0
         val rows = ArrayList<ContentValues>()
 
-        for (index in 0 until calls.length()) {
-            val row = calls.getJSONObject(index)
-            val print = "${row.optString(CallLog.Calls.NUMBER)}|" +
-                    "${row.optString(CallLog.Calls.DATE)}|" +
-                    "${row.optString(CallLog.Calls.DURATION)}|" +
-                    "${row.optString(CallLog.Calls.TYPE)}"
+        for (row in backup.calls) {
+            val print = "${row[CallLog.Calls.NUMBER].orEmpty()}|" +
+                    "${row[CallLog.Calls.DATE].orEmpty()}|" +
+                    "${row[CallLog.Calls.DURATION].orEmpty()}|" +
+                    "${row[CallLog.Calls.TYPE].orEmpty()}"
             if (!existing.add(print)) {
                 skipped++
                 continue
@@ -453,9 +430,7 @@ internal object SystemDataRestorer {
 
     // ==================== 公共 ====================
 
-    private fun toValues(row: JSONObject): ContentValues = ContentValues().apply {
-        for (key in row.keys()) {
-            put(key, row.optString(key))
-        }
+    private fun toValues(row: Map<String, String>): ContentValues = ContentValues().apply {
+        row.forEach { (key, value) -> put(key, value) }
     }
 }

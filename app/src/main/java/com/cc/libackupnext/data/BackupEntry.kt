@@ -1,5 +1,7 @@
 package com.cc.libackupnext.data
 
+import kotlinx.serialization.Serializable
+
 /** 快照类型：label 冒号后的部分。认不出来的类型是 null。 */
 fun BackupSnapshot.kind(): SnapshotKind? = SnapshotMeta.kind(label)
 
@@ -9,13 +11,14 @@ fun BackupSnapshot.kind(): SnapshotKind? = SnapshotMeta.kind(label)
  * 纯数据模型，UI 直接渲染；备份 / 恢复的编排在
  * [com.cc.libackupnext.service.RusticClient] 里。
  */
+@Serializable
 data class BackupEntry(
-    val title: String,
-    val time: Long,
-    val description: String?,
-    val version: String?,
-    val userName: String?,
-    val snapshots: List<BackupSnapshot>
+    val title: String = "",
+    val time: Long = 0,
+    val description: String? = null,
+    val version: String? = null,
+    val userName: String? = null,
+    val snapshots: List<BackupSnapshot> = emptyList()
 ) {
 
     val ids: List<String> get() = snapshots.map { it.id }

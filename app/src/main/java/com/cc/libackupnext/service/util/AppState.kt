@@ -13,10 +13,12 @@ import android.os.UserHandle
 import android.util.Log
 import com.cc.libackupnext.util.AppLog
 import com.android.internal.app.IAppOpsService
+import com.cc.libackupnext.data.json.AppOpsFile
+import com.cc.libackupnext.data.json.AppStateFile
+import com.cc.libackupnext.service.json.parseJson
+import com.cc.libackupnext.service.json.toJsonText
 import com.topjohnwu.superuser.Shell
 import dev.rikka.tools.refine.Refine
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.File
 
 /** 本文件统一的日志 tag。 */
@@ -52,15 +54,15 @@ internal class AppState(private val context: Context) {
 
         val file = File(context.cacheDir, "permissions.json")
         file.writeText(
-            JSONObject().apply {
-                put("packageName", packageName)
-                put("userId", userId)
-                put("granted", JSONArray(granted))
-                put("requested", JSONArray(requested))
-                if (appops != null) put("appops", appops)
-                put("batteryWhitelist", whitelisted)
-                put("standbyBucket", bucket)
-            }.toString()
+            AppStateFile(
+                packageName = packageName,
+                userId = userId,
+                granted = granted,
+                requested = requested,
+                appops = appops,
+                batteryWhitelist = whitelisted,
+                standbyBucket = bucket
+            ).toJsonText()
         )
         file.setLastModified(0L)
         file.absolutePath
@@ -91,25 +93,23 @@ internal class AppState(private val context: Context) {
     }
 
     /** 应用显式设置过的 appops，包级和 uid 级分开存；都没有就返回 null。 */
-    private fun collectAppOps(packageName: String, userId: Int): JSONObject? = runCatching {
+    private fun collectAppOps(packageName: String, userId: Int): AppOpsFile? = runCatching {
         val uid = packageUid(context, packageName, userId) ?: return@runCatching null
         // 传 null 表示全部 op —— 用 getOpStrs() 的下标当 op code 会漏掉高位 op
         val packageOps = readOps(appOpsManager.getOpsForPackage(uid, packageName, null))
         val uidOps = readOps(appOpsService.getUidOps(uid, null))
 
-        fun dump(source: Map<Int, Int>): JSONObject = JSONObject().apply {
-            for ((op, mode) in source) {
-                if (mode == AppOpsManager.MODE_DEFAULT) continue
-                put(op.toString(), mode)
-            }
-        }
+        // JSON 对象的 key 只能是字符串，op code 转成十进制字符串
+        fun dump(source: Map<Int, Int>): Map<String, Int> = source
+            .filterValues { it != AppOpsManager.MODE_DEFAULT }
+            .mapKeys { (op, _) -> op.toString() }
 
-        val packageJson = dump(packageOps)
-        val uidJson = dump(uidOps)
-        if (packageJson.length() == 0 && uidJson.length() == 0) {
+        val packageModes = dump(packageOps)
+        val uidModes = dump(uidOps)
+        if (packageModes.isEmpty() && uidModes.isEmpty()) {
             null
         } else {
-            JSONObject().put("package", packageJson).put("uid", uidJson)
+            AppOpsFile(packageModes = packageModes, uid = uidModes)
         }
     }.onFailure {
         // 权限/appops 读不到会被静默当成「没有」，恢复后表现就是功能异常
@@ -134,13 +134,14 @@ internal class AppState(private val context: Context) {
      * 全量写回权限 / appops / 白名单，返回失败的权限条数。
      * 备份里有的恢复成备份的样子，备份里没有的（现在多出来的）权限撤掉、appops 设回默认、白名单移除。
      */
-    fun apply(json: JSONObject, packageName: String, uid: Int): Int {
+    fun apply(text: String, packageName: String, uid: Int): Int {
+        val state = text.parseJson<AppStateFile>()
         val user = UserHandle.getUserHandleForUid(uid)
         val manager = Refine.unsafeCast<PackageManagerHidden>(context.packageManager)
 
-        val granted = json.optJSONArray("granted").toStringSet()
+        val granted = state.granted.filter { it.isNotBlank() }.toSet()
         // 旧快照没有 requested，只按 granted 授权，不做撤销
-        val requested = json.optJSONArray("requested").toStringSet().ifEmpty { granted }
+        val requested = state.requested.filter { it.isNotBlank() }.toSet().ifEmpty { granted }
 
         var failed = 0
         for (permission in requested) {
@@ -154,11 +155,10 @@ internal class AppState(private val context: Context) {
             if (result.isFailure) failed++
         }
 
-        applyAppOps(json.optJSONObject("appops"), packageName, uid)
+        applyAppOps(state.appops, packageName, uid)
 
         // 旧快照没有这个字段，不能当成 false —— 那会把白名单删掉
-        if (json.has("batteryWhitelist")) {
-            val wantWhitelist = json.getBoolean("batteryWhitelist")
+        state.batteryWhitelist?.let { wantWhitelist ->
             runCatching {
                 if (wantWhitelist) {
                     idleController.addPowerSaveWhitelistApp(packageName)
@@ -169,7 +169,7 @@ internal class AppState(private val context: Context) {
         }
 
         // 待机分组
-        val bucket = json.optInt("standbyBucket", -1)
+        val bucket = state.standbyBucket
         if (bucket >= 0 && bucket != STANDBY_BUCKET_EXEMPTED) {
             runCatching { usageStats.setAppStandbyBucket(packageName, bucket) }
                 .onFailure { Log.w(TAG, "setAppStandbyBucket=$bucket 失败", it) }
@@ -179,21 +179,15 @@ internal class AppState(private val context: Context) {
     }
 
     /** appops 全量写回：逐条比对，不一样的才写，备份里没有的设回默认。 */
-    private fun applyAppOps(json: JSONObject?, packageName: String, uid: Int) {
-        if (json == null) return
+    private fun applyAppOps(state: AppOpsFile?, packageName: String, uid: Int) {
+        if (state == null) return
 
-        fun modes(section: JSONObject?): Map<Int, Int> {
-            if (section == null) return emptyMap()
-            val result = HashMap<Int, Int>()
-            for (key in section.keys()) {
-                val op = key.toIntOrNull() ?: continue
-                result[op] = section.optInt(key, AppOpsManager.MODE_DEFAULT)
-            }
-            return result
-        }
+        fun modes(section: Map<String, Int>): Map<Int, Int> = section
+            .mapNotNull { (key, mode) -> key.toIntOrNull()?.let { op -> op to mode } }
+            .toMap()
 
-        val wantPackage = modes(json.optJSONObject("package"))
-        val wantUid = modes(json.optJSONObject("uid"))
+        val wantPackage = modes(state.packageModes)
+        val wantUid = modes(state.uid)
         val currentPackage = readOps(appOpsManager.getOpsForPackage(uid, packageName, null))
         val currentUid = readOps(appOpsService.getUidOps(uid, null))
 
@@ -235,14 +229,6 @@ internal class AppState(private val context: Context) {
                     "目标 pkg=${wantPackage.size} uid=${wantUid.size} | " +
                     "当前 pkg=${currentPackage.size} uid=${currentUid.size}"
         )
-    }
-
-    private fun JSONArray?.toStringSet(): Set<String> {
-        if (this == null) return emptySet()
-        return (0 until length())
-            .map { optString(it) }
-            .filter { it.isNotBlank() }
-            .toSet()
     }
 
     /** 只关心 dangerous 级别的运行时权限 */

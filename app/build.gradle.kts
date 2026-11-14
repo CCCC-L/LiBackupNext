@@ -3,6 +3,7 @@ import java.util.Properties
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.hiddenApi)
 }
 
@@ -131,6 +132,9 @@ dependencies {
     implementation(libs.libsu.service)
     implementation(libs.rikkax.parcelablelist)
 
+
+    implementation(platform(libs.kotlinx.serialization.bom))
+    implementation(libs.kotlinx.serialization.json)
 
     implementation(libs.hiddenApi.runtime)
     compileOnly(project(":hidden-api"))

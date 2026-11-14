@@ -8,16 +8,22 @@ import android.net.wifi.WifiConfigurationHidden
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiManagerHidden
 import android.os.Build
-import android.os.Parcel
 import android.provider.BaseColumns
 import android.provider.CallLog
 import android.provider.ContactsContract
 import android.util.Log
 import com.cc.libackupnext.util.AppLog
 import com.cc.libackupnext.data.SnapshotKind
+import com.cc.libackupnext.data.json.CallsBackup
+import com.cc.libackupnext.data.json.ContactDataDto
+import com.cc.libackupnext.data.json.ContactDto
+import com.cc.libackupnext.data.json.ContactsBackup
+import com.cc.libackupnext.data.json.ProxyDto
+import com.cc.libackupnext.data.json.StaticIpDto
+import com.cc.libackupnext.data.json.WifiBackup
+import com.cc.libackupnext.data.json.WifiNetworkDto
+import com.cc.libackupnext.service.json.toJsonText
 import dev.rikka.tools.refine.Refine
-import org.json.JSONArray
-import org.json.JSONObject
 
 /**
  * 把系统数据（Wi-Fi / 联系人 / 通话记录）导出成 JSON。
@@ -54,11 +60,11 @@ internal object SystemDataExporter {
      */
     fun export(context: Context, kind: SnapshotKind): String? = try {
         when (kind) {
-            SnapshotKind.WIFI -> exportWifi(context)
-            SnapshotKind.CONTACTS -> exportContacts(context)
-            SnapshotKind.CALLS -> exportCalls(context)
+            SnapshotKind.WIFI -> exportWifi(context).toJsonText()
+            SnapshotKind.CONTACTS -> exportContacts(context).toJsonText()
+            SnapshotKind.CALLS -> exportCalls(context).toJsonText()
             else -> null
-        }?.toString()
+        }
     } catch (t: Throwable) {
         // 导出失败会被标成「跳过」，属于典型的功能异常，必须留痕
         AppLog.e(TAG, "导出 ${kind.key} 失败（该项会被跳过）", t)
@@ -99,45 +105,47 @@ internal object SystemDataExporter {
      * 只有静态 IP 那一段仍然走 Parcel + base64 —— `IpConfiguration` 的构造函数是包内私有的，
      * 公开 API 拼不出来；但它有公开的 `CREATOR`，恢复时能原样读回来。
      */
-    private fun exportWifi(context: Context): JSONObject {
-        val networks = JSONArray()
-        for (config in wifiConfigs(context)) {
-            networks.put(exportWifiConfig(config))
-        }
-        return JSONObject().put("networks", networks)
-    }
+    private fun exportWifi(context: Context): WifiBackup = WifiBackup(
+        networks = wifiConfigs(context).map { exportWifiConfig(it) }
+    )
 
     @Suppress("DEPRECATION")
-    private fun exportWifiConfig(config: WifiConfiguration): JSONObject {
-        val json = JSONObject()
-            .put("ssid", unquote(config.SSID))
-            .put("password", unquote(config.preSharedKey))
-            .put("hidden", config.hiddenSSID)
-            .put("key_mgmt", keyMgmtOf(config))
+    private fun exportWifiConfig(config: WifiConfiguration): WifiNetworkDto {
+        var network = WifiNetworkDto(
+            ssid = unquote(config.SSID),
+            password = unquote(config.preSharedKey),
+            hidden = config.hiddenSSID,
+            keyMgmt = keyMgmtOf(config)
+        )
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            json.put("mac_random", config.macRandomizationSetting)
-            staticIpOf(config)?.let { json.put("ip", it) }
+            network = network.copy(
+                macRandom = config.macRandomizationSetting,
+                ip = staticIpOf(config)
+            )
         }
 
         // WEP 的 key 不在 preSharedKey 里，单独存
         val wepKeys = config.wepKeys?.filterNotNull()?.filter { it.isNotEmpty() }
         if (!wepKeys.isNullOrEmpty()) {
-            json.put("wep_keys", JSONArray(wepKeys.map { unquote(it) }))
-            json.put("wep_tx_key", config.wepTxKeyIndex)
+            network = network.copy(
+                wepKeys = wepKeys.map { unquote(it) },
+                wepTxKey = config.wepTxKeyIndex
+            )
         }
 
         config.httpProxy?.let { proxy ->
-            json.put("proxy", JSONObject().apply {
-                proxy.pacFileUrl?.let { put("pac", it.toString()) }
-                proxy.host?.let { put("host", it) }
-                if (proxy.port > 0) put("port", proxy.port)
-                proxy.exclusionList?.takeIf { it.isNotEmpty() }
-                    ?.let { put("exclusions", JSONArray(it.toList())) }
-            })
+            network = network.copy(
+                proxy = ProxyDto(
+                    pac = proxy.pacFileUrl?.toString(),
+                    host = proxy.host,
+                    port = proxy.port.takeIf { it > 0 },
+                    exclusions = proxy.exclusionList?.takeIf { it.isNotEmpty() }?.toList()
+                )
+            )
         }
 
-        return json
+        return network
     }
 
     /**
@@ -146,7 +154,7 @@ internal object SystemDataExporter {
      * `getIpConfiguration` 是隐藏方法，靠 Refine 读；它带的 `IpConfiguration`
      * 只有 `getStaticIpConfiguration` 是公开的。
      */
-    private fun staticIpOf(config: WifiConfiguration): JSONObject? {
+    private fun staticIpOf(config: WifiConfiguration): StaticIpDto? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return null
 
         val ipConfig = runCatching {
@@ -154,23 +162,19 @@ internal object SystemDataExporter {
         }.getOrNull() ?: return null
 
         val static = ipConfig.staticIpConfiguration ?: return null
-        return JSONObject().apply {
-            static.ipAddress?.let { put("address", it.toString()) }
-            static.gateway?.let { put("gateway", it.hostAddress) }
-            static.dnsServers?.takeIf { it.isNotEmpty() }
-                ?.let { servers -> put("dns", JSONArray(servers.map { it.hostAddress })) }
-            static.domains?.takeIf { it.isNotBlank() }?.let { put("domains", it) }
-        }
+        return StaticIpDto(
+            address = static.ipAddress?.toString(),
+            gateway = static.gateway?.hostAddress,
+            dns = static.dnsServers?.takeIf { it.isNotEmpty() }
+                ?.mapNotNull { it.hostAddress },
+            domains = static.domains?.takeIf { it.isNotBlank() }
+        )
     }
 
     /** `allowedKeyManagement` 是个 BitSet，存成「哪些位是 true」的数组。 */
-    private fun keyMgmtOf(config: WifiConfiguration): JSONArray {
-        val bits = config.allowedKeyManagement ?: return JSONArray()
-        val array = JSONArray()
-        for (index in 0 until bits.size()) {
-            if (bits.get(index)) array.put(index)
-        }
-        return array
+    private fun keyMgmtOf(config: WifiConfiguration): List<Int> {
+        val bits = config.allowedKeyManagement ?: return emptyList()
+        return (0 until bits.size()).filter { bits.get(it) }
     }
 
     /** `WifiConfiguration` 里的 SSID / 密码是带引号的，存之前去掉。 */
@@ -184,7 +188,7 @@ internal object SystemDataExporter {
      *
      * 头像是 Data 表里的 BLOB（mimetype 为 photo），导出时直接过滤掉 —— 用户确认不备份。
      */
-    private fun exportContacts(context: Context): JSONObject {
+    private fun exportContacts(context: Context): ContactsBackup {
         // raw contact id -> (account_type, account_name)
         val accounts = HashMap<Long, Pair<String?, String?>>()
         query(
@@ -207,7 +211,7 @@ internal object SystemDataExporter {
             for (index in 1..15) add("data$index")
         }.toTypedArray()
 
-        val byRawContact = LinkedHashMap<Long, JSONArray>()
+        val byRawContact = LinkedHashMap<Long, MutableList<ContactDataDto>>()
         query(
             context,
             ContactsContract.Data.CONTENT_URI,
@@ -221,42 +225,42 @@ internal object SystemDataExporter {
                 val rawId = cursor.getLong(rawIndex)
                 val mimeType = cursor.getString(mimeIndex) ?: continue
 
-                val fields = JSONObject()
-                for (index in 1..15) {
-                    val column = "data$index"
-                    val columnIndex = cursor.getColumnIndex(column)
-                    if (columnIndex < 0 || cursor.isNull(columnIndex)) continue
-                    fields.put(column, cursor.getString(columnIndex))
+                val fields = buildMap {
+                    for (index in 1..15) {
+                        val column = "data$index"
+                        val columnIndex = cursor.getColumnIndex(column)
+                        if (columnIndex < 0 || cursor.isNull(columnIndex)) continue
+                        cursor.getString(columnIndex)?.let { put(column, it) }
+                    }
                 }
-                if (fields.length() == 0) continue
+                if (fields.isEmpty()) continue
 
-                byRawContact.getOrPut(rawId) { JSONArray() }.put(
-                    JSONObject().put("mimetype", mimeType).put("fields", fields)
+                byRawContact.getOrPut(rawId) { mutableListOf() }.add(
+                    ContactDataDto(mimetype = mimeType, fields = fields)
                 )
             }
         }
 
-        val contacts = JSONArray()
-        for ((rawId, data) in byRawContact) {
-            val account = accounts[rawId]
-            contacts.put(
-                JSONObject()
-                    .put("account_type", account?.first ?: JSONObject.NULL)
-                    .put("account_name", account?.second ?: JSONObject.NULL)
-                    .put("data", data)
-            )
-        }
-        return JSONObject().put("contacts", contacts)
+        return ContactsBackup(
+            contacts = byRawContact.map { (rawId, data) ->
+                val account = accounts[rawId]
+                ContactDto(
+                    accountType = account?.first,
+                    accountName = account?.second,
+                    data = data
+                )
+            }
+        )
     }
 
     // ==================== 通话记录 ====================
 
-    private fun exportCalls(context: Context): JSONObject {
-        val calls = JSONArray()
+    private fun exportCalls(context: Context): CallsBackup {
+        val calls = mutableListOf<Map<String, String>>()
         query(context, CallLog.Calls.CONTENT_URI, VISIBLE_CALLS)?.use { cursor ->
-            while (cursor.moveToNext()) calls.put(readRow(cursor, CALL_COLUMNS))
+            while (cursor.moveToNext()) calls.add(readRow(cursor, CALL_COLUMNS))
         }
-        return JSONObject().put("calls", calls)
+        return CallsBackup(calls = calls)
     }
 
     // ==================== 公共 ====================
@@ -267,14 +271,12 @@ internal object SystemDataExporter {
      * 不用显式 projection：不同版本 / 不同厂商的列不一样，写死列名会因为
      * 某一列不存在直接抛异常；全列查询 + 按名字取就都能容忍。
      */
-    private fun readRow(cursor: Cursor, columns: List<String>): JSONObject {
-        val row = JSONObject()
+    private fun readRow(cursor: Cursor, columns: List<String>): Map<String, String> = buildMap {
         for (name in columns) {
             val index = cursor.getColumnIndex(name)
             if (index < 0 || cursor.isNull(index)) continue
-            row.put(name, cursor.getString(index))
+            cursor.getString(index)?.let { put(name, it) }
         }
-        return row
     }
 
     private fun countOf(context: Context, uri: Uri, selection: String? = null): Int? {

@@ -15,6 +15,8 @@ import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.service.AppManagerService
 import com.cc.libackupnext.service.RusticClient
+import com.cc.libackupnext.service.json.encodePendingBatch
+import com.cc.libackupnext.service.json.loadPendingBatch
 import com.cc.libackupnext.ui.screen.BackupBatchMode
 import com.cc.libackupnext.ui.util.AppIconStore
 import com.cc.libackupnext.util.AppLog

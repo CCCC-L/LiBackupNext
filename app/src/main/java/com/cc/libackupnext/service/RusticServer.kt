@@ -7,6 +7,20 @@ import android.os.IBinder
 import android.os.SharedMemory
 import android.util.Log
 import com.cc.libackupnext.data.SnapshotKind
+import com.cc.libackupnext.data.json.BackupItemDto
+import com.cc.libackupnext.data.json.BackupOptions
+import com.cc.libackupnext.data.json.ExportSnapshotRequest
+import com.cc.libackupnext.data.json.InitRepoRequest
+import com.cc.libackupnext.data.json.OkResponse
+import com.cc.libackupnext.data.json.OperationEnvelope
+import com.cc.libackupnext.data.json.RestoreSnapshotsRequest
+import com.cc.libackupnext.data.json.RestoreTreeItem
+import com.cc.libackupnext.data.json.RestoreTreeRequest
+import com.cc.libackupnext.data.json.RusticBackupRequest
+import com.cc.libackupnext.data.json.SystemDataCountsResponse
+import com.cc.libackupnext.service.json.AppJson
+import com.cc.libackupnext.service.json.parseJson
+import com.cc.libackupnext.service.json.toJsonText
 import com.cc.libackupnext.service.util.AppState
 import com.cc.libackupnext.service.util.RusticRequestBuilder
 import com.cc.libackupnext.service.util.SystemDataExporter
@@ -17,8 +31,8 @@ import com.cc.libackupnext.service.util.mediaPath
 import com.cc.libackupnext.service.util.packageUid
 import com.cc.libackupnext.util.AppLog
 import com.topjohnwu.superuser.ipc.RootService
-import org.json.JSONArray
-import org.json.JSONObject
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.jsonObject
 import java.io.File
 import java.nio.ByteBuffer
 
@@ -37,7 +51,8 @@ private val APP_DATA_KINDS = listOf(
 /** 数据类快照恢复到哪里、归谁、什么权限。 */
 private data class RestoreSpec(val dir: String, val gid: Int, val dirMode: String?)
 
-/** 备份进度事件，state: running / done / skipped / finished */
+/** 备份进度事件，state: running / done / skipped / finished。字段名同时是进度帧协议。 */
+@Serializable
 data class BackupProgress(
     val stage: String,
     val state: String,
@@ -183,7 +198,7 @@ object RusticServer {
 
         /** 从请求 JSON 里取主进程透传的操作 id，让两侧日志能串成一条链。 */
         private fun opOf(request: String): String? = runCatching {
-            JSONObject(request).optString("op").takeIf { it.isNotBlank() }
+            request.parseJson<OperationEnvelope>().op.takeIf { it.isNotBlank() }
         }.getOrNull()
 
         /** 主进程在绑定 / 初始化成功 / 改密码 / 清配置时调一次，凭据只进 Rust 静态配置。 */
@@ -200,13 +215,14 @@ object RusticServer {
          */
         override fun initRepo(path: String, password: String, options: String): String {
             nativeError?.let { return it }
-            val request = JSONObject().apply {
-                put("path", path)
-                put("password", password)
+            val request = InitRepoRequest(
+                path = path,
+                password = password,
                 // 和 nativeSetRepo 一样容个错：非法 JSON 退化成空 options，本地仓库照常工作
-                put("options", runCatching { JSONObject(options) }.getOrDefault(JSONObject()))
-            }
-            return runSimple(request.toString(), ::nativeInitRepo, "初始化失败")
+                options = runCatching { options.parseJson<Map<String, String>>() }
+                    .getOrDefault(emptyMap())
+            )
+            return runSimple(request.toJsonText(), ::nativeInitRepo, "初始化失败")
         }
 
         override fun listSnapshots(request: String): String =
@@ -234,12 +250,12 @@ object RusticServer {
          * 所以解包目录本身就是目标。
          */
         override fun exportSnapshot(request: String): String {
-            val options = JSONObject(request)
-            val dest = File(options.getString("dest"))
+            val options = request.parseJson<ExportSnapshotRequest>()
+            val dest = File(options.dest)
             val uid = context.applicationInfo.uid
 
             return restoreTree(
-                snapshotId = options.getString("id"),
+                snapshotId = options.id,
                 target = dest,
                 uid = uid,
                 gid = uid,
@@ -252,17 +268,16 @@ object RusticServer {
             runSimple(request, ::nativeDeleteSnapshots)
 
         override fun systemDataCounts(): String = try {
-            val counts = JSONObject()
             // 三类都由 root 侧数：Wi-Fi 走 WifiManager，联系人 / 通话记录走 provider 的外部通道
-            for (kind in SystemDataExporter.SYSTEM_KINDS) {
-                SystemDataExporter.count(context, kind)?.let { counts.put(kind.key, it) }
+            val counts = buildMap {
+                for (kind in SystemDataExporter.SYSTEM_KINDS) {
+                    SystemDataExporter.count(context, kind)?.let { put(kind.key, it) }
+                }
             }
-            JSONObject().put("ok", true).put("counts", counts).toString()
+            SystemDataCountsResponse(ok = true, counts = counts).toJsonText()
         } catch (t: Throwable) {
             AppLog.e(TAG, "统计系统数据失败", t)
-            JSONObject().put("ok", false)
-                .put("error", t.message ?: "统计失败")
-                .toString()
+            OkResponse(ok = false, error = t.message ?: "统计失败").toJsonText()
         }
 
         @Suppress("DEPRECATION")
@@ -287,27 +302,26 @@ object RusticServer {
             AppLog.i(TAG, "root restore 开始", op = op)
 
             fun emit(stage: String, state: String) {
-                val json = JSONObject().put("stage", stage).put("state", state)
-                runCatching { callback?.onProgress(json.toString()) }
+                // 进度帧只有 256 字节：encodeDefaults=false 保证不写 files / reason
+                val json = BackupProgress(stage = stage, state = state).toJsonText()
+                runCatching { callback?.onProgress(json) }
             }
 
             fun emit(kind: SnapshotKind, state: String) = emit(kind.key, state)
 
             return try {
-                val options = JSONObject(request)
-                val packageName = options.getString("packageName")
-                val userId = options.optInt("userId", 0)
-                val deleteFirst = options.optBoolean("delete", true)
-                val items = options.optJSONArray("items") ?: JSONArray()
+                val options = request.parseJson<RestoreSnapshotsRequest>()
+                val packageName = options.packageName
+                val userId = options.userId
+                val deleteFirst = options.delete
 
-                if (items.length() == 0) return "没有可恢复的内容"
+                if (options.items.isEmpty()) return "没有可恢复的内容"
 
                 // 类型 -> 快照 id
                 val byKind = mutableMapOf<SnapshotKind, String>()
-                for (index in 0 until items.length()) {
-                    val item = items.getJSONObject(index)
-                    val kind = SnapshotKind.of(item.getString("kind")) ?: continue
-                    byKind[kind] = item.getString("id")
+                for (item in options.items) {
+                    val kind = SnapshotKind.of(item.kind) ?: continue
+                    byKind[kind] = item.id
                 }
 
                 // 目录恢复：把快照写回原路径的父目录，顶层目录名就是文件夹名。
@@ -483,7 +497,8 @@ object RusticServer {
             }
         }
 
-        private fun loadJsonFromRepo(id: String, kind: String): JSONObject {
+        /** 从仓库里取回备份文件原文；坏文件抛 IllegalArgumentException 让调用方标成「跳过」。 */
+        private fun loadJsonFromRepo(id: String, kind: String): String {
             val dir = File(context.cacheDir, "restore_${kind}").apply {
                 deleteRecursively()
                 mkdirs()
@@ -495,15 +510,19 @@ object RusticServer {
                 }
 
                 // 快照里的文件名就是 <kind>.json（导出时就是这么写的）
-                try {
-                    return JSONObject(File(dir, "${kind}.json").readText())
+                val text = try {
+                    File(dir, "${kind}.json").readText()
                 } catch (t: Throwable) {
                     throw IllegalArgumentException()
                 }
+                // 先确认是个 JSON 对象，再交给 AppState / SystemDataRestorer 按类型解码
+                if (runCatching { AppJson.parseToJsonElement(text).jsonObject }.isFailure) {
+                    throw IllegalArgumentException()
+                }
+                return text
             } finally {
                 dir.deleteRecursively()
             }
-
         }
 
         /**
@@ -550,15 +569,10 @@ object RusticServer {
 
         /** 把单个快照恢复到 dest。 */
         private fun restoreTo(id: String, dest: String, delete: Boolean): String {
-            val payload = JSONObject().apply {
-                put(
-                    "items",
-                    JSONArray().put(
-                        JSONObject().put("id", id).put("dest", dest).put("delete", delete)
-                    )
-                )
-            }
-            return runSimple(payload.toString(), ::nativeRestore)
+            val payload = RestoreTreeRequest(
+                items = listOf(RestoreTreeItem(id = id, dest = dest, delete = delete))
+            )
+            return runSimple(payload.toJsonText(), ::nativeRestore)
         }
 
         /**
@@ -582,17 +596,21 @@ object RusticServer {
                     writeFrameAt(buffer, 0, request)
 
                     val code = native(buffer)
-                    val response = runCatching { readFrameAt(buffer, 0) }.getOrNull()
+                    val raw = runCatching { readFrameAt(buffer, 0) }.getOrNull()
+                    val response = raw?.let {
+                        runCatching { it.parseJson<OkResponse>() }.getOrNull()
+                    }
                     AppLog.i(
                         TAG,
                         "$failText native 返回 code=$code 耗时=${System.currentTimeMillis() - startedAt}ms",
                         op = op
                     )
 
-                    if (code == 0 && (response == null || response.optBoolean("ok", true))) {
+                    // 和原来的 optBoolean("ok", true) 一致：拿不到 / 解析不了响应当成功
+                    if (code == 0 && (response == null || response.ok)) {
                         ""
                     } else {
-                        response?.optString("error").orEmpty().ifBlank { "$failText（code=$code）" }
+                        response?.error.orEmpty().ifBlank { "$failText（code=$code）" }
                     }
                 } finally {
                     shared.close()
@@ -614,7 +632,7 @@ object RusticServer {
             failText: String = "查询失败"
         ): String {
             nativeError?.let { error ->
-                return JSONObject().put("ok", false).put("error", error).toString()
+                return OkResponse(ok = false, error = error).toJsonText()
             }
             val op = opOf(request)
             val startedAt = System.currentTimeMillis()
@@ -633,19 +651,17 @@ object RusticServer {
                         op = op
                     )
 
-                    response?.toString() ?: JSONObject()
-                        .put("ok", false)
-                        .put("error", "$failText（code=$code）")
-                        .toString()
+                    response ?: OkResponse(ok = false, error = "$failText（code=$code）")
+                        .toJsonText()
                 } finally {
                     shared.close()
                 }
             } catch (t: Throwable) {
                 AppLog.e(TAG, "${failText}异常", t, op)
-                JSONObject()
-                    .put("ok", false)
-                    .put("error", "${failText}异常：${t.message ?: t.javaClass.simpleName}")
-                    .toString()
+                OkResponse(
+                    ok = false,
+                    error = "${failText}异常：${t.message ?: t.javaClass.simpleName}"
+                ).toJsonText()
             }
         }
 
@@ -656,11 +672,10 @@ object RusticServer {
             AppLog.i(TAG, "root backup 开始：构建 rustic 请求", op = op)
 
             return try {
-                val built = JSONObject(
-                    rusticRequest.build(JSONObject(request)) ?: return "没有需要备份的内容"
-                )
-                prepareSystemItems(built)
-                val rustRequest = built.toString()
+                val built = rusticRequest.build(request.parseJson<BackupOptions>())
+                    ?: return "没有需要备份的内容"
+                val prepared = prepareSystemItems(built)
+                val rustRequest = prepared.toJsonText()
 
                 val shared = SharedMemory.create(SHARED_MEMORY_NAME, BUFFER_SIZE)
                 try {
@@ -677,16 +692,18 @@ object RusticServer {
                             op = op
                         )
 
-                        val response = runCatching { readFrameAt(buffer, 0) }.getOrNull()
-                        if (code == 0 && (response == null || response.optBoolean("ok", true))) {
+                        val raw = runCatching { readFrameAt(buffer, 0) }.getOrNull()
+                        val response = raw?.let {
+                            runCatching { it.parseJson<OkResponse>() }.getOrNull()
+                        }
+                        if (code == 0 && (response == null || response.ok)) {
                             ""
                         } else {
-                            response?.optString("error").orEmpty()
-                                .ifBlank { "备份失败（code=$code）" }
+                            response?.error.orEmpty().ifBlank { "备份失败（code=$code）" }
                         }
                     } finally {
                         poller.stop()
-                        cleanupSystemItems(built)
+                        cleanupSystemItems(prepared)
                     }
                 } finally {
                     shared.close()
@@ -703,33 +720,27 @@ object RusticServer {
          *
          * 导出失败时把 item 标成跳过 —— Rust 侧看到空 sources 会自己跳。
          */
-        private fun prepareSystemItems(request: JSONObject) {
-            val items = request.optJSONArray("items") ?: return
-            for (index in 0 until items.length()) {
-                val item = items.getJSONObject(index)
-                if (!item.optBoolean("system", false)) continue
+        private fun prepareSystemItems(request: RusticBackupRequest): RusticBackupRequest {
+            val items = request.items.map { item: BackupItemDto ->
+                if (item.system != true) return@map item
+                val kind = SnapshotKind.of(item.stage) ?: return@map item
 
-                val kind = SnapshotKind.of(item.optString("stage")) ?: continue
                 val json = SystemDataExporter.export(context, kind)
-                if (json == null) {
-                    item.put("skip_reason", "导出失败")
-                    continue
-                }
+                    ?: return@map item.copy(skipReason = "导出失败")
 
                 // 文件名就是快照里的名字（rustic 对单文件源不认 as_path）
                 val file = File(context.cacheDir, "${kind.key}.json")
                 file.writeText(json)
-                item.put("sources", JSONArray().put(file.absolutePath))
+                item.copy(sources = listOf(file.absolutePath))
             }
+            return request.copy(items = items)
         }
 
         /** 备份结束后删掉导出用的临时文件。 */
-        private fun cleanupSystemItems(request: JSONObject) {
-            val items = request.optJSONArray("items") ?: return
-            for (index in 0 until items.length()) {
-                val item = items.getJSONObject(index)
-                if (!item.optBoolean("system", false)) continue
-                val kind = SnapshotKind.of(item.optString("stage")) ?: continue
+        private fun cleanupSystemItems(request: RusticBackupRequest) {
+            request.items.forEach { item ->
+                if (item.system != true) return@forEach
+                val kind = SnapshotKind.of(item.stage) ?: return@forEach
                 runCatching { File(context.cacheDir, "${kind.key}.json").delete() }
             }
         }
@@ -769,7 +780,7 @@ object RusticServer {
                 val json = runCatching { readFrameAt(buffer, offset) }.getOrNull() ?: return
                 lastEvent = next
 
-                runCatching { callback?.onProgress(json.toString()) }
+                runCatching { callback?.onProgress(json) }
             }
         }
 
@@ -792,7 +803,8 @@ object RusticServer {
         dup.put(bytes)
     }
 
-    private fun readFrameAt(buffer: ByteBuffer, offset: Int): JSONObject {
+    /** 帧里是 UTF-8 JSON 文本；原样返回，由调用方按需要解析成 DTO。 */
+    private fun readFrameAt(buffer: ByteBuffer, offset: Int): String {
         val length = buffer.getInt(offset)
         require(length in 0..(buffer.capacity() - offset - 4)) { "数据长度非法: $length" }
 
@@ -800,7 +812,7 @@ object RusticServer {
         val dup = buffer.duplicate()
         dup.position(offset + 4)
         dup.get(bytes)
-        return JSONObject(String(bytes, Charsets.UTF_8))
+        return String(bytes, Charsets.UTF_8)
     }
 
 }

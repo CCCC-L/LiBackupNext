@@ -1,7 +1,5 @@
 package com.cc.libackupnext.data
 
-import org.json.JSONObject
-
 /**
  * 仓库服务协议：本地和三种远程协议在同一个下拉里选，配置窗口只有一个。
  * [defaultName] 是「名称」字段的默认值：本地显示中文，远程用小写协议名。
@@ -104,33 +102,7 @@ data class RemoteRepo(
         )
     }
 
-    fun toJson(): JSONObject = JSONObject().apply {
-        put("id", id)
-        put("name", name)
-        put("protocol", protocol.key)
-        put("auth", auth.key)
-        put("host", host)
-        put("user", user)
-        put("password", password)
-        put("private_key", privateKey)
-        put("path", path)
-        put("insecure", insecure)
-    }
-
-    companion object {
-        fun fromJson(o: JSONObject): RemoteRepo = RemoteRepo(
-            id = o.optString("id"),
-            name = o.optString("name"),
-            protocol = RepoProtocol.of(o.optString("protocol")),
-            auth = RepoAuth.of(o.optString("auth")),
-            host = o.optString("host"),
-            user = o.optString("user"),
-            password = o.optString("password"),
-            privateKey = o.optString("private_key"),
-            path = o.optString("path"),
-            insecure = o.optBoolean("insecure", false)
-        )
-    }
+    /** 清单 JSON 的编解码见 data/json/RepoPrefsDto.kt，业务类型本身不碰 JSON。 */
 }
 
 /** 文件夹选择弹窗的数据源：本地文件系统，或远程服务。 */

@@ -1,10 +1,15 @@
 package com.cc.libackupnext.service
 
 import com.cc.libackupnext.data.RemoteRepo
+import com.cc.libackupnext.data.json.EnsureServeRequest
+import com.cc.libackupnext.data.json.EnsureServeResponse
+import com.cc.libackupnext.data.json.ListDirsRequest
+import com.cc.libackupnext.data.json.ListDirsResponse
+import com.cc.libackupnext.data.json.OkResponse
+import com.cc.libackupnext.service.json.parseJson
+import com.cc.libackupnext.service.json.toJsonText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import org.json.JSONObject
 
 /**
  * 主进程侧的 rclone 业务入口：目录浏览 / 新建文件夹，以及远程 restic 服务的地址。
@@ -38,19 +43,19 @@ object RcloneClient {
         fixupPath: String? = null
     ): Result<List<String>> = withContext(Dispatchers.IO) {
         runCatching {
-            val request = JSONObject().apply {
-                put("lib", RemoteBackend.libraryPath())
-                put("fs", fs)
-                put("path", path)
-                if (create != null) put("create", create)
-                if (fixupPath != null) put("fixup", fixupPath)
+            val request = ListDirsRequest(
+                lib = RemoteBackend.libraryPath(),
+                fs = fs,
+                path = path,
+                create = create,
+                fixup = fixupPath
+            )
+            val response = getService().listDirs(request.toJsonText())
+                .parseJson<ListDirsResponse>()
+            if (!response.ok) {
+                error(response.error.orEmpty().ifBlank { "列目录失败" })
             }
-            val response = JSONObject(getService().listDirs(request.toString()))
-            if (!response.optBoolean("ok", false)) {
-                error(response.optString("error").ifBlank { "列目录失败" })
-            }
-            val dirs = response.optJSONArray("dirs") ?: JSONArray()
-            (0 until dirs.length()).map { dirs.getString(it) }
+            response.dirs
         }
     }
 
@@ -108,25 +113,26 @@ object RcloneClient {
     suspend fun ensureServe(repo: RemoteRepo): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val fs = RemoteBackend.serveFs(repo)
-            val request = JSONObject().apply {
-                put("lib", RemoteBackend.libraryPath())
-                put("fs", fs)
-                put("key", "${repo.location}|$fs")
+            val request = EnsureServeRequest(
+                lib = RemoteBackend.libraryPath(),
+                fs = fs,
+                key = "${repo.location}|$fs"
+            )
+            val response = getService().ensureServe(request.toJsonText())
+                .parseJson<EnsureServeResponse>()
+            if (!response.ok) {
+                error(response.error.orEmpty().ifBlank { "启动远程服务失败" })
             }
-            val response = JSONObject(getService().ensureServe(request.toString()))
-            if (!response.optBoolean("ok", false)) {
-                error(response.optString("error").ifBlank { "启动远程服务失败" })
-            }
-            response.getString("url")
+            response.url?.takeIf { it.isNotBlank() } ?: error("启动远程服务失败")
         }
     }
 
     /** 手动停掉当前的 serve restic（配置切换一般由 key 变化自动完成）。 */
     suspend fun stopServe(): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            val response = JSONObject(getService().stopServe())
-            if (!response.optBoolean("ok", false)) {
-                error(response.optString("error").ifBlank { "停止远程服务失败" })
+            val response = getService().stopServe().parseJson<OkResponse>()
+            if (!response.ok) {
+                error(response.error.orEmpty().ifBlank { "停止远程服务失败" })
             }
             Unit
         }

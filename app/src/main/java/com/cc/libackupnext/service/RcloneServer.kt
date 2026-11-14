@@ -4,10 +4,13 @@ import android.content.Context
 import android.content.Intent
 import android.os.IBinder
 import android.os.SharedMemory
+import com.cc.libackupnext.data.json.ListDirsRequest
+import com.cc.libackupnext.data.json.OkResponse
+import com.cc.libackupnext.service.json.parseJson
+import com.cc.libackupnext.service.json.toJsonText
 import com.cc.libackupnext.service.util.fixupTree
 import com.cc.libackupnext.util.AppLog
 import com.topjohnwu.superuser.ipc.RootService
-import org.json.JSONObject
 import java.io.File
 import java.nio.ByteBuffer
 
@@ -50,7 +53,8 @@ object RcloneServer {
         dup.put(bytes)
     }
 
-    private fun readFrameAt(buffer: ByteBuffer, offset: Int): JSONObject {
+    /** 帧里是 UTF-8 JSON 文本；原样返回，由调用方按需要解析成 DTO。 */
+    private fun readFrameAt(buffer: ByteBuffer, offset: Int): String {
         val length = buffer.getInt(offset)
         require(length in 0..(buffer.capacity() - offset - 4)) { "数据长度非法: $length" }
 
@@ -58,26 +62,28 @@ object RcloneServer {
         val dup = buffer.duplicate()
         dup.position(offset + 4)
         dup.get(bytes)
-        return JSONObject(String(bytes, Charsets.UTF_8))
+        return String(bytes, Charsets.UTF_8)
     }
 
     /** 把请求写进 frame 0、调 native、把响应帧读回来。 */
-    private fun runQuery(request: String, native: (ByteBuffer) -> Int): JSONObject = try {
+    private fun runQuery(request: String, native: (ByteBuffer) -> Int): String = try {
         val shared = SharedMemory.create(SHARED_MEMORY_NAME, BUFFER_SIZE)
         try {
             val buffer = shared.mapReadWrite()
             writeFrameAt(buffer, 0, request)
             val code = native(buffer)
             runCatching { readFrameAt(buffer, 0) }.getOrNull()
-                ?: JSONObject().put("ok", false)
-                    .put("error", "rclone 未返回响应（code=$code）")
+                ?: OkResponse(ok = false, error = "rclone 未返回响应（code=$code）")
+                    .toJsonText()
         } finally {
             shared.close()
         }
     } catch (t: Throwable) {
         AppLog.e(TAG, "rclone 调用异常", t)
-        JSONObject().put("ok", false)
-            .put("error", "rclone 调用异常：${t.message ?: t.javaClass.simpleName}")
+        OkResponse(
+            ok = false,
+            error = "rclone 调用异常：${t.message ?: t.javaClass.simpleName}"
+        ).toJsonText()
     }
 
     class Service : RootService() {
@@ -106,21 +112,21 @@ object RcloneServer {
         }
 
         private fun errorJson(message: String): String =
-            JSONObject().put("ok", false).put("error", message).toString()
+            OkResponse(ok = false, error = message).toJsonText()
 
         private fun query(request: String, native: (ByteBuffer) -> Int): String {
             nativeError?.let { return errorJson(it) }
-            return runQuery(request, native).toString()
+            return runQuery(request, native)
         }
 
         override fun listDirs(request: String): String {
             nativeError?.let { return errorJson(it) }
             val response = runQuery(request, ::nativeListDirs)
-            val options = runCatching { JSONObject(request) }.getOrNull()
-                ?: return response.toString()
-            val target = options.optString("fixup").takeIf { it.isNotBlank() }
-                ?: return response.toString()
-            if (response.optBoolean("ok", false)) {
+            val options = runCatching { request.parseJson<ListDirsRequest>() }.getOrNull()
+                ?: return response
+            val target = options.fixup?.takeIf { it.isNotBlank() } ?: return response
+            val ok = runCatching { response.parseJson<OkResponse>().ok }.getOrDefault(false)
+            if (ok) {
                 // rclone 在 uid 0 下建出来的目录：交还 media_rw，并刷成父目录的
                 // SELinux 上下文。只有本地外部存储的请求才带 fixup，远程不受影响。
                 fixupTree(
@@ -128,7 +134,7 @@ object RcloneServer {
                     parentContext = true, dirMode = "2770"
                 )
             }
-            return response.toString()
+            return response
         }
 
         override fun ensureServe(request: String): String =
