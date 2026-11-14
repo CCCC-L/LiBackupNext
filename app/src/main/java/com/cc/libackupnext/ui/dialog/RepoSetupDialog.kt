@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -43,17 +44,6 @@ import kotlinx.coroutines.launch
 
 /**
  * 配置 / 编辑 Rustic 仓库的弹窗：新增和编辑共用一份表单。
- *
- * 底部按钮行自己画（[RepoSetupForm] 的 showActions 关掉）：编辑时「删除」
- * 固定在最左边、红色，复用 rememberDoubleClickGuard 双击才执行；右侧是取消、
- * 测试连接（远程）和无背景的「初始化」。测连接结果用 Toast 提示。
- * 远程路径没选过时初始化按钮置灰。编辑保存仍走 initRepo 候选校验，通过才落盘；
- * 当前仓库仍是灰色删除按钮，但可点击，点了用 Toast 说明「先切换到其它仓库」。
- * 初始化中和失败时弹窗都不关闭，进度 / 错误显示在弹窗内，
- * 只有成功才由 [onFinished] 关掉。
- *
- * 本地 / 远程目录浏览要先收起本弹窗，避免两层 Dialog 叠出两层 scrim；
- * 文件夹弹窗关闭时 onClose 把 [visible] 置回 true，表单数据不会丢。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -156,23 +146,21 @@ fun RepoSetupDialog(
                 }
                 .onFailure {
                     AppLog.e("仓库", if (editing != null) "保存仓库失败" else "初始化失败", it)
-                    val message = it.message ?: "未知错误"
-                    initError = message
-                    AppLog.toastOnMain(message, longToast = true)
+                    initError = it.message ?: "未知错误"
                 }
         }
     }
 
-    /** 远程路径浏览的前置门禁 / 手动测试连接：测连接成功才执行 action，结果用 Toast 提示。 */
+    /** 远程路径浏览的前置门禁 / 手动测试连接：成功 Toast、失败原因内联显示。 */
     fun runWhenConnected(action: () -> Unit = {}) {
         if (testing || !dialogRepo.isComplete()) return
         scope.launch {
             testing = true
+            initError = null
             val result = RcloneClient.testRemoteConnection(dialogRepo)
-            AppLog.toastOnMain(result.fold(
-                    onSuccess = { "连接成功" },
-                    onFailure = { "连接失败：${it.message ?: "未知错误"}" }
-                ))
+            result
+                .onSuccess { AppLog.toastOnMain("连接成功") }
+                .onFailure { initError = it.message ?: "未知错误" }
             testing = false
             if (result.isSuccess) action()
         }
@@ -183,6 +171,17 @@ fun RepoSetupDialog(
     // 远程路径没选过时按钮置灰：空路径会把整个服务根当成仓库
     val canSubmit = !isInitializing && !testing &&
             dialogRepo.canInit() && passwordsMatch
+
+    // 表单 + 状态区共用一份固定预算：进度 / 红字按需出现时从预算里扣掉同样高度，
+    // 平时 / 初始化中 / 失败三态等高；不按屏幕尺寸计算。
+    val progressRowHeight = 26.dp
+    val errorTextHeight = 72.dp
+    val errorBlockHeight = errorTextHeight + 8.dp   // 上下 padding 各 4dp
+    val formHeight = when {
+        initError != null -> 420.dp - errorBlockHeight   // 340 + 80 = 420
+        isInitializing -> 420.dp - progressRowHeight    // 394 + 26 = 420
+        else -> 420.dp                                 // 无状态块：420
+    }
 
     // 初始化中和失败时都保持弹窗，只有成功（onFinished）才关闭；
     // 删除改成双击执行，没有确认弹窗，表单也就不用收起
@@ -214,7 +213,10 @@ fun RepoSetupDialog(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 420.dp)
+                            // 非 weight 子项先测量：按钮行永远先拿到空间，键盘弹出也挤不掉
+                            .weight(1f, fill = false)
+                            // 固定高度（不是上限）：内容不足时预算才真的守恒
+                            .heightIn(min = formHeight, max = formHeight)
                             .verticalScroll(rememberScrollState())
                             .padding(horizontal = 24.dp, vertical = 12.dp)
                     ) {
@@ -245,10 +247,12 @@ fun RepoSetupDialog(
                         )
                     }
 
-                    // 初始化中不收起弹窗：进度和失败原因都留在弹窗里，只有成功才关闭
+                    // 进度按需出现、不常驻：固定高度已计入滚动区预算，弹窗不会被拉长
                     if (isInitializing) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
+                            modifier = Modifier
+                                .height(progressRowHeight)
+                                .padding(horizontal = 24.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             LoadingIndicator(modifier = Modifier.size(18.dp))
@@ -261,13 +265,20 @@ fun RepoSetupDialog(
                         }
                     }
 
+                    // 失败原因和按钮同处底部固定区：自身限高滚动，长错误不会把按钮挤出屏幕
                     initError?.let { message ->
-                        Text(
-                            text = message,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
-                        )
+                        Column(
+                            modifier = Modifier
+                                .padding(horizontal = 24.dp, vertical = 4.dp)
+                                .height(errorTextHeight)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            Text(
+                                text = message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
                     }
 
                     // 底部按钮行：编辑时删除固定在最左边

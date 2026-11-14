@@ -56,8 +56,8 @@ import com.cc.libackupnext.ui.theme.rootCardGrantedTextVariant
 import com.cc.libackupnext.ui.theme.rootGrantedButtonBackground
 import com.cc.libackupnext.ui.theme.rootGrantedButtonContent
 import com.cc.libackupnext.ui.util.RepoSetupForm
-import kotlinx.coroutines.launch
 import com.cc.libackupnext.util.AppLog
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -88,6 +88,8 @@ fun WelcomeScreen(
         mutableStateOf(RemoteRepo(protocol = RepoProtocol.LOCAL, path = rusticPath))
     }
     var testing by remember { mutableStateOf(false) }
+    // 测试连接失败的原因：内联显示在表单下方，不再用 Toast
+    var testError by remember { mutableStateOf<String?>(null) }
     var confirmPassword by remember { mutableStateOf("") }
     val isLocal = repo.protocol.isLocal
 
@@ -112,16 +114,16 @@ fun WelcomeScreen(
     // 远程同样跑在 :root 进程里，Root 仍是硬前提
     val rusticEnabled = hasRoot
 
-    /** 远程路径浏览的前置门禁 / 手动测试连接：测连接成功才执行 action，结果用 Toast 提示。 */
+    /** 远程路径浏览的前置门禁 / 手动测试连接：成功 Toast、失败原因内联显示。 */
     fun runWhenConnected(action: () -> Unit = {}) {
         if (testing || !repo.isComplete()) return
         scope.launch {
             testing = true
+            testError = null
             val result = RcloneClient.testRemoteConnection(repo)
-            AppLog.toastOnMain(result.fold(
-                    onSuccess = { "连接成功" },
-                    onFailure = { "连接失败：${it.message ?: "未知错误"}" }
-                ))
+            result
+                .onSuccess { AppLog.toastOnMain("连接成功") }
+                .onFailure { testError = it.message ?: "未知错误" }
             testing = false
             if (result.isSuccess) action()
         }
@@ -260,11 +262,18 @@ fun WelcomeScreen(
                                 repo = if (next.protocol.isLocal && next.path.isBlank()) {
                                     next.copy(path = rusticPath)
                                 } else next
+                                testError = null
                             },
                             password = rusticPassword,
-                            onPasswordChange = onRusticPasswordChange,
+                            onPasswordChange = {
+                                onRusticPasswordChange(it)
+                                testError = null
+                            },
                             confirmPassword = confirmPassword,
-                            onConfirmPasswordChange = { confirmPassword = it },
+                            onConfirmPasswordChange = {
+                                confirmPassword = it
+                                testError = null
+                            },
                             enabled = rusticEnabled && !isInitializing,
                             onPickFolder = {
                                 onOpenFolderPicker(
@@ -291,6 +300,7 @@ fun WelcomeScreen(
                             onConnectedAction = { action -> runWhenConnected(action) },
                             isTesting = testing,
                             onInit = {
+                                testError = null
                                 if (isLocal) {
                                     onInitRusticRepo(repo.path, rusticPassword, null)
                                 } else {
@@ -298,6 +308,16 @@ fun WelcomeScreen(
                                 }
                             }
                         )
+
+                        // 测试连接失败：和初始化失败一样留在表单里，错误原文已由 service 层精简
+                        testError?.let { message ->
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.error
+                            )
+                        }
 
                         if (isInitializing) {
                             Spacer(modifier = Modifier.height(10.dp))

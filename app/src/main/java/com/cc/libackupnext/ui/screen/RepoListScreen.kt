@@ -83,9 +83,7 @@ fun RepoListScreen(
                     onRepoChanged()
                 }
                 .onFailure {
-                    val message = it.message ?: "未知错误"
-                    switchError = message
-                    AppLog.toastOnMain(message, longToast = true)
+                    switchError = it.message ?: "未知错误"
                 }
         }
     }

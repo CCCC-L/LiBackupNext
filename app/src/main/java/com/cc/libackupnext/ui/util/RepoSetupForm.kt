@@ -45,7 +45,7 @@ import com.cc.libackupnext.ui.theme.warningTextColor
  * 服务协议里就包含「本地」：选本地只显示目录 + rustic 密码；选远程才显示地址、
  * 认证方式、凭据和远程路径。名称默认跟随协议名，切换协议由 [RemoteRepo.switchedTo]
  * 统一处理（用户改过的名称会保留）。
- * 字段块、密码框、提示条在两种协议间完全复用；测试连接的结果由调用方用 Toast 提示。
+ * 字段块、密码框、提示条在两种协议间完全复用；测试连接的结果由调用方内联显示。
  */
 @Composable
 fun RepoSetupForm(
