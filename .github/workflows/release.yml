@@ -30,6 +30,9 @@ jobs:
       NDK_VERSION: "30.0.16248370"
       # compileSdk 37 + AGP 9 需要 JDK 17 以上
       JAVA_VERSION: "21"
+      # buildLibrclone_* 的 Exec 与 setup-go 都会读它；Gradle 里默认的
+      # goproxy.cn 是给国内本地用的，海外 runner 走官方代理更稳
+      GOPROXY: "https://proxy.golang.org,direct"
 
     steps:
       # 生成变更日志要读历史，必须完整 clone
@@ -43,6 +46,15 @@ jobs:
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
+
+      # preBuild 会跑 buildLibrclone_*：go build -buildmode=c-shared，
+      # 没有 Go 就编不出 librclone.so。版本直接读 go.mod（go 1.26.0），
+      # 不在 CI 里再维护一份版本号；go.sum 用来缓存模块。
+      - name: 安装 Go（编译 librclone.so）
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: app/librclone/go.mod
+          cache-dependency-path: app/librclone/go.sum
 
       - name: 安装 Android SDK
         uses: android-actions/setup-android@v3
