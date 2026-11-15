@@ -765,7 +765,7 @@ fun BackupBatchScreen(
         }
     }
 
-    val pageBackground = MaterialTheme.colorScheme.surfaceContainerLow
+    val pageBackground = MaterialTheme.colorScheme.surfaceContainer
     val searchBarBackground = MaterialTheme.colorScheme.surfaceContainerHighest
 
     // 多选模式优先响应返回：先退出多选，再退页面

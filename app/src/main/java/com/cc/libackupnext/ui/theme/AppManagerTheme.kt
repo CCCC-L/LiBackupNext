@@ -37,6 +37,10 @@ fun AppManagerTheme(
     val style = ThemeSettings.style
     val specVersion = ThemeSettings.specVersion
     val seedColor = remember(seedKey, context) { resolveSeedColor(seedKey, context) }
+    // "system" 时按深浅模式取系统调色板的 6 个关键色，交给 material-kolor 做覆盖色。
+    val systemPalette = remember(seedKey, darkTheme, context) {
+        if (seedKey == "system") systemPaletteColors(context, darkTheme) else null
+    }
 
     val colorScheme = if (useSystemScheme) {
         if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
@@ -46,6 +50,7 @@ fun AppManagerTheme(
             seedColor = seedColor,
             style = style,
             specVersion = specVersion,
+            systemPalette = systemPalette,
         )
     }
 

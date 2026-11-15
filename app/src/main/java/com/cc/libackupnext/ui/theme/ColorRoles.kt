@@ -34,5 +34,5 @@ val ColorScheme.fieldDisabledTextColor: Color
 val ColorScheme.fieldDisabledLabelColor: Color
     get() = onSurfaceVariant.copy(alpha = 0.38f)
 
-/** 所有弹窗统一用和页面 Scaffold 相同的底色，避免不同弹窗各用一套。 */
-val ColorScheme.dialogContainer: Color get() = surfaceContainerLow
+/** 所有弹窗统一用 surfaceContainer，避免不同弹窗各用一套。 */
+val ColorScheme.dialogContainer: Color get() = surfaceContainer

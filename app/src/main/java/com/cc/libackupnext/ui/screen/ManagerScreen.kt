@@ -108,7 +108,7 @@ fun AppBackupScreen(
     // 系统返回键回到上一页，而不是退出应用
     BackHandler(onBack = onBack)
 
-    val pageBackground = MaterialTheme.colorScheme.surfaceContainerLow
+    val pageBackground = MaterialTheme.colorScheme.surfaceContainer
     val searchBarBackground = MaterialTheme.colorScheme.surfaceContainerHighest
 
     // 帮助对话框显示状态

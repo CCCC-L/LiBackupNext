@@ -230,7 +230,7 @@ fun AppListScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    val pageBackground = MaterialTheme.colorScheme.surfaceContainerLow
+    val pageBackground = MaterialTheme.colorScheme.surfaceContainer
     val searchBarBackground = MaterialTheme.colorScheme.surfaceContainerHighest
 
     // LazyColumn 状态，用于滚动控制

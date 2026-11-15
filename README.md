@@ -144,6 +144,6 @@ scripts/           构建 / 修复脚本
 | [libsu](https://github.com/topjohnwu/libsu) | 6.0.0：`RootService` 绑定与断线重连 |
 | [Refine](https://github.com/RikkaW/Refine) | 4.4.0 + `:hidden-api` stub：隐藏 API 访问 |
 | [rikkax.parcelablelist](https://github.com/RikkaW/ParcelableList) | 2.0.1：AIDL 传 Parcelable 列表 |
-| Jetpack Compose / Material 3 | BOM 2026.09.00、material3 1.5.0-alpha01 |
-| material-kolor | 5.0.0-alpha01：动态配色，与上面的 material3 alpha 配套，勿单独升级 |
+| Jetpack Compose / Material 3 | BOM 2026.09.00、material3 1.5.0-alpha27（与参考 App 对齐） |
+| material-kolor | 5.0.1：动态配色；跟随系统壁纸时按深浅取系统 6 色作调色板覆盖色。需 Kotlin 2.4.10 配套（库用该版本编译），**勿升 6.0.0** |
 | kotlinx-serialization | 1.9.0（用 BOM 统一 core / json，避免运行时版本错配） |

@@ -100,8 +100,9 @@ fun WelcomeScreen(
         }
     }
 
-    val pageBackground = colors.surfaceContainerLow
-    val cardBackground = colors.surfaceContainer
+    val pageBackground = colors.surfaceContainer
+    // 初始化仓库卡片保持亮一档的 surface（#F8F9FF），与页面底 #EAEEF7 分层。
+    val cardBackground = colors.surface
     val rootCardBackground =
         if (hasRoot) colors.rootCardGrantedBackground else cardBackground
     val onRootCardColor =

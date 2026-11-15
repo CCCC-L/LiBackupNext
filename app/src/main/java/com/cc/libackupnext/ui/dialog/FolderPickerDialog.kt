@@ -274,7 +274,7 @@ fun FolderPickerDialog(
                 // 再让弹窗本身从状态栏下方开始
                 .statusBarsPadding(),
             shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLow
+            color = MaterialTheme.colorScheme.dialogContainer
         ) {
             // 内容只需避开导航栏 / 键盘，状态栏已由 Surface 的 padding 让开
             Column(
@@ -285,7 +285,7 @@ fun FolderPickerDialog(
             ) {
                 AppTopBar(
                     title = "选择文件夹",
-                    pageBackground = MaterialTheme.colorScheme.surfaceContainerLow,
+                    pageBackground = MaterialTheme.colorScheme.dialogContainer,
                     searchBarBackground = MaterialTheme.colorScheme.surfaceContainerHigh,
                     navigationIcon = {
                         IconButton(onClick = { handleBack() }) {

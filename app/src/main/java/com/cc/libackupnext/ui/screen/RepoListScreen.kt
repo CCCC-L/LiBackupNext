@@ -59,7 +59,7 @@ fun RepoListScreen(
     modifier: Modifier = Modifier
 ) {
     val scope = rememberCoroutineScope()
-    val pageBackground = MaterialTheme.colorScheme.surfaceContainerLow
+    val pageBackground = MaterialTheme.colorScheme.surfaceContainer
     val searchBarBackground = MaterialTheme.colorScheme.surfaceContainerHighest
 
     var dialogTarget by remember { mutableStateOf<RepoDialogTarget?>(null) }
