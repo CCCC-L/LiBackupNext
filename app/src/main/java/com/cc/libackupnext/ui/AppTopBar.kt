@@ -107,6 +107,13 @@ fun AppTopBar(
     userWeight: (() -> Float)? = null,
     /** 连续模式：中间按钮的权重，含义同 [searchWeight]。 */
     middleWeight: (() -> Float)? = null,
+    /**
+     * 连续模式：更多按钮的权重，含义同 [searchWeight]。
+     *
+     * 设置页没有更多菜单，滑到那一页时这颗按钮要和用户 / 中间按钮一样跟着手指收，
+     * 而不是等 tab 翻牌后再补一段淡出。
+     */
+    moreWeight: (() -> Float)? = null,
     /** 非空时和 [title] 做切换（滑动切页签时换标题用）。 */
     incomingTitle: String? = null,
     /**
@@ -145,61 +152,12 @@ fun AppTopBar(
     /** 非空时在「更多」菜单末尾加「继续未完成（N）」；只有 tab 页传。 */
     pendingRetryCount: Int = 0,
     onRetryPending: (() -> Unit)? = null,
-    moreMenuContent: @Composable (onDismiss: () -> Unit) -> Unit = { onDismiss ->
-        // 传了才显示：设置页这种没有可刷新内容的页面不传
-        if (onReload != null) {
-            DropdownMenuItem(
-                text = { Text("重新加载") },
-                onClick = {
-                    onDismiss()
-                    onReload.invoke()
-                }
-            )
-        }
-        if (onCreateBackup != null) {
-            DropdownMenuItem(
-                text = { Text(createBackupLabel) },
-                onClick = {
-                    onDismiss()
-                    onCreateBackup()
-                }
-            )
-        }
-        if (onManageBackup != null) {
-            DropdownMenuItem(
-                text = { Text(manageBackupLabel) },
-                onClick = {
-                    onDismiss()
-                    onManageBackup()
-                }
-            )
-        }
-        if (onOpenSettings != null) {
-            DropdownMenuItem(
-                text = { Text("设置") },
-                onClick = {
-                    onDismiss()
-                    onOpenSettings()
-                }
-            )
-        }
-        // 有未完成批次才出现，放菜单最末尾；和「更多」按钮一起闪红提示
-        if (onRetryPending != null) {
-            DropdownMenuItem(
-                text = {
-                    val pulse = rememberPendingRetryPulse(true)
-                    Text(
-                        "继续未完成（$pendingRetryCount）",
-                        color = pulse ?: Color.Unspecified
-                    )
-                },
-                onClick = {
-                    onDismiss()
-                    onRetryPending.invoke()
-                }
-            )
-        }
-    },
+    /**
+     * 自定义「更多」菜单内容；传 null 就用默认菜单（按上面几个入口自动拼）。
+     *
+     * 传了它就一定显示更多按钮 —— 菜单里有什么由调用方决定，顶栏不推断。
+     */
+    moreMenuContent: (@Composable (onDismiss: () -> Unit) -> Unit)? = null,
     /**
      * 非空时替换「搜索按钮之后」的动作区（文件夹选择弹窗用它平铺新建 / 刷新）。
      * 搜索按钮始终由顶栏统一渲染，展开搜索栏时在自己槽位内擦除让位。
@@ -290,6 +248,20 @@ fun AppTopBar(
     val middleWeightValue = middleWeight?.invoke()
     val middleErase = middleWeightValue ?: middleAnimated
 
+    // 更多按钮：菜单里一项都没有（设置页没有可刷新 / 可新建的内容）就不显示 ——
+    // 点开只有空菜单。宽度和透明度一起收，动作区不留下一个空槽位。
+    // 有未完成批次时 onRetryPending 非空，按钮会重新出现并闪红。
+    // 自定义 moreMenuContent 的页面（详情页 / 批量页）那几个入口一个都不传，
+    // 但菜单是实打实有内容的，所以它本身也算「有菜单」。
+    val hasMoreMenu = moreMenuContent != null || onReload != null ||
+            onCreateBackup != null || onManageBackup != null ||
+            onOpenSettings != null || onRetryPending != null
+    val moreAnimated by rememberEraseProgress(visible = hasMoreMenu)
+    // 连续模式：更多按钮也走权重（设置页没有它），和用户 / 中间按钮同一套擦除。
+    // 未完成批次是离散状态，单独补一段 200ms —— 否则在设置页把它清掉时按钮会瞬间消失。
+    val morePendingAnimated by rememberEraseProgress(visible = onRetryPending != null)
+    val moreErase = maxOf(moreWeight?.invoke() ?: moreAnimated, morePendingAnimated)
+
     // 中间按钮的位置动画 & 复合容器宽度动画
     val middleButtonEndPadding by rememberMiddleButtonEndPadding(isSearching)
     // 搜索态更多按钮被推走，只剩中间按钮；中间按钮本身也可能被擦除（设置 / 系统页
@@ -297,10 +269,14 @@ fun AppTopBar(
     // 连续模式直接用跟手权重，非连续模式按 showMiddleButton 走 200ms 动画。
     val middleVisible = (middleWeightValue ?: (if (showMiddleButton) 1f else 0f))
         .coerceIn(0f, 1f)
-    val actionGroupWidthAnimated by rememberActionGroupWidth(isSearching, middleVisible)
+    val actionGroupWidthAnimated by rememberActionGroupWidth(
+        isSearching,
+        middleVisible,
+        moreVisible = if (hasMoreMenu) 1f else 0f
+    )
     val actionGroupWidth = if (middleWeightValue != null) {
         // 连续模式逐帧跟手，不补 200ms 动画
-        actionGroupWidthTarget(isSearching, middleVisible)
+        actionGroupWidthTarget(isSearching, middleVisible, moreErase)
     } else {
         actionGroupWidthAnimated
     }
@@ -526,7 +502,6 @@ fun AppTopBar(
             }
 
             // ===== 中间按钮 + 更多按钮复合区域 =====
-            // 不裁剪：更多按钮要能一路画到容器右外面，看起来才像被推出屏幕
             Box(
                 modifier = Modifier
                     .width(actionGroupWidth)
@@ -542,7 +517,10 @@ fun AppTopBar(
                         onClick = {
                             viewModel?.let { it.isMoreMenuExpanded.value = true }
                         },
-                        modifier = Modifier.requiredWidth(IconSlotWidth)
+                        // 菜单空了就整体擦除：宽度收到 0、内容淡出，和搜索按钮同一套
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .eraseToRight(moreErase, fade = true, fly = false)
                     ) {
                         // 有未完成批次时呼吸闪红，没完成时保持原本图标色
                         val pulse = rememberPendingRetryPulse(onRetryPending != null)
@@ -560,17 +538,33 @@ fun AppTopBar(
                         shape = MaterialTheme.shapes.large,
                         containerColor = menuColor
                     ) {
-                        moreMenuContent {
+                        val dismissMoreMenu: () -> Unit = {
                             viewModel?.let { it.isMoreMenuExpanded.value = false }
+                        }
+                        if (moreMenuContent != null) {
+                            moreMenuContent.invoke(dismissMoreMenu)
+                        } else {
+                            DefaultMoreMenuContent(
+                                onReload = onReload,
+                                onCreateBackup = onCreateBackup,
+                                onManageBackup = onManageBackup,
+                                onOpenSettings = onOpenSettings,
+                                onRetryPending = onRetryPending,
+                                pendingRetryCount = pendingRetryCount,
+                                createBackupLabel = createBackupLabel,
+                                manageBackupLabel = manageBackupLabel,
+                                onDismiss = dismissMoreMenu
+                            )
                         }
                     }
                 }
 
                 // 中间按钮：位置随搜索状态变化；设置页没有它，擦除收起而不是硬切
+                // 让位的间距跟着更多按钮一起收：更多按钮没了就不用给它留位置
                 Box(
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
-                        .padding(end = middleButtonEndPadding)
+                        .padding(end = middleButtonEndPadding * moreErase)
                         .eraseToRight(
                             middleErase,
                             fade = middleWeight != null,
@@ -590,6 +584,79 @@ fun AppTopBar(
             }
         }
     )
+}
+
+/**
+ * 「更多」菜单的默认内容：按传进来的入口自动拼。
+ *
+ * 自定义 [AppTopBar] 的 `moreMenuContent` 的页面（详情页 / 批量页）不走这里，
+ * 但那些页面同样算「有菜单」，更多按钮照常显示。
+ */
+@Composable
+private fun DefaultMoreMenuContent(
+    onReload: (() -> Unit)?,
+    onCreateBackup: (() -> Unit)?,
+    onManageBackup: (() -> Unit)?,
+    onOpenSettings: (() -> Unit)?,
+    onRetryPending: (() -> Unit)?,
+    pendingRetryCount: Int,
+    createBackupLabel: String,
+    manageBackupLabel: String,
+    onDismiss: () -> Unit
+) {
+    // 传了才显示：设置页这种没有可刷新内容的页面不传
+    if (onReload != null) {
+        DropdownMenuItem(
+            text = { Text("重新加载") },
+            onClick = {
+                onDismiss()
+                onReload.invoke()
+            }
+        )
+    }
+    if (onCreateBackup != null) {
+        DropdownMenuItem(
+            text = { Text(createBackupLabel) },
+            onClick = {
+                onDismiss()
+                onCreateBackup.invoke()
+            }
+        )
+    }
+    if (onManageBackup != null) {
+        DropdownMenuItem(
+            text = { Text(manageBackupLabel) },
+            onClick = {
+                onDismiss()
+                onManageBackup.invoke()
+            }
+        )
+    }
+    if (onOpenSettings != null) {
+        DropdownMenuItem(
+            text = { Text("设置") },
+            onClick = {
+                onDismiss()
+                onOpenSettings.invoke()
+            }
+        )
+    }
+    // 有未完成批次才出现，放菜单最末尾；和「更多」按钮一起闪红提示
+    if (onRetryPending != null) {
+        DropdownMenuItem(
+            text = {
+                val pulse = rememberPendingRetryPulse(true)
+                Text(
+                    "继续未完成（$pendingRetryCount）",
+                    color = pulse ?: Color.Unspecified
+                )
+            },
+            onClick = {
+                onDismiss()
+                onRetryPending.invoke()
+            }
+        )
+    }
 }
 
 /**

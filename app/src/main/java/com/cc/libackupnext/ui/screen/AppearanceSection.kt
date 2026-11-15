@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -16,10 +15,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -44,21 +41,33 @@ private enum class AppearancePicker { SEED, STYLE, SPEC }
 fun AppearanceSection() {
     var picker by remember { mutableStateOf<AppearancePicker?>(null) }
 
-    SectionTitle("外观")
-
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.surface
-    ) {
-        Column {
-            OptionRow("配色", ThemeSettings.seedLabel) { picker = AppearancePicker.SEED }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-            OptionRow("色彩风格", ThemeSettings.styleLabel) { picker = AppearancePicker.STYLE }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-            OptionRow("色彩标准", ThemeSettings.specLabel) { picker = AppearancePicker.SPEC }
+    CardGroup(
+        "外观",
+        { shape ->
+            SettingsCard(
+                shape = shape,
+                title = "配色",
+                subtitle = ThemeSettings.seedLabel,
+                onClick = { picker = AppearancePicker.SEED }
+            )
+        },
+        { shape ->
+            SettingsCard(
+                shape = shape,
+                title = "色彩风格",
+                subtitle = ThemeSettings.styleLabel,
+                onClick = { picker = AppearancePicker.STYLE }
+            )
+        },
+        { shape ->
+            SettingsCard(
+                shape = shape,
+                title = "色彩标准",
+                subtitle = ThemeSettings.specLabel,
+                onClick = { picker = AppearancePicker.SPEC }
+            )
         }
-    }
+    )
 
     when (picker) {
         AppearancePicker.SEED -> SeedPickerDialog(onDismiss = { picker = null })
@@ -77,31 +86,6 @@ fun AppearanceSection() {
             onDismiss = { picker = null }
         )
         null -> Unit
-    }
-}
-
-@Composable
-private fun OptionRow(title: String, value: String, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = value,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
     }
 }
 

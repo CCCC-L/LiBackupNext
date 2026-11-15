@@ -189,18 +189,24 @@ val SearchBarTrailingPadding: Dp = 12.dp
  * 中间按钮 + 更多按钮复合容器的目标宽度。
  *
  * 非搜索态：更多按钮 1 个图标位，加上中间按钮按 [middleVisible] 占的比例。
+ * [moreVisible] 是更多按钮自己的权重：菜单里一项都没有时传 0，别再留空槽位。
  * 搜索态：更多按钮被推走，宽度跟着中间按钮收缩，但**不收到 0** —— 没有中间按钮的
  * 页签（设置 / 系统）仍保留 [SearchBarTrailingPadding]，否则搜索框会顶到屏幕边、
  * 和下面的列表不对齐。
  *
  * 连续模式直接取它逐帧跟手，非连续模式拿它当动画目标，两处共用一份公式。
  */
-fun actionGroupWidthTarget(isSearching: Boolean, middleVisible: Float): Dp {
+fun actionGroupWidthTarget(
+    isSearching: Boolean,
+    middleVisible: Float,
+    moreVisible: Float = 1f
+): Dp {
     val v = middleVisible.coerceIn(0f, 1f)
+    val m = moreVisible.coerceIn(0f, 1f)
     return if (isSearching) {
         SearchBarTrailingPadding + (IconSlotWidth - SearchBarTrailingPadding) * v
     } else {
-        IconSlotWidth * (1f + v)
+        IconSlotWidth * (m + v)
     }
 }
 
@@ -208,10 +214,11 @@ fun actionGroupWidthTarget(isSearching: Boolean, middleVisible: Float): Dp {
 @Composable
 fun rememberActionGroupWidth(
     isSearching: Boolean,
-    middleVisible: Float = 1f
+    middleVisible: Float = 1f,
+    moreVisible: Float = 1f
 ): State<Dp> =
     animateDpAsState(
-        targetValue = actionGroupWidthTarget(isSearching, middleVisible),
+        targetValue = actionGroupWidthTarget(isSearching, middleVisible, moreVisible),
         animationSpec = tween(durationMillis = ERASE_DURATION_MS.toInt()),
         label = "actionGroupWidth"
     )

@@ -5,14 +5,14 @@ import com.cc.libackupnext.data.ReleaseBlock
 import com.cc.libackupnext.data.ReleaseInfo
 import com.cc.libackupnext.data.json.GithubReleaseDto
 import com.cc.libackupnext.service.json.parseJson
+import com.cc.libackupnext.util.AppLinks
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
 
-private const val REPO = "CCCC-L/LiBackupNext"
-private const val LATEST_API = "https://api.github.com/repos/$REPO/releases/latest"
-private const val RELEASE_PAGE = "https://github.com/$REPO/releases/latest"
+// 仓库地址统一取自 AppLinks，关于页与更新检查不会出现两份
+private val LATEST_API = "https://api.github.com/repos/${AppLinks.GITHUB_REPO}/releases/latest"
 
 /**
  * 启动时查 GitHub 最新 Release。
@@ -54,7 +54,7 @@ object UpdateChecker {
                     downloadUrl = release.assets.firstOrNull {
                         it.name.endsWith(".apk", ignoreCase = true)
                     }?.downloadUrl?.takeIf { it.isNotBlank() }
-                        ?: release.htmlUrl.ifBlank { RELEASE_PAGE }
+                        ?: release.htmlUrl.ifBlank { AppLinks.LATEST_RELEASE_URL }
                 )
             } finally {
                 conn.disconnect()

@@ -342,9 +342,14 @@ fun AppListScreen(
         route = AppRoute.LIST
     }
 
-    // 仓库列表页：返回设置 tab
-    BackHandler(enabled = route == AppRoute.REPOS) {
+    // 仓库列表 / 关于页：返回设置 tab
+    BackHandler(enabled = route == AppRoute.REPOS || route == AppRoute.ABOUT) {
         route = AppRoute.LIST
+    }
+
+    // 开源软件声明页：返回关于页
+    BackHandler(enabled = route == AppRoute.OPEN_SOURCE) {
+        route = AppRoute.ABOUT
     }
 
     // 页面内容单独记一份：切用户时 AppInfo 变了但页面不变，避免重放进入动画
@@ -360,6 +365,15 @@ fun AppListScreen(
         label = "PageTransition"
     ) { target ->
         when (target) {
+            AppRoute.ABOUT -> AboutScreen(
+                onBack = { route = AppRoute.LIST },
+                onOpenOpenSource = { route = AppRoute.OPEN_SOURCE }
+            )
+
+            AppRoute.OPEN_SOURCE -> OpenSourceScreen(
+                onBack = { route = AppRoute.ABOUT }
+            )
+
             AppRoute.REPOS -> RepoListScreen(
                 repos = savedRepos,
                 currentLocation = currentRepoLocation,
@@ -447,6 +461,7 @@ fun AppListScreen(
                         searchWeight = { 1f - settingsWeight() },
                         userWeight = appWeight,
                         middleWeight = { 1f - (settingsWeight() + othersWeight()).coerceIn(0f, 1f) },
+                        moreWeight = { 1f - settingsWeight() },
                         searchPlaceholder = tab.searchHint,
                         pageBackground = pageBackground,
                         searchBarBackground = searchBarBackground,
@@ -568,7 +583,8 @@ fun AppListScreen(
                                 onSettingChanged = {
                                     viewModel.loadList(scrollToTop = false)
                                 },
-                                onOpenRepoList = { route = AppRoute.REPOS }
+                                onOpenRepoList = { route = AppRoute.REPOS },
+                                onOpenAbout = { route = AppRoute.ABOUT }
                             )
 
                             HomeTab.APPS -> when {
@@ -650,13 +666,15 @@ fun AppListScreen(
  * 主页面的页面栈。
  *
  * 底栏的三个页签都在这一个 route 里（[LIST]），切页签不算换页；
- * 只有详情 / 批量备份才是压在上面的页面。
+ * 仓库 / 关于 / 开源声明 / 详情 / 批量备份才是压在上面的页面。
  *
  * @param depth 转场方向：越深越靠右
  */
 private enum class AppRoute(val depth: Int) {
     LIST(0),
     REPOS(1),
+    ABOUT(1),
+    OPEN_SOURCE(2),
     BATCH(1),
     DETAIL(2)
 }

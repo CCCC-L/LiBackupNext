@@ -3,21 +3,15 @@ package com.cc.libackupnext.ui.screen
 import android.content.ClipData
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -27,13 +21,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.BuildConfig
 import com.cc.libackupnext.data.AppPrefs
@@ -57,6 +49,9 @@ import kotlinx.coroutines.withContext
  * 点击进入「已添加仓库」列表页，长按复制当前地址；
  * 配置 / 编辑仓库的弹窗由列表页持有，这里不再弹窗。
  *
+ * 卡片用 [CardGroup] 分组，形状 / 行间距和 apptab 的列表卡片（AppListContainer）一致：
+ * 组内只有 2dp 缝、首行上圆角、末行下圆角，没有分割线。
+ *
  * 它是底栏的一个 tab，顶栏 / 底栏由主页提供，所以这里只有内容没有 Scaffold。
  */
 @Composable
@@ -67,7 +62,9 @@ fun SettingsContent(
     /** 影响应用列表的设置项改动后通知外面重新加载。 */
     onSettingChanged: () -> Unit = {},
     /** 打开已添加仓库列表页。 */
-    onOpenRepoList: () -> Unit = {}
+    onOpenRepoList: () -> Unit = {},
+    /** 打开关于页。 */
+    onOpenAbout: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -118,290 +115,151 @@ fun SettingsContent(
             .verticalScroll(rememberScrollState())
             .padding(PageContentPadding)
     ) {
-        SectionTitle("Rustic")
-
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface
-        ) {
-            Column {
-                // rustic 依赖版本：只展示，不可点击（值来自 Cargo.toml）
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 14.dp)
-                ) {
-                    Text(
-                        text = "Rustic 版本",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "core ${BuildConfig.RUSTIC_CORE_VERSION}" +
-                                "  ·  backend ${BuildConfig.RUSTIC_BACKEND_VERSION}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                    )
-                }
-
-                HorizontalDivider(
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+        CardGroup(
+            "Rustic",
+            // rustic 依赖版本：只展示，不可点击（值来自 Cargo.toml）
+            { shape ->
+                SettingsCard(
+                    shape = shape,
+                    title = "Rustic 版本",
+                    subtitle = "core ${BuildConfig.RUSTIC_CORE_VERSION}" +
+                            "  ·  backend ${BuildConfig.RUSTIC_BACKEND_VERSION}"
                 )
+            },
+            { shape ->
+                SettingsCard(
+                    shape = shape,
+                    title = "仓库地址",
+                    subtitle = repoAddress.ifBlank { "未设置" },
+                    subtitleMaxLines = 1,
+                    hint = "查看 / 管理已添加的仓库，长按复制当前地址",
+                    onClick = onOpenRepoList,
+                    onLongClick = {
+                        if (repoAddress.isNotBlank()) {
+                            val path = repoAddress
+                            scope.launch {
+                                clipboard.setClipEntry(
+                                    ClipEntry(ClipData.newPlainText("仓库地址", path))
+                                )
+                                AppLog.toastOnMain("已复制仓库地址")
+                            }
+                        }
+                    }
+                )
+            },
+            // 整理仓库：红色，放在仓库地址下面
+            { shape ->
+                SettingsCard(
+                    shape = shape,
+                    title = "整理仓库",
+                    subtitle = "清理无用的数据（已删除备份占用的空间）",
+                    titleColor = MaterialTheme.colorScheme.error,
+                    subtitleColor = MaterialTheme.colorScheme.error.copy(alpha = 0.75f),
+                    onClick = { if (!cleaning) openCleanConfirm() }
+                )
+            }
+        )
 
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .combinedClickable(
-                            onClick = onOpenRepoList,
-                            onLongClick = {
-                                if (repoAddress.isNotBlank()) {
-                                    val path = repoAddress
-                                    scope.launch {
-                                        clipboard.setClipEntry(
-                                            ClipEntry(ClipData.newPlainText("仓库地址", path))
-                                        )
-                                        AppLog.toastOnMain("已复制仓库地址")
-                                    }
-                                }
+        CardGroup(
+            "备份",
+            { shape ->
+                SettingsCard(
+                    shape = shape,
+                    title = "备份自身",
+                    subtitle = "备份时将 LiBackupNext 的安装包复制到 rustic 仓库的根目录",
+                    trailing = {
+                        Switch(
+                            checked = backupSelf,
+                            onCheckedChange = {
+                                backupSelf = it
+                                AppPrefs.backupSelf = it
                             }
                         )
-                        .padding(horizontal = 16.dp, vertical = 14.dp)
-                ) {
-                    Text(
-                        text = "仓库地址",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = repoAddress.ifBlank { "未设置" },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "查看 / 管理已添加的仓库，长按复制当前地址",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                }
-
-                HorizontalDivider(
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-                )
-
-                // 整理仓库：红色，放在仓库地址下面
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(enabled = !cleaning) { openCleanConfirm() }
-                        .padding(horizontal = 16.dp, vertical = 14.dp)
-                ) {
-                    Text(
-                        text = "整理仓库",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "清理无用的数据（已删除备份占用的空间）",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.75f)
-                    )
-                }
-            }
-        }
-
-        SectionTitle("备份")
-
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "备份自身",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "备份时将 LiBackupNext 的安装包复制到 rustic 仓库的根目录",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(
-                    checked = backupSelf,
-                    onCheckedChange = {
-                        backupSelf = it
-                        AppPrefs.backupSelf = it
                     }
                 )
             }
-        }
+        )
 
         AppearanceSection()
 
-        SectionTitle("日志")
-
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface
-        ) {
-            Column {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(enabled = !exporting) {
-                            exportLogs.launch(LogReport.suggestedFileName())
-                        }
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = if (exporting) "正在导出日志…" else "导出日志",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "用系统文件选择器保存到指定位置，含设备 / 系统 / 版本信息、操作索引与崩溃报告",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+        CardGroup(
+            "日志",
+            { shape ->
+                SettingsCard(
+                    shape = shape,
+                    title = if (exporting) "正在导出日志…" else "导出日志",
+                    subtitle = "用系统文件选择器保存到指定位置，含设备 / 系统 / 版本信息、操作索引与崩溃报告",
+                    onClick = {
+                        if (!exporting) exportLogs.launch(LogReport.suggestedFileName())
                     }
-                }
-
-                HorizontalDivider(
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
                 )
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "详细日志",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "打开后 DEBUG 级日志也写入文件，复现问题时再开",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            { shape ->
+                SettingsCard(
+                    shape = shape,
+                    title = "详细日志",
+                    subtitle = "打开后 DEBUG 级日志也写入文件，复现问题时再开",
+                    trailing = {
+                        Switch(
+                            checked = verboseLog,
+                            onCheckedChange = {
+                                verboseLog = it
+                                AppPrefs.verboseLog = it
+                                AppLog.setVerbose(it)
+                            }
                         )
                     }
-                    Switch(
-                        checked = verboseLog,
-                        onCheckedChange = {
-                            verboseLog = it
-                            AppPrefs.verboseLog = it
-                            AppLog.setVerbose(it)
-                        }
-                    )
-                }
-            }
-        }
-
-        SectionTitle("其他")
-
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface
-        ) {
-            Column {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "从仓库中获取图标",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "从仓库中获取没有安装应用的图标\n推荐关闭",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = fetchIconFromRepo,
-                        onCheckedChange = {
-                            fetchIconFromRepo = it
-                            AppPrefs.fetchIconFromRepo = it
-                            // 关掉时把已经取到的图标也清掉，列表重新加载
-                            AppIconStore.clearAll()
-                            onSettingChanged()
-                        }
-                    )
-                }
-
-                HorizontalDivider(
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
                 )
+            }
+        )
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "启动时检查更新",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "当前版本 ${BuildConfig.APP_VERSION}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline
+        CardGroup(
+            "其他",
+            { shape ->
+                SettingsCard(
+                    shape = shape,
+                    title = "从仓库中获取图标",
+                    subtitle = "从仓库中获取没有安装应用的图标",
+                    hint = "推荐关闭",
+                    trailing = {
+                        Switch(
+                            checked = fetchIconFromRepo,
+                            onCheckedChange = {
+                                fetchIconFromRepo = it
+                                AppPrefs.fetchIconFromRepo = it
+                                // 关掉时把已经取到的图标也清掉，列表重新加载
+                                AppIconStore.clearAll()
+                                onSettingChanged()
+                            }
                         )
                     }
-                    Switch(
-                        checked = checkUpdateOnLaunch,
-                        onCheckedChange = {
-                            checkUpdateOnLaunch = it
-                            AppPrefs.checkUpdateOnLaunch = it
-                        }
-                    )
-                }
+                )
+            },
+            { shape ->
+                SettingsCard(
+                    shape = shape,
+                    title = "启动时检查更新",
+                    subtitle = "启动时查询 GitHub 最新 Release",
+                    trailing = {
+                        Switch(
+                            checked = checkUpdateOnLaunch,
+                            onCheckedChange = {
+                                checkUpdateOnLaunch = it
+                                AppPrefs.checkUpdateOnLaunch = it
+                            }
+                        )
+                    }
+                )
+            },
+            { shape ->
+                SettingsCard(
+                    shape = shape,
+                    title = "关于",
+                    subtitle = "当前版本 ${BuildConfig.APP_VERSION} · 开发者与开源声明",
+                    onClick = onOpenAbout
+                )
             }
-        }
+        )
     }
 
     if (showCleanConfirm) {
@@ -471,14 +329,4 @@ fun SettingsContent(
         PruneProgressDialog()
     }
 
-}
-
-@Composable
-internal fun SectionTitle(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = 4.dp, top = 12.dp, bottom = 6.dp)
-    )
 }
