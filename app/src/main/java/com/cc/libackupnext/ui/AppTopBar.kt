@@ -58,11 +58,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.ui.theme.IconSlotWidth
-import com.cc.libackupnext.ui.theme.actionGroupWidthTarget
+import com.cc.libackupnext.ui.theme.actionGroupWidthContinuous
 import com.cc.libackupnext.ui.theme.SearchBarDurationMs
+import com.cc.libackupnext.ui.theme.SearchButtonHideMs
 import com.cc.libackupnext.ui.theme.collapseHorizontally
 import com.cc.libackupnext.ui.theme.eraseToRight
-import com.cc.libackupnext.ui.theme.pushOutToRight
 import com.cc.libackupnext.ui.theme.rememberActionGroupWidth
 import com.cc.libackupnext.ui.theme.rememberEraseProgress
 import com.cc.libackupnext.ui.theme.rememberMiddleButtonEndPadding
@@ -237,8 +237,11 @@ fun AppTopBar(
         }
     }
 
-    // 搜索按钮一律在自己槽位内擦除
-    val searchOpenErase by rememberEraseProgress(visible = !isSearching)
+    // 搜索按钮一律在自己槽位内擦除，跟随更多按钮一起 750ms
+    val searchOpenErase by rememberEraseProgress(
+        visible = !isSearching,
+        durationMs = SearchButtonHideMs
+    )
     val searchErase = searchWeight?.let { weight -> weight() * searchOpenErase }
 
     val userAnimated by rememberEraseProgress(visible = showUserButton)
@@ -266,7 +269,7 @@ fun AppTopBar(
     val middleButtonEndPadding by rememberMiddleButtonEndPadding(isSearching)
     // 搜索态更多按钮被推走，只剩中间按钮；中间按钮本身也可能被擦除（设置 / 系统页
     // 权重为 0），这时仍要留一段尾部边距，否则搜索框会顶到屏幕边、和列表不对齐。
-    // 连续模式直接用跟手权重，非连续模式按 showMiddleButton 走 200ms 动画。
+    // 连续模式直接用跟手权重，非连续模式按 showMiddleButton 走定时动画。
     val middleVisible = (middleWeightValue ?: (if (showMiddleButton) 1f else 0f))
         .coerceIn(0f, 1f)
     val actionGroupWidthAnimated by rememberActionGroupWidth(
@@ -275,8 +278,9 @@ fun AppTopBar(
         moreVisible = if (hasMoreMenu) 1f else 0f
     )
     val actionGroupWidth = if (middleWeightValue != null) {
-        // 连续模式逐帧跟手，不补 200ms 动画
-        actionGroupWidthTarget(isSearching, middleVisible, moreErase)
+        // 连续模式逐帧跟手；搜索栏开合这一段跟着 middleButtonEndPadding 走，
+        // 用户按钮（贴着容器左边缘）和排序按钮一起右移一个图标位
+        actionGroupWidthContinuous(middleVisible, moreErase, middleButtonEndPadding)
     } else {
         actionGroupWidthAnimated
     }
@@ -507,20 +511,19 @@ fun AppTopBar(
                     .width(actionGroupWidth)
                     .height(48.dp)
             ) {
-                // 更多按钮：被搜索栏推走
+                // 更多按钮：搜索弹出时和搜索按钮一样在槽内擦除消失（不再向右推出）
                 Box(
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .pushOutToRight(enabled = true, push = searchBarProgress)
+                    modifier = Modifier.align(Alignment.CenterEnd)
                 ) {
                     IconButton(
                         onClick = {
                             viewModel?.let { it.isMoreMenuExpanded.value = true }
                         },
-                        // 菜单空了就整体擦除：宽度收到 0、内容淡出，和搜索按钮同一套
+                        // 菜单空 / 搜索弹出时都整体擦除：宽度收到 0、内容淡出，和搜索按钮同一套。
+                        // 两处权重相乘：任一为 0 就收起。
                         modifier = Modifier
                             .align(Alignment.CenterEnd)
-                            .eraseToRight(moreErase, fade = true, fly = false)
+                            .eraseToRight(moreErase * searchOpenErase, fade = true, fly = false)
                     ) {
                         // 有未完成批次时呼吸闪红，没完成时保持原本图标色
                         val pulse = rememberPendingRetryPulse(onRetryPending != null)

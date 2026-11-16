@@ -58,6 +58,7 @@ import com.cc.libackupnext.ui.dialog.PendingRetryDialog
 import com.cc.libackupnext.ui.HomeTab
 import com.cc.libackupnext.ui.MainViewModel
 import com.cc.libackupnext.ui.SortMenuExtra
+import com.cc.libackupnext.ui.theme.TabScrollDurationMs
 import com.cc.libackupnext.ui.theme.pageTransitionSpec
 import com.cc.libackupnext.ui.util.countText
 import com.cc.libackupnext.ui.util.sortTimeLabel
@@ -166,7 +167,10 @@ fun AppListScreen(
         if (pagerState.currentPage != tab.ordinal) {
             programmaticScroll = true
             try {
-                pagerState.animateScrollToPage(tab.ordinal)
+                pagerState.animateScrollToPage(
+                    tab.ordinal,
+                    animationSpec = tween(TabScrollDurationMs)
+                )
             } finally {
                 programmaticScroll = false
             }

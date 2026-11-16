@@ -46,8 +46,7 @@ import com.cc.libackupnext.data.FolderPickerLauncher
 import com.cc.libackupnext.data.FolderPickerMode
 import com.cc.libackupnext.data.RemoteRepo
 import com.cc.libackupnext.service.RcloneClient
-import com.cc.libackupnext.service.RusticClient
-import com.cc.libackupnext.ui.theme.SearchBarDurationMs
+import com.cc.libackupnext.ui.theme.WelcomeTransitionMs
 import com.cc.libackupnext.ui.theme.dialogContainer
 import com.cc.libackupnext.ui.theme.rootCardGrantedBackground
 import com.cc.libackupnext.ui.theme.rootCardGrantedTextColor
@@ -158,13 +157,13 @@ fun WelcomeScreen(
                 AnimatedVisibility(
                     visible = isLocal,
                     enter = expandVertically(
-                        animationSpec = tween(SearchBarDurationMs),
+                        animationSpec = tween(WelcomeTransitionMs),
                         expandFrom = Alignment.Top
-                    ) + fadeIn(animationSpec = tween(SearchBarDurationMs)),
+                    ) + fadeIn(animationSpec = tween(WelcomeTransitionMs)),
                     exit = shrinkVertically(
-                        animationSpec = tween(SearchBarDurationMs),
+                        animationSpec = tween(WelcomeTransitionMs),
                         shrinkTowards = Alignment.Top
-                    ) + slideOutVertically(animationSpec = tween(SearchBarDurationMs)) { -it / 3 } +
+                    ) + slideOutVertically(animationSpec = tween(WelcomeTransitionMs)) { -it / 3 } +
                             fadeOut(animationSpec = tween(200))
                 ) {
                     Surface(
@@ -323,7 +322,9 @@ fun WelcomeScreen(
                             Spacer(modifier = Modifier.height(10.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 LoadingIndicator(
-                                    modifier = Modifier.width(18.dp).height(18.dp),
+                                    modifier = Modifier
+                                        .width(18.dp)
+                                        .height(18.dp),
                                     color = accentColor
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
