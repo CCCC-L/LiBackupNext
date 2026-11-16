@@ -31,8 +31,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.data.RemoteRepo
-import com.cc.libackupnext.data.RepoAuth
-import com.cc.libackupnext.data.RepoProtocol
+import com.cc.libackupnext.data.protocol.RepoField
+import com.cc.libackupnext.data.protocol.RepoProtocols
 import com.cc.libackupnext.ui.theme.fieldDisabledBackground
 import com.cc.libackupnext.ui.theme.fieldDisabledLabelColor
 import com.cc.libackupnext.ui.theme.fieldDisabledTextColor
@@ -42,10 +42,11 @@ import com.cc.libackupnext.ui.theme.warningTextColor
 /**
  * 仓库配置表单（本地 / 远程共用一个窗口，不再左右滑动切换）。
  *
- * 服务协议里就包含「本地」：选本地只显示目录 + rustic 密码；选远程才显示地址、
- * 认证方式、凭据和远程路径。名称默认跟随协议名，切换协议由 [RemoteRepo.switchedTo]
- * 统一处理（用户改过的名称会保留）。
- * 字段块、密码框、提示条在两种协议间完全复用；测试连接的结果由调用方内联显示。
+ * 协议里就包含「本地」：选本地只显示目录 + rustic 密码；选远程才显示协议声明的
+ * 字段、远程路径和测试连接。协议字段由 [com.cc.libackupnext.data.protocol.RepoProtocol.fields]
+ * 声明，这里只按类型渲染控件，不认识任何具体协议 —— 新增协议不用改这个文件。
+ * 名称默认跟随协议名，切换协议由 [RemoteRepo.switchedTo] 统一处理（用户改过的名称会保留）。
+ * 测试连接的结果由调用方内联显示。
  */
 @Composable
 fun RepoSetupForm(
@@ -68,10 +69,8 @@ fun RepoSetupForm(
 ) {
     val colors = MaterialTheme.colorScheme
     var showProtocols by remember { mutableStateOf(false) }
-    var showAuths by remember { mutableStateOf(false) }
-    val isLocal = repo.protocol.isLocal
-    val authOptions = repo.protocol.authOptions()
-    val effectiveAuth = repo.effectiveAuth()
+    val protocol = repo.protocol
+    val isLocal = protocol.isLocal
     val passwordsMatch = password.isNotBlank() && password == confirmPassword
 
     Column(modifier = modifier.fillMaxWidth()) {
@@ -84,7 +83,7 @@ fun RepoSetupForm(
                     onClick = { if (enabled) showProtocols = true }
                 ) {
                     Text(
-                        text = repo.protocol.label,
+                        text = protocol.label,
                         style = MaterialTheme.typography.bodyLarge,
                         color = if (enabled) colors.onSurface else colors.fieldDisabledTextColor,
                         maxLines = 1
@@ -94,12 +93,12 @@ fun RepoSetupForm(
                     expanded = showProtocols,
                     onDismissRequest = { showProtocols = false }
                 ) {
-                    RepoProtocol.entries.forEach { protocol ->
+                    RepoProtocols.all.forEach { candidate ->
                         DropdownMenuItem(
-                            text = { Text(protocol.label) },
+                            text = { Text(candidate.label) },
                             enabled = enabled,
                             onClick = {
-                                onRepoChange(repo.switchedTo(protocol))
+                                onRepoChange(repo.switchedTo(candidate))
                                 showProtocols = false
                             }
                         )
@@ -116,9 +115,8 @@ fun RepoSetupForm(
             )
         }
 
-        Spacer(Modifier.height(10.dp))
-
         if (isLocal) {
+            Spacer(Modifier.height(10.dp))
             FieldSurface(label = "仓库目录", enabled = enabled, onClick = onPickFolder) {
                 Text(
                     text = repo.path.ifBlank { "点击选择目录" },
@@ -133,116 +131,47 @@ fun RepoSetupForm(
                 )
             }
         } else {
-            InputField(
-                label = if (repo.protocol == RepoProtocol.WEBDAV) "服务地址（URL）" else "地址（地址:端口）",
-                value = repo.host,
-                onValueChange = { onRepoChange(repo.copy(host = it)) },
-                enabled = enabled,
-                placeholder = when (repo.protocol) {
-                    RepoProtocol.WEBDAV ->
-                        if (repo.insecure) "http://192.168.1.10:8080/dav"
-                        else "https://example.com/dav"
-
-                    RepoProtocol.SFTP -> "192.168.1.10:22"
-                    RepoProtocol.SMB -> "192.168.1.10:445"
-                    RepoProtocol.LOCAL -> "地址"
-                }
-            )
-
-            // WebDAV 专用：明文 http + 跳过证书校验。标志会在 Rust 侧从 inline
-            // 配置里剥离，转成 rclone RC 的 no_check_certificate 全局参数。
-            if (repo.protocol == RepoProtocol.WEBDAV) {
+            // 协议自己声明的字段：顺序、占位符、凭据显隐都由协议文件决定
+            protocol.fields(repo).forEach { field ->
                 Spacer(Modifier.height(10.dp))
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = MaterialTheme.shapes.medium,
-                    color = if (enabled) colors.surfaceContainerHigh
-                    else colors.fieldDisabledBackground
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                text = "允许不安全的服务",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = if (enabled) colors.onSurface
-                                else colors.fieldDisabledTextColor
-                            )
-                            Text(
-                                text = "允许 http 明文连接，并跳过自签名 / 过期证书校验",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (enabled) colors.onSurfaceVariant
-                                else colors.fieldDisabledLabelColor
-                            )
-                        }
-                        Switch(
-                            checked = repo.insecure,
-                            onCheckedChange = { onRepoChange(repo.copy(insecure = it)) },
+                when (field) {
+                    is RepoField.Text -> when {
+                        field.secret -> RepoPasswordField(
+                            password = repo[field.id],
+                            onPasswordChange = { onRepoChange(repo.with(field.id, it)) },
+                            enabled = enabled,
+                            label = field.label
+                        )
+
+                        field.multiline -> PemField(
+                            label = field.label,
+                            placeholder = field.placeholder,
+                            value = repo[field.id],
+                            onValueChange = { onRepoChange(repo.with(field.id, it)) },
                             enabled = enabled
                         )
-                    }
-                }
-            }
 
-            // 认证方式紧跟在地址下面；只有多于一种登录方式的协议才显示
-            if (authOptions.size > 1) {
-                Spacer(Modifier.height(10.dp))
-                Box(modifier = Modifier.fillMaxWidth()) {
-                    FieldSurface(
-                        label = "认证方式",
-                        enabled = enabled,
-                        onClick = { if (enabled) showAuths = true }
-                    ) {
-                        Text(
-                            text = effectiveAuth.label,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = if (enabled) colors.onSurface else colors.fieldDisabledTextColor,
-                            maxLines = 1
+                        else -> InputField(
+                            label = field.label,
+                            value = repo[field.id],
+                            onValueChange = { onRepoChange(repo.with(field.id, it)) },
+                            enabled = enabled,
+                            placeholder = field.placeholder
                         )
                     }
-                    DropdownMenu(
-                        expanded = showAuths,
-                        onDismissRequest = { showAuths = false }
-                    ) {
-                        authOptions.forEach { auth ->
-                            DropdownMenuItem(
-                                text = { Text(auth.label) },
-                                enabled = enabled,
-                                onClick = {
-                                    onRepoChange(repo.copy(auth = auth))
-                                    showAuths = false
-                                }
-                            )
-                        }
-                    }
-                }
-            }
 
-            // 凭据区按登录方式显隐：来宾 / 匿名不需要账号密码，公钥用 PEM 代替密码
-            if (effectiveAuth != RepoAuth.GUEST && effectiveAuth != RepoAuth.ANONYMOUS) {
-                Spacer(Modifier.height(10.dp))
-                InputField(
-                    label = "用户名",
-                    value = repo.user,
-                    onValueChange = { onRepoChange(repo.copy(user = it)) },
-                    enabled = enabled,
-                    placeholder = "用户名"
-                )
-                Spacer(Modifier.height(10.dp))
-                when (effectiveAuth) {
-                    RepoAuth.PUBLIC_KEY -> PemField(
-                        value = repo.privateKey,
-                        onValueChange = { onRepoChange(repo.copy(privateKey = it)) },
-                        enabled = enabled
+                    is RepoField.Select -> SelectField(
+                        field = field,
+                        value = repo[field.id],
+                        enabled = enabled,
+                        onSelect = { onRepoChange(repo.with(field.id, it)) }
                     )
 
-                    else -> RepoPasswordField(
-                        password = repo.password,
-                        onPasswordChange = { onRepoChange(repo.copy(password = it)) },
+                    is RepoField.Toggle -> ToggleField(
+                        field = field,
+                        checked = repo.flag(field.id),
                         enabled = enabled,
-                        label = "服务密码"
+                        onCheckedChange = { onRepoChange(repo.setFlag(field.id, it)) }
                     )
                 }
             }
@@ -289,7 +218,7 @@ fun RepoSetupForm(
             )
         }
         Spacer(Modifier.height(6.dp))
-        PasswordWarning("请牢记 rustic 仓库密码，丢失后无法恢复备份。")
+        PasswordWarning()
 
         if (showActions) {
             Spacer(Modifier.height(12.dp))
@@ -400,6 +329,88 @@ private fun InputField(
     }
 }
 
+/** 下拉字段（目前只有认证方式用），选项由协议声明。 */
+@Composable
+private fun SelectField(
+    field: RepoField.Select,
+    value: String,
+    enabled: Boolean,
+    onSelect: (String) -> Unit
+) {
+    val colors = MaterialTheme.colorScheme
+    var expanded by remember(field.id) { mutableStateOf(false) }
+    // 存的 key 不被支持时和业务侧一样回落到第一项，别显示成空
+    val selected = field.options.firstOrNull { it.key == value } ?: field.options.firstOrNull()
+    Box(modifier = Modifier.fillMaxWidth()) {
+        FieldSurface(
+            label = field.label,
+            enabled = enabled,
+            onClick = { if (enabled) expanded = true }
+        ) {
+            Text(
+                text = selected?.label.orEmpty(),
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (enabled) colors.onSurface else colors.fieldDisabledTextColor,
+                maxLines = 1
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            field.options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.label) },
+                    enabled = enabled,
+                    onClick = {
+                        onSelect(option.key)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+/** 带说明的开关行，例如 WebDAV 的「允许不安全的服务」。 */
+@Composable
+private fun ToggleField(
+    field: RepoField.Toggle,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        color = if (enabled) colors.surfaceContainerHigh else colors.fieldDisabledBackground
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = field.label,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (enabled) colors.onSurface else colors.fieldDisabledTextColor
+                )
+                Text(
+                    text = field.hint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (enabled) colors.onSurfaceVariant else colors.fieldDisabledLabelColor
+                )
+            }
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                enabled = enabled
+            )
+        }
+    }
+}
+
 /** 服务密码和 rustic 仓库密码共用同一个密码框组件，只是标签不同。 */
 @Composable
 private fun RepoPasswordField(
@@ -424,6 +435,8 @@ private fun RepoPasswordField(
 /** 粘贴 PEM 私钥的多行输入框；值原样保存，service 层下发 inline 配置时才转成单行。 */
 @Composable
 private fun PemField(
+    label: String,
+    placeholder: String,
     value: String,
     onValueChange: (String) -> Unit,
     enabled: Boolean
@@ -436,7 +449,7 @@ private fun PemField(
     ) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
             Text(
-                text = "私钥（PEM）",
+                text = label,
                 style = MaterialTheme.typography.labelSmall,
                 color = if (enabled) colors.onSurfaceVariant else colors.fieldDisabledLabelColor
             )
@@ -455,9 +468,9 @@ private fun PemField(
                 decorationBox = { inner ->
                     Box {
                         inner()
-                        if (value.isEmpty()) {
+                        if (value.isEmpty() && placeholder.isNotEmpty()) {
                             Text(
-                                text = "粘贴未加密的 PEM 私钥\n-----BEGIN … PRIVATE KEY-----",
+                                text = placeholder,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = colors.onSurfaceVariant
                             )

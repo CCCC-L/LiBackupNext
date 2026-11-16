@@ -131,22 +131,6 @@ object AppPrefs {
     val currentRepoAddress: String
         get() = savedRepos.firstOrNull { it.location == repoPath }?.address ?: repoPath
 
-    /**
-     * 老版本升级兜底：清单为空但已经有当前仓库时，把它补成一条记录，
-     * 免得新页面一片空白。远程配置找不回来就不补，避免留下一条连不上的坏记录。
-     */
-    fun ensureCurrentRepoRecorded() {
-        if (savedRepos.isNotEmpty() || !hasRepository()) return
-        val location = repoPath
-        val remote = if (isRemote) {
-            remoteRepos.firstOrNull { location.startsWith("remote:${it.id}:") }
-        } else {
-            null
-        }
-        if (isRemote && remote == null) return
-        addSavedRepo(SavedRepo.of(location, repoPassword, remote))
-    }
-
     // ==================== 更新检查 ====================
 
     /** 每次启动应用时查询 GitHub 最新 Release；默认开启。 */

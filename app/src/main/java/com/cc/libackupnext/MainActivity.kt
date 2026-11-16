@@ -163,11 +163,6 @@ private fun AppRoot(crashRecovery: Boolean) {
         granted
     }
 
-    // 老版本升级：清单为空但已有当前仓库时补一条，避免「已添加仓库」页一片空白
-    LaunchedEffect(Unit) {
-        AppPrefs.ensureCurrentRepoRecorded()
-    }
-
     LaunchedEffect(Unit) {
         acquireRoot()
         isChecking = false

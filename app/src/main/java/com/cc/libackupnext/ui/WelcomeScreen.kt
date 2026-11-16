@@ -45,7 +45,6 @@ import androidx.compose.ui.unit.sp
 import com.cc.libackupnext.data.FolderPickerLauncher
 import com.cc.libackupnext.data.FolderPickerMode
 import com.cc.libackupnext.data.RemoteRepo
-import com.cc.libackupnext.data.RepoProtocol
 import com.cc.libackupnext.service.RcloneClient
 import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.ui.theme.SearchBarDurationMs
@@ -85,7 +84,7 @@ fun WelcomeScreen(
 
     // 本地 / 远程共用一份配置，协议在服务协议下拉里切换，不再左右滑动分页
     var repo by remember {
-        mutableStateOf(RemoteRepo(protocol = RepoProtocol.LOCAL, path = rusticPath))
+        mutableStateOf(RemoteRepo(path = rusticPath))
     }
     var testing by remember { mutableStateOf(false) }
     // 测试连接失败的原因：内联显示在表单下方，不再用 Toast

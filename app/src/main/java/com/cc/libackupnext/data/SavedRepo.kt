@@ -1,5 +1,7 @@
 package com.cc.libackupnext.data
 
+import com.cc.libackupnext.data.protocol.LocalProtocol
+
 /**
  * 已添加的仓库记录：本地和远程共用一份清单。
  *
@@ -23,28 +25,12 @@ data class SavedRepo(
      * 不暴露 `remote:<id>:<path>` 这种内部逻辑标识。绝不带密码或私钥。
      */
     val address: String
-        get() {
-            val r = remote ?: return location
-            val rawHost = r.host.trim().trimEnd('/')
-            val base = when (r.protocol) {
-                RepoProtocol.LOCAL -> return location
-                // WebDAV 的地址可能已经带上了 scheme，别重复补
-                RepoProtocol.WEBDAV ->
-                    if (rawHost.contains("://")) rawHost
-                    else "${if (r.insecure) "http" else "https"}://$rawHost"
-                // 用户可能填了 sftp://host:22，先去掉再补当前协议的 scheme
-                RepoProtocol.SFTP -> "sftp://${rawHost.substringAfter("://")}"
-                RepoProtocol.SMB -> "smb://${rawHost.substringAfter("://")}"
-            }
-            val path = r.path.trim().trimStart('/')
-            return if (path.isBlank()) base else "${base.trimEnd('/')}/$path"
-        }
+        get() = remote?.let { it.protocol.address(it) } ?: location
 
     /** 编辑弹窗的表单初值：远程直接还原，本地按目录构造一份 LOCAL 配置。 */
     fun toForm(): RemoteRepo = remote ?: RemoteRepo(
         id = id,
-        name = name.ifBlank { RepoProtocol.LOCAL.defaultName },
-        protocol = RepoProtocol.LOCAL,
+        name = name.ifBlank { LocalProtocol.defaultName },
         path = location
     )
 
@@ -60,7 +46,7 @@ data class SavedRepo(
             name = when {
                 name.isNotBlank() -> name
                 remote != null -> remote.name.ifBlank { remote.protocol.label }
-                else -> RepoProtocol.LOCAL.defaultName
+                else -> LocalProtocol.defaultName
             },
             location = location,
             password = password,
