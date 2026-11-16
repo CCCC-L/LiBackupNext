@@ -50,21 +50,21 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 
 // ---- 动画时长常量（集中管理，方便统一调整） ----
-private const val ERASE_DURATION_MS = 800L
+private const val ERASE_DURATION_MS = 300L
 /**
  * 搜索栏弹出 / 收起时，按钮右移一个图标位的时长。
  * 用户按钮和排序按钮共用这一个 tween，两处同时起步、同时到位。
  */
-private const val POSITION_DURATION_MS = 750L
+private const val POSITION_DURATION_MS = 250L
 /** 搜索栏展开 / 收缩的时长；顶栏等它收完再弹键盘也用这个值。 */
-const val SearchBarDurationMs = 800
+const val SearchBarDurationMs = 300
 /** 搜索栏弹出时：搜索图标、更多按钮在槽内擦除消失的时长（比搜索栏本身略快）。 */
-const val SearchButtonHideMs = 750
+const val SearchButtonHideMs = 250
 /** 引导页 Root 卡片转场时长。 */
 const val WelcomeTransitionMs = 300
 /** 点击底栏切页签时，Pager 滚动到目标页的时长。 */
-const val TabScrollDurationMs = 800
-private const val PAGE_TRANSITION_DURATION_MS = 800
+const val TabScrollDurationMs = 300
+private const val PAGE_TRANSITION_DURATION_MS = 300
 private const val ROW_COLOR_DURATION_MS = 180
 /** 未完成批次的闪红呼吸周期（单程）。 */
 private const val PENDING_RETRY_PULSE_DURATION_MS = 500
