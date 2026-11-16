@@ -222,6 +222,7 @@ fun AboutScreen(
                         shape = shape,
                         title = "当前版本",
                         subtitle = "${BuildConfig.APP_VERSION}-$buildType ($versionCode)",
+                        onClick = { checkUpdate() },
                         trailing = {
                             Surface(
                                 shape = MaterialTheme.shapes.medium,
