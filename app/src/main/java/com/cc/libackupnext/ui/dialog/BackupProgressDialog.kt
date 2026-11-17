@@ -8,12 +8,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
-import com.cc.libackupnext.ui.theme.dialogContainer
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -23,16 +20,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.cc.libackupnext.data.BackupStep
 import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.BackupStepStatus
 import com.cc.libackupnext.service.RusticClient
+import com.cc.libackupnext.ui.component.AppSurfaceDialog
 import com.cc.libackupnext.util.AppLog
 
 /**
@@ -68,108 +64,95 @@ fun BackupProgressDialog(
     /** 远程仓库连接中断：弹窗内改标题 + 一行红色提示。 */
     connectionInterrupted: Boolean = false
 ) {
-    Dialog(
+    AppSurfaceDialog(
         onDismissRequest = { /* 运行过程中不允许关闭 */ },
         properties = DialogProperties(
             dismissOnBackPress = false,
             dismissOnClickOutside = false
-        )
+        ),
+        title = when {
+            connectionInterrupted -> "远程仓库连接中断"
+            !running && error == null -> doneTitle
+            else -> title
+        }
     ) {
-        Surface(
-            shape = MaterialTheme.shapes.extraLarge,
-            color = MaterialTheme.colorScheme.dialogContainer
+        Text(text = subtitle, style = MaterialTheme.typography.bodySmall)
+
+        // 步骤多的时候滚动，新加的一段自动滚到底
+        val scrollState = rememberScrollState()
+
+        // 是否贴着底部。默认跟随；用户手动往上翻看历史后就停止跟随
+        var stickToBottom by remember { mutableStateOf(true) }
+
+        // 只在「用户自己滑动结束」时更新状态，避免程序滚动和内容变高互相打架
+        LaunchedEffect(scrollState) {
+            snapshotFlow { scrollState.isScrollInProgress }.collect { dragging ->
+                if (!dragging) {
+                    stickToBottom = scrollState.value >= scrollState.maxValue - 16
+                }
+            }
+        }
+
+        // 内容变高（新的一段进来）时，贴着底部才跟着滚
+        LaunchedEffect(scrollState.maxValue) {
+            if (stickToBottom) scrollState.scrollTo(scrollState.maxValue)
+        }
+        Column(
+            modifier = Modifier
+                // 撑满宽度：文字右边的空白区域也能拖动滚动
+                .fillMaxWidth()
+                .heightIn(max = 320.dp)
+                .verticalScroll(scrollState)
         ) {
-            Column(modifier = Modifier.padding(24.dp)) {
-                Text(
-                    text = when {
-                        connectionInterrupted -> "远程仓库连接中断"
-                        !running && error == null -> doneTitle
-                        else -> title
-                    },
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Text(text = subtitle, style = MaterialTheme.typography.bodySmall)
-
-                // 步骤多的时候滚动，新加的一段自动滚到底
-                val scrollState = rememberScrollState()
-
-                // 是否贴着底部。默认跟随；用户手动往上翻看历史后就停止跟随
-                var stickToBottom by remember { mutableStateOf(true) }
-
-                // 只在「用户自己滑动结束」时更新状态，避免程序滚动和内容变高互相打架
-                LaunchedEffect(scrollState) {
-                    snapshotFlow { scrollState.isScrollInProgress }.collect { dragging ->
-                        if (!dragging) {
-                            stickToBottom = scrollState.value >= scrollState.maxValue - 16
-                        }
-                    }
-                }
-
-                // 内容变高（新的一段进来）时，贴着底部才跟着滚
-                LaunchedEffect(scrollState.maxValue) {
-                    if (stickToBottom) scrollState.scrollTo(scrollState.maxValue)
-                }
-                Column(
-                    modifier = Modifier
-                        // 撑满宽度：文字右边的空白区域也能拖动滚动
-                        .fillMaxWidth()
-                        .heightIn(max = 320.dp)
-                        .verticalScroll(scrollState)
-                ) {
-                    sections.forEach { section ->
-                        if (section.title.isNotBlank()) {
-                            Text(
-                                text = section.title,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                        section.steps
-                            .filter { it.status != BackupStepStatus.WAITING }
-                            .forEach { step ->
-                                Text(
-                                    text = "${backupStepTitle(step.kind, isRestore)}:" +
-                                            backupStepStatusText(step),
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                if (step.status == BackupStepStatus.SKIPPED &&
-                                    step.reason.isNotBlank()
-                                ) {
-                                    Text(
-                                        text = step.reason,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                    }
-                }
-
-                if (connectionInterrupted || error != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
+            sections.forEach { section ->
+                if (section.title.isNotBlank()) {
                     Text(
-                        text = if (connectionInterrupted) {
-                            RusticClient.REMOTE_INTERRUPTED_MESSAGE
-                        } else {
-                            error.orEmpty()
-                        },
+                        text = section.title,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
+                        fontWeight = FontWeight.SemiBold
                     )
                 }
-
-                Spacer(modifier = Modifier.height(16.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    TextButton(onClick = onDismiss, enabled = !running) {
-                        Text("关闭")
+                section.steps
+                    .filter { it.status != BackupStepStatus.WAITING }
+                    .forEach { step ->
+                        Text(
+                            text = "${backupStepTitle(step.kind, isRestore)}:" +
+                                    backupStepStatusText(step),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        if (step.status == BackupStepStatus.SKIPPED &&
+                            step.reason.isNotBlank()
+                        ) {
+                            Text(
+                                text = step.reason,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
-                }
+            }
+        }
+
+        if (connectionInterrupted || error != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = if (connectionInterrupted) {
+                    RusticClient.REMOTE_INTERRUPTED_MESSAGE
+                } else {
+                    error.orEmpty()
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
+            TextButton(onClick = onDismiss, enabled = !running) {
+                Text("关闭")
             }
         }
     }

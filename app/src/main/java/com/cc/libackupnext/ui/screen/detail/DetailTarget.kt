@@ -6,10 +6,10 @@ import androidx.compose.ui.Modifier
 import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.ui.dialog.ItemAction
-import com.cc.libackupnext.ui.util.AppView
-import com.cc.libackupnext.ui.util.DirView
-import com.cc.libackupnext.ui.util.SystemView
-import com.cc.libackupnext.ui.util.TargetView
+import com.cc.libackupnext.ui.component.AppView
+import com.cc.libackupnext.ui.component.DirView
+import com.cc.libackupnext.ui.component.SystemView
+import com.cc.libackupnext.ui.component.TargetView
 
 /**
  * 详情页展示的一个「目标」：应用、文件夹、Wi-Fi / 联系人 / 通话记录。

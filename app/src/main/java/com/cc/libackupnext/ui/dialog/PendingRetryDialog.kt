@@ -1,13 +1,10 @@
 package com.cc.libackupnext.ui.dialog
 
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -19,8 +16,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import com.cc.libackupnext.ui.theme.dialogContainer
+import com.cc.libackupnext.ui.component.AppSurfaceDialog
 import kotlinx.coroutines.delay
 
 /** 和 [rememberDoubleClickGuard] 的默认窗口保持一致：过了这个时间待确认态就复位。 */
@@ -45,46 +41,36 @@ fun PendingRetryDialog(
 ) {
     val discardGuard = rememberDoubleClickGuard()
     // 点外部 / 返回键等同「取消」：什么都不做，回到上一层
-    Dialog(onDismissRequest = onCancel) {
-        Surface(
-            shape = MaterialTheme.shapes.extraLarge,
-            color = MaterialTheme.colorScheme.dialogContainer
-        ) {
-            Column(modifier = Modifier.padding(24.dp)) {
-                Text(
-                    text = "是否继续未完成的任务",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = "上次有 $count 项未完成。已成功的内容不会重复执行；" +
-                            "放弃只会清空待办，不会删除已备份或已恢复的内容。",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Row(modifier = Modifier.fillMaxWidth()) {
-                    TextButton(
-                        onClick = {
-                            if (discardGuard.consume("discard")) {
-                                onDiscard()
-                            }
-                        }
-                    ) {
-                        Text(
-                            text = "放弃",
-                            color = MaterialTheme.colorScheme.error,
-                            fontWeight =FontWeight.Medium
-                        )
-                    }
-                    Spacer(modifier = Modifier.weight(1f))
-                    TextButton(onClick = onCancel) {
-                        Text("取消")
-                    }
-                    TextButton(onClick = onContinue) {
-                        Text("继续")
+    AppSurfaceDialog(
+        onDismissRequest = onCancel,
+        title = "是否继续未完成的任务"
+    ) {
+        Text(
+            text = "上次有 $count 项未完成。已成功的内容不会重复执行；" +
+                    "放弃只会清空待办，不会删除已备份或已恢复的内容。",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            TextButton(
+                onClick = {
+                    if (discardGuard.consume("discard")) {
+                        onDiscard()
                     }
                 }
+            ) {
+                Text(
+                    text = "放弃",
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+            Spacer(modifier = Modifier.weight(1f))
+            TextButton(onClick = onCancel) {
+                Text("取消")
+            }
+            TextButton(onClick = onContinue) {
+                Text("继续")
             }
         }
     }

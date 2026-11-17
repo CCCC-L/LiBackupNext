@@ -1,4 +1,4 @@
-package com.cc.libackupnext.ui.util
+package com.cc.libackupnext.ui.form
 
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures

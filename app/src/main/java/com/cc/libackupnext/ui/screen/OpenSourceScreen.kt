@@ -23,7 +23,9 @@ import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.data.openSourceLibs
 import com.cc.libackupnext.ui.AppTopBar
 import com.cc.libackupnext.ui.PageContentHorizontalPadding
-import com.cc.libackupnext.ui.util.GroupVerticalSpacing
+import com.cc.libackupnext.ui.component.GroupVerticalSpacing
+import com.cc.libackupnext.ui.component.SettingsCard
+import com.cc.libackupnext.ui.component.cardGroup
 import com.cc.libackupnext.util.AppLog
 
 /**

@@ -29,7 +29,9 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.ui.dialog.AppOptionsMenu
-import com.cc.libackupnext.ui.util.dimmedWhen
+import com.cc.libackupnext.ui.component.RowTone
+import com.cc.libackupnext.ui.component.dimmedWhen
+import com.cc.libackupnext.ui.component.rowTitleColor
 
 /**
  * 详情页头部：图标 + 名称 / 副标题 / 版本 + 右侧「备份」按钮。
@@ -78,8 +80,9 @@ fun DetailHeader(
                             text = target.title,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = target.view.titleColor
-                                ?: MaterialTheme.colorScheme.onSurface,
+                            color = rowTitleColor(
+                                if (target.isUninstalled) RowTone.Missing else target.view.tone
+                            ),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             textDecoration = if (target.isUninstalled) {

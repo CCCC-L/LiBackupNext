@@ -1,18 +1,14 @@
 package com.cc.libackupnext.ui.dialog
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.MaterialTheme
-import com.cc.libackupnext.ui.theme.dialogContainer
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.cc.libackupnext.ui.component.AppDialog
 
 /**
  * 帮助弹窗，详情页和批量页共用。
@@ -27,22 +23,19 @@ fun BackupHelpDialog(
     lines: List<String>,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
-        containerColor = MaterialTheme.colorScheme.dialogContainer,
-        onDismissRequest = onDismiss,
-        title = { Text("帮助") },
-        text = {
-            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                lines.forEachIndexed { index, line ->
-                    if (index > 0) Spacer(modifier = Modifier.height(8.dp))
-                    Text(line)
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("确定")
-            }
+    AppDialog(
+        title = "帮助",
+        onDismiss = onDismiss,
+        confirmText = "确定",
+        onConfirm = onDismiss,
+        dismissText = null
+    ) {
+        // 单独一层 Column：AppDialog 的内容槽没有 modifier 参数，滚动要挂在自己的容器上
+        Column(
+            modifier = Modifier.verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            lines.forEach { line -> Text(line) }
         }
-    )
+    }
 }

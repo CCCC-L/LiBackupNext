@@ -23,7 +23,7 @@ import com.cc.libackupnext.util.AppLog
  * 文件页：列出要备份的目录。
  *
  * 默认 4 个（DCIM / Download / Music / Pictures），右下角的圆形按钮打开全屏文件夹选择
- * 弹窗再挑别的目录。点一行进这个目录的「文件信息」页，快照 label 是 `dir:<绝对路径>`。
+ * 弹窗再挑别的目录。点一行进这个目录的「文件信息」页，快照 label 是 `<绝对路径>:dir`。
  */
 @Composable
 fun FileListScreen(

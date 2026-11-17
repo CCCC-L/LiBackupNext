@@ -1,6 +1,7 @@
 package com.cc.libackupnext.ui.dialog
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -8,15 +9,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -27,9 +25,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.cc.libackupnext.ui.component.LoadingRow
 import com.cc.libackupnext.data.AppPrefs
 import com.cc.libackupnext.data.FolderPickerLauncher
 import com.cc.libackupnext.data.FolderPickerMode
@@ -37,8 +36,9 @@ import com.cc.libackupnext.data.RemoteRepo
 import com.cc.libackupnext.data.SavedRepo
 import com.cc.libackupnext.service.RcloneClient
 import com.cc.libackupnext.service.RusticClient
-import com.cc.libackupnext.ui.theme.dialogContainer
-import com.cc.libackupnext.ui.util.RepoSetupForm
+import com.cc.libackupnext.ui.component.AppDialogTitleStyle
+import com.cc.libackupnext.ui.component.AppSurfaceDialog
+import com.cc.libackupnext.ui.form.RepoSetupForm
 import com.cc.libackupnext.util.AppLog
 import kotlinx.coroutines.launch
 
@@ -172,161 +172,161 @@ fun RepoSetupDialog(
     val canSubmit = !isInitializing && !testing &&
             dialogRepo.canInit() && passwordsMatch
 
-    // 表单 + 状态区共用一份固定预算：进度 / 红字按需出现时从预算里扣掉同样高度，
-    // 平时 / 初始化中 / 失败三态等高；不按屏幕尺寸计算。
+    // 表单区高度分两种策略：
+    //   远程仓库字段多（地址 / 端口 / 路径 / 用户名 / 密钥…），420dp 是准的 —— 钉死它，
+    //     让「平时 / 初始化中 / 失败」三态等高，切换状态时弹窗不跳动。
+    //   本地仓库只有 5 块（协议+名称 / 目录 / 密码 / 确认密码 / 提示），420dp 会在按钮上方
+    //     空出一大块，所以本地只封顶不垫底，高度跟着内容走。
+    // 状态块（进度行 / 红字）出现时从这份预算里扣掉同样高度，避免把按钮行挤出屏幕。
+    val isLocalRepo = dialogRepo.protocol.isLocal
     val progressRowHeight = 26.dp
     val errorTextHeight = 72.dp
     val errorBlockHeight = errorTextHeight + 8.dp   // 上下 padding 各 4dp
-    val formHeight = when {
+    val formMaxHeight = when {
         initError != null -> 420.dp - errorBlockHeight   // 340 + 80 = 420
         isInitializing -> 420.dp - progressRowHeight    // 394 + 26 = 420
         else -> 420.dp                                 // 无状态块：420
     }
+    // Dp.Unspecified = 不设下限，本地仓库的表单区因此可以比 420 矮
+    val formMinHeight = if (isLocalRepo) Dp.Unspecified else formMaxHeight
 
     // 初始化中和失败时都保持弹窗，只有成功（onFinished）才关闭；
     // 删除改成双击执行，没有确认弹窗，表单也就不用收起
     val showForm = visible
 
     if (showForm) {
-        Dialog(
+        AppSurfaceDialog(
             onDismissRequest = { if (!isInitializing) onDismiss() },
+            modifier = Modifier
+                .fillMaxWidth()
+                .imePadding(),
             properties = DialogProperties(
                 dismissOnBackPress = true,
                 dismissOnClickOutside = false
-            )
+            ),
+            contentPadding = PaddingValues(vertical = 20.dp)
         ) {
-            Surface(
+            Text(
+                text = if (editing != null) "编辑仓库" else "配置 Rustic 仓库",
+                style = AppDialogTitleStyle,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+            )
+
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .imePadding(),
-                shape = MaterialTheme.shapes.large,
-                color = MaterialTheme.colorScheme.dialogContainer
+                    // 非 weight 子项先测量：按钮行永远先拿到空间，键盘弹出也挤不掉
+                    .weight(1f, fill = false)
+                    // 远程钉死等高、本地只封顶，见 formMinHeight 的注释
+                    .heightIn(min = formMinHeight, max = formMaxHeight)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 24.dp, vertical = 12.dp)
             ) {
-                Column(Modifier.padding(vertical = 20.dp)) {
-                    Text(
-                        text = if (editing != null) "编辑仓库" else "配置 Rustic 仓库",
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
-                    )
+                RepoSetupForm(
+                    repo = dialogRepo,
+                    onRepoChange = {
+                        dialogRepo = it
+                        initError = null
+                    },
+                    password = dialogPassword,
+                    onPasswordChange = {
+                        dialogPassword = it
+                        initError = null
+                    },
+                    confirmPassword = dialogConfirmPassword,
+                    onConfirmPasswordChange = {
+                        dialogConfirmPassword = it
+                        initError = null
+                    },
+                    enabled = !isInitializing,
+                    onPickFolder = pickFolder,
+                    onBrowseRemotePath = browseRemotePath,
+                    onConnectedAction = { action -> runWhenConnected(action) },
+                    isTesting = testing,
+                    onInit = { startInit() },
+                    showActions = false,
+                    pathTextStyle = MaterialTheme.typography.bodyMedium
+                )
+            }
 
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            // 非 weight 子项先测量：按钮行永远先拿到空间，键盘弹出也挤不掉
-                            .weight(1f, fill = false)
-                            // 固定高度（不是上限）：内容不足时预算才真的守恒
-                            .heightIn(min = formHeight, max = formHeight)
-                            .verticalScroll(rememberScrollState())
-                            .padding(horizontal = 24.dp, vertical = 12.dp)
-                    ) {
-                        RepoSetupForm(
-                            repo = dialogRepo,
-                            onRepoChange = {
-                                dialogRepo = it
-                                initError = null
-                            },
-                            password = dialogPassword,
-                            onPasswordChange = {
-                                dialogPassword = it
-                                initError = null
-                            },
-                            confirmPassword = dialogConfirmPassword,
-                            onConfirmPasswordChange = {
-                                dialogConfirmPassword = it
-                                initError = null
-                            },
-                            enabled = !isInitializing,
-                            onPickFolder = pickFolder,
-                            onBrowseRemotePath = browseRemotePath,
-                            onConnectedAction = { action -> runWhenConnected(action) },
-                            isTesting = testing,
-                            onInit = { startInit() },
-                            showActions = false,
-                            pathTextStyle = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-
-                    // 进度按需出现、不常驻：固定高度已计入滚动区预算，弹窗不会被拉长
-                    if (isInitializing) {
-                        Row(
+            // 进度按需出现、不常驻：固定高度已计入滚动区预算，弹窗不会被拉长
+            if (isInitializing) {
+                        LoadingRow(
                             modifier = Modifier
                                 .height(progressRowHeight)
                                 .padding(horizontal = 24.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                            indicatorSize = 18.dp,
+                            spacing = 8.dp
                         ) {
-                            LoadingIndicator(modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = "正在初始化仓库…",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                    }
+            }
 
-                    // 失败原因和按钮同处底部固定区：自身限高滚动，长错误不会把按钮挤出屏幕
-                    initError?.let { message ->
-                        Column(
-                            modifier = Modifier
-                                .padding(horizontal = 24.dp, vertical = 4.dp)
-                                .height(errorTextHeight)
-                                .verticalScroll(rememberScrollState())
-                        ) {
-                            Text(
-                                text = message,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error
-                            )
-                        }
-                    }
+            // 失败原因和按钮同处底部固定区：自身限高滚动，长错误不会把按钮挤出屏幕
+            initError?.let { message ->
+                Column(
+                    modifier = Modifier
+                        .padding(horizontal = 24.dp, vertical = 4.dp)
+                        .height(errorTextHeight)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
 
-                    // 底部按钮行：编辑时删除固定在最左边
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (editing != null) {
-                            TextButton(
-                                onClick = {
-                                    if (isCurrent) {
-                                        AppLog.toastOnMain("当前仓库不可删除，请先切换到其它仓库")
-                                    } else if (deleteGuard.consume("delete-repo")) {
-                                        // 双击才真删：第一次只弹提示，300ms 内第二次才移除记录
-                                        AppPrefs.removeSavedRepo(editing.location)
-                                        AppLog.toastOnMain("已移除仓库记录（备份数据未动）")
-                                        onFinished()
-                                    }
-                                },
-                                // 当前仓库保持灰色外观但可点击，点了用 Toast 说明原因
-                                enabled = !isInitializing,
-                                colors = ButtonDefaults.textButtonColors(
-                                    contentColor = if (isCurrent) {
-                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                                    } else {
-                                        MaterialTheme.colorScheme.error
-                                    }
-                                )
-                            ) { Text("删除") }
-                        }
-                        Spacer(Modifier.weight(1f))
-                        if (!dialogRepo.protocol.isLocal) {
-                            TextButton(
-                                onClick = { runWhenConnected {} },
-                                enabled = !isInitializing && !testing && dialogRepo.isComplete()
-                            ) { Text(if (testing) "测试中…" else "测试连接") }
-                        }
-                        TextButton(
-                            onClick = onDismiss,
-                            enabled = !isInitializing
-                        ) { Text("取消") }
-                        // 无背景：和取消 / 测试连接同一排文字按钮，路径没选完时置灰
-                        TextButton(onClick = submit, enabled = canSubmit) {
-                            Text("初始化")
-                        }
-                    }
+            // 底部按钮行：编辑时删除固定在最左边
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (editing != null) {
+                    TextButton(
+                        onClick = {
+                            if (isCurrent) {
+                                AppLog.toastOnMain("当前仓库不可删除，请先切换到其它仓库")
+                            } else if (deleteGuard.consume("delete-repo")) {
+                                // 双击才真删：第一次只弹提示，300ms 内第二次才移除记录
+                                AppPrefs.removeSavedRepo(editing.location)
+                                AppLog.toastOnMain("已移除仓库记录（备份数据未动）")
+                                onFinished()
+                            }
+                        },
+                        // 当前仓库保持灰色外观但可点击，点了用 Toast 说明原因
+                        enabled = !isInitializing,
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = if (isCurrent) {
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            } else {
+                                MaterialTheme.colorScheme.error
+                            }
+                        )
+                    ) { Text("删除") }
+                }
+                Spacer(Modifier.weight(1f))
+                if (!dialogRepo.protocol.isLocal) {
+                    TextButton(
+                        onClick = { runWhenConnected {} },
+                        enabled = !isInitializing && !testing && dialogRepo.isComplete()
+                    ) { Text(if (testing) "测试中…" else "测试连接") }
+                }
+                TextButton(
+                    onClick = onDismiss,
+                    enabled = !isInitializing
+                ) { Text("取消") }
+                // 无背景：和取消 / 测试连接同一排文字按钮，路径没选完时置灰
+                TextButton(onClick = submit, enabled = canSubmit) {
+                    Text("初始化")
                 }
             }
         }

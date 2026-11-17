@@ -55,6 +55,8 @@ import com.cc.libackupnext.service.UpdateChecker
 import com.cc.libackupnext.ui.AppTopBar
 import com.cc.libackupnext.ui.PageContentHorizontalPadding
 import com.cc.libackupnext.ui.dialog.UpdateDialog
+import com.cc.libackupnext.ui.component.CardGroup
+import com.cc.libackupnext.ui.component.SettingsCard
 import com.cc.libackupnext.util.AppLinks
 import com.cc.libackupnext.util.AppLog
 import kotlinx.coroutines.launch

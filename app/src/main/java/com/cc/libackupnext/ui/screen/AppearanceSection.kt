@@ -14,11 +14,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,11 +26,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import com.cc.libackupnext.ui.component.AppDialog
+import com.cc.libackupnext.ui.component.CardGroup
+import com.cc.libackupnext.ui.component.SettingsCard
+import com.cc.libackupnext.ui.component.SingleChoiceDialog
 import com.cc.libackupnext.ui.theme.ColorSeedOptions
 import com.cc.libackupnext.ui.theme.ColorSpecOptions
 import com.cc.libackupnext.ui.theme.ColorStyleOptions
 import com.cc.libackupnext.ui.theme.ThemeSettings
-import com.cc.libackupnext.ui.theme.dialogContainer
 
 private enum class AppearancePicker { SEED, STYLE, SPEC }
 
@@ -91,94 +92,50 @@ fun AppearanceSection() {
 
 @Composable
 private fun SeedPickerDialog(onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.dialogContainer,
-        title = { Text("配色") },
-        text = {
-            Column(
-                modifier = Modifier
-                    .heightIn(max = 400.dp)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                ColorSeedOptions.forEach { option ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                ThemeSettings.setSeedKey(option.key)
-                                onDismiss()
-                            }
-                            .padding(vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            Modifier
-                                .size(20.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    option.color ?: MaterialTheme.colorScheme.primaryContainer
-                                )
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            text = option.label,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.weight(1f)
-                        )
-                        RadioButton(
-                            selected = ThemeSettings.seedKey == option.key,
-                            onClick = null
-                        )
-                    }
+    AppDialog(
+        title = "配色",
+        onDismiss = onDismiss,
+        confirmText = "取消",
+        onConfirm = onDismiss,
+        dismissText = null
+    ) {
+        Column(
+            modifier = Modifier
+                .heightIn(max = 400.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            ColorSeedOptions.forEach { option ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            ThemeSettings.setSeedKey(option.key)
+                            onDismiss()
+                        }
+                        .padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        Modifier
+                            .size(20.dp)
+                            .clip(CircleShape)
+                            .background(
+                                option.color ?: MaterialTheme.colorScheme.primaryContainer
+                            )
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        text = option.label,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f)
+                    )
+                    RadioButton(
+                        selected = ThemeSettings.seedKey == option.key,
+                        onClick = null
+                    )
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } }
-    )
-}
-
-@Composable
-private fun <T> SingleChoiceDialog(
-    title: String,
-    options: List<Pair<T, String>>,
-    selected: T,
-    onSelect: (T) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.dialogContainer,
-        title = { Text(title) },
-        text = {
-            Column(
-                modifier = Modifier
-                    .heightIn(max = 400.dp)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                options.forEach { (value, label) ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                onSelect(value)
-                                onDismiss()
-                            }
-                            .padding(vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.weight(1f)
-                        )
-                        RadioButton(selected = selected == value, onClick = null)
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } }
-    )
+        }
+    }
 }

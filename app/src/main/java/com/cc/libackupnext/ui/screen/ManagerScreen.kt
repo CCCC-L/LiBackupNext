@@ -15,16 +15,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import com.cc.libackupnext.ui.theme.dialogContainer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -63,14 +60,14 @@ import com.cc.libackupnext.ui.screen.detail.BackupEntryRow
 import com.cc.libackupnext.ui.screen.detail.BackupManageDialog
 import com.cc.libackupnext.ui.screen.detail.BackupOptionsDialog
 import com.cc.libackupnext.ui.screen.detail.ConfirmActionDialog
-import com.cc.libackupnext.ui.screen.detail.ConfirmDeleteAllDialog
 import com.cc.libackupnext.ui.screen.detail.DetailHeader
 import com.cc.libackupnext.ui.screen.detail.NoteEditDialog
 import com.cc.libackupnext.ui.screen.detail.detailTargetOf
 import com.cc.libackupnext.ui.theme.heighLightColor
+import com.cc.libackupnext.ui.component.AppDialog
 import com.cc.libackupnext.ui.util.AppIconStore
-import com.cc.libackupnext.ui.util.AppListContainer
-import com.cc.libackupnext.ui.util.countText
+import com.cc.libackupnext.ui.component.AppListContainer
+import com.cc.libackupnext.ui.component.countText
 import com.cc.libackupnext.util.BackupNotifier
 import com.cc.libackupnext.util.AppLog
 import com.cc.libackupnext.util.KeepAwake
@@ -672,26 +669,13 @@ fun AppBackupScreen(
                 },
                 onSearchQueryChange = { detailQuery = it },
                 moreMenuContent = { onDismiss ->
-                    if (onRemoveDir != null) {
-                        DropdownMenuItem(
-                            text = { Text("移除该文件夹") },
-                            onClick = {
-                                onDismiss()
-                                // 有备份就得先确认：移除会把它们一起删掉
-                                if (entries.isNotEmpty()) {
-                                    confirmRemoveDir = true
-                                } else {
-                                    onRemoveDir?.invoke()
-                                }
-                            }
-                        )
-                    }
-                    DropdownMenuItem(
-                        text = { Text("删除全部备份") },
-                        onClick = {
-                            onDismiss()
-                            confirmDeleteAll = true
-                        }
+                    DetailMoreMenu(
+                        canRemoveDir = onRemoveDir != null,
+                        hasEntries = entries.isNotEmpty(),
+                        onDismiss = onDismiss,
+                        onRemoveDir = { onRemoveDir?.invoke() },
+                        onRequestRemoveDirConfirm = { confirmRemoveDir = true },
+                        onRequestDeleteAllConfirm = { confirmDeleteAll = true }
                     )
                 }
             )
@@ -758,8 +742,9 @@ fun AppBackupScreen(
     }
 
     if (confirmDeleteAll) {
-        ConfirmDeleteAllDialog(
-            appName = displayApp.name,
+        ConfirmActionDialog(
+            title = "删除全部备份",
+            message = "确定要删除「${displayApp.name}」的全部备份吗？此操作不可撤销。",
             onDismiss = { confirmDeleteAll = false },
             onConfirm = { deleteAllBackups() }
         )
@@ -767,33 +752,22 @@ fun AppBackupScreen(
 
     // 移除文件夹确认：有备份时说明会一起删掉
     if (confirmRemoveDir) {
-        AlertDialog(
-            containerColor = MaterialTheme.colorScheme.dialogContainer,
-            onDismissRequest = { confirmRemoveDir = false },
-            title = { Text("移除该文件夹") },
-            text = {
-                Text(
-                    "「${displayApp.packageName}」有 ${entries.size} 个备份，" +
-                            "移除后这些备份会被一起删除，此操作不可撤销。"
-                )
+        AppDialog(
+            title = "移除该文件夹",
+            onDismiss = { confirmRemoveDir = false },
+            confirmText = "移除",
+            onConfirm = {
+                confirmRemoveDir = false
+                deleteAllBackups()
+                onRemoveDir?.invoke()
             },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        confirmRemoveDir = false
-                        deleteAllBackups()
-                        onRemoveDir?.invoke()
-                    }
-                ) {
-                    Text("移除", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmRemoveDir = false }) {
-                    Text("取消")
-                }
-            }
-        )
+            destructive = true
+        ) {
+            Text(
+                "「${displayApp.packageName}」有 ${entries.size} 个备份，" +
+                        "移除后这些备份会被一起删除，此操作不可撤销。"
+            )
+        }
     }
 
     // 帮助对话框：内容随目标类型变（应用 / 文件 / Wi-Fi / 联系人 / 通话记录）
@@ -868,6 +842,39 @@ fun AppBackupScreen(
             connectionInterrupted = connectionInterrupted
         )
     }
+}
+
+/**
+ * 详情页右上角「更多」菜单：移除文件夹（仅文件夹目标）+ 删除全部备份。
+ *
+ * 「移除文件夹」在有备份时要先弹确认（备份会跟着删掉），所以这里只负责发起请求，
+ * 由调用方决定是直接执行还是先问一句。
+ */
+@Composable
+private fun DetailMoreMenu(
+    canRemoveDir: Boolean,
+    hasEntries: Boolean,
+    onDismiss: () -> Unit,
+    onRemoveDir: () -> Unit,
+    onRequestRemoveDirConfirm: () -> Unit,
+    onRequestDeleteAllConfirm: () -> Unit,
+) {
+    if (canRemoveDir) {
+        DropdownMenuItem(
+            text = { Text("移除该文件夹") },
+            onClick = {
+                onDismiss()
+                if (hasEntries) onRequestRemoveDirConfirm() else onRemoveDir()
+            }
+        )
+    }
+    DropdownMenuItem(
+        text = { Text("删除全部备份") },
+        onClick = {
+            onDismiss()
+            onRequestDeleteAllConfirm()
+        }
+    )
 }
 
 // ==================== 应用操作实现 ====================

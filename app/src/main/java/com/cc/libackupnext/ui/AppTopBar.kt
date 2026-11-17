@@ -23,7 +23,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.SwapVert
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -58,6 +57,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.cc.libackupnext.ui.component.CheckboxMenuItem
 import com.cc.libackupnext.ui.theme.IconSlotWidth
 import com.cc.libackupnext.ui.theme.actionGroupWidthContinuous
 import com.cc.libackupnext.ui.theme.SearchButtonHideMs
@@ -780,35 +780,35 @@ fun SortMenu(
             )
         }
 
-        DropdownMenuItem(
-            text = { Text("倒序") },
+        CheckboxMenuItem(
+            text = "倒序",
+            checked = isReverse,
             onClick = {
                 viewModel.isReverse.value = !isReverse
                 viewModel.applyFiltersAndSort()
                 closeMenu()
-            },
-            leadingIcon = { Checkbox(checked = isReverse, onCheckedChange = null) }
+            }
         )
         when (extra) {
-            SortMenuExtra.SYSTEM_APPS -> DropdownMenuItem(
-                text = { Text("显示系统应用") },
+            SortMenuExtra.SYSTEM_APPS -> CheckboxMenuItem(
+                text = "显示系统应用",
+                checked = showSystem,
                 onClick = {
                     viewModel.showSystemApps.value = !showSystem
                     viewModel.applyFiltersAndSort()  // 只本地过滤，不请求
                     closeMenu()
-                },
-                leadingIcon = { Checkbox(checked = showSystem, onCheckedChange = null) }
+                }
             )
 
             // 批量页没有系统应用可过滤（列表本来就只有仓库里的那些），换成这个更有用。
             // 重排由批量页自己做（visibleApps），这里只翻开关。
-            SortMenuExtra.PIN_DIFFERENT_VERSIONS -> DropdownMenuItem(
-                text = { Text("置顶不同版本") },
+            SortMenuExtra.PIN_DIFFERENT_VERSIONS -> CheckboxMenuItem(
+                text = "置顶不同版本",
+                checked = pinDifferent,
                 onClick = {
                     viewModel.pinDifferentVersions.value = !pinDifferent
                     closeMenu()
-                },
-                leadingIcon = { Checkbox(checked = pinDifferent, onCheckedChange = null) }
+                }
             )
 
             SortMenuExtra.NONE -> Unit

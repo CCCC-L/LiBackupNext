@@ -1,8 +1,7 @@
-package com.cc.libackupnext.ui.util
+package com.cc.libackupnext.ui.component
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,9 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
@@ -41,10 +38,10 @@ fun AppItemCard(
     trailingContent: (@Composable () -> Unit)? = null,
     /** 标题文字后面的附加内容（如「当前使用中」标签），默认没有。 */
     titleTrailing: (@Composable () -> Unit)? = null,
-    titleStyle: TextStyle = MaterialTheme.typography.titleMedium,
-    titleFontWeight: FontWeight = FontWeight.Bold,
-    /** 标题颜色；null 用默认（不存在时灰、否则 onSurface）。系统应用传红色。 */
-    titleColor: Color? = null,
+    /** 信息密度：主列表 [RowTextDensity.Regular]，详情页的备份记录行 [RowTextDensity.Dense]。 */
+    density: RowTextDensity = RowTextDensity.Regular,
+    /** 目标状态：系统应用的标题标红。目标不存在由 [dimmed] 表达，不用再传。 */
+    tone: RowTone = RowTone.Normal,
     subtitleColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     bottomTextColor: Color = MaterialTheme.colorScheme.outline,
     extraBottomText: String? = null,
@@ -83,53 +80,40 @@ fun AppItemCard(
                 Spacer(modifier = Modifier.width(14.dp))
             }
 
-            Column(
+            RowTextBlock(
                 modifier = Modifier
                     .weight(1f)
-                    .padding(vertical = 12.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (frozen) {
+                    .padding(vertical = 12.dp),
+                density = density,
+                tone = if (dimmed) RowTone.Missing else tone,
+                title = AnnotatedString(title),
+                subtitle = AnnotatedString(subtitle),
+                caption = AnnotatedString(bottomText),
+                subtitleColor = subtitleColor,
+                captionColor = bottomTextColor,
+                titleLeading = if (frozen) {
+                    {
                         FrozenSnowflake()
                         Spacer(modifier = Modifier.width(4.dp))
                     }
-                    Text(
-                        text = title,
-                        style = titleStyle,
-                        fontWeight = titleFontWeight,
-                        color = titleColor ?: missingTitleColor(dimmed),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textDecoration = if (dimmed) TextDecoration.LineThrough else null,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
-                    titleTrailing?.invoke()
+                } else {
+                    null
+                },
+                titleTrailing = titleTrailing,
+                extra = if (extraBottomText != null) {
+                    {
+                        Text(
+                            text = extraBottomText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = subtitleColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                } else {
+                    null
                 }
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = subtitleColor,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                // 备注可能带换行：不限行数，完整展开（主列表这里恒为「N个备份」一行）
-                Text(
-                    text = bottomText,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = bottomTextColor
-                )
-                if (extraBottomText != null) {
-                    Spacer(modifier = Modifier.height(1.dp))
-                    Text(
-                        text = extraBottomText,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = subtitleColor,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
+            )
 
             if (trailingContent != null) {
                 Spacer(modifier = Modifier.width(12.dp))

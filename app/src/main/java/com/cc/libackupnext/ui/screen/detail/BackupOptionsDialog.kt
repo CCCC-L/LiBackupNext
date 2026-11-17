@@ -1,32 +1,19 @@
 package com.cc.libackupnext.ui.screen.detail
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Icon
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
-import com.cc.libackupnext.ui.theme.dialogContainer
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.Role
 import com.cc.libackupnext.data.BackupGroup
 import com.cc.libackupnext.data.BackupTarget
+import com.cc.libackupnext.ui.component.AppDialog
 
 /**
  * 备份选项弹窗。
@@ -44,57 +31,38 @@ fun BackupOptionsDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
 ) {
-    AlertDialog(
-        containerColor = MaterialTheme.colorScheme.dialogContainer,
-        onDismissRequest = onDismiss,
-        title = {
+    AppDialog(
+        title = "备份",
+        onDismiss = onDismiss,
+        confirmText = "备份",
+        onConfirm = onConfirm,
+        // 没有可选项的目标永远可以备份；应用至少要勾一项
+        confirmEnabled = target.kinds.size == 1 || checked.isNotEmpty()
+    ) {
+        if (target.kinds.size == 1) {
+            // 整个全备，没有可选项
             Text(
-                text = "备份",
-                style = MaterialTheme.typography.titleMedium
-            )
-        },
-        text = {
-            Column {
-                if (target.kinds.size == 1) {
-                    // 整个全备，没有可选项
-                    Text(
-                        text = if (target == BackupTarget.DIR) {
-                            "确定备份「$dirPath」么？"
-                        } else {
-                            "确定备份「${target.displayName}」么？"
-                        },
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                text = if (target == BackupTarget.DIR) {
+                    "确定备份「$dirPath」么？"
                 } else {
-                    // 勾哪几项由 target.kinds 决定，不在这里写死
-                    target.kinds.forEach { group ->
-                        BackupOptionRow(
-                            label = group.optionLabel,
-                            checked = group in checked,
-                            onCheckedChange = { onToggle(group, it) }
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = onConfirm,
-                // 没有可选项的目标永远可以备份；应用至少要勾一项
-                enabled = target.kinds.size == 1 || checked.isNotEmpty()
-            ) {
-                Text("备份")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("取消")
+                    "确定备份「${target.displayName}」么？"
+                },
+                style = MaterialTheme.typography.bodyMedium
+            )
+        } else {
+            // 勾哪几项由 target.kinds 决定，不在这里写死
+            target.kinds.forEach { group ->
+                BackupOptionRow(
+                    label = group.optionLabel,
+                    checked = group in checked,
+                    onCheckedChange = { onToggle(group, it) }
+                )
             }
         }
-    )
+    }
 }
 
-/** 一个方形勾选项：选中时填强调色 + 打勾。 */
+/** 一个勾选项：整行可点，勾选框用 M3 的标准 Checkbox（和备份管理弹窗同一个组件）。 */
 @Composable
 private fun BackupOptionRow(
     label: String,
@@ -105,33 +73,13 @@ private fun BackupOptionRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(MaterialTheme.shapes.small)
-            .clickable { onCheckedChange(!checked) }
-            .padding(vertical = 10.dp),
+            // 点文字 / 空白处也能切换；点方框本身由 Checkbox 自己处理，不会重复触发
+            .clickable(role = Role.Checkbox) { onCheckedChange(!checked) },
         verticalAlignment = Alignment.CenterVertically
     ) {
-        val accent = MaterialTheme.colorScheme.primary
-        Box(
-            modifier = Modifier
-                .size(18.dp)
-                .clip(MaterialTheme.shapes.extraSmall)
-                .background(if (checked) accent else Color.Transparent)
-                .border(
-                    width = 1.5.dp,
-                    color = if (checked) accent else MaterialTheme.colorScheme.outline,
-                    shape = MaterialTheme.shapes.extraSmall
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            if (checked) {
-                Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.size(13.dp)
-                )
-            }
-        }
-        Spacer(modifier = Modifier.width(8.dp))
+        // onCheckedChange 必须非 null：M3 只在非 null 时才套 minimumInteractiveComponentSize，
+        // 传 null 会让 Checkbox 缩成 18dp，整行行高塌掉、几行贴在一起
+        Checkbox(checked = checked, onCheckedChange = onCheckedChange)
         Text(text = label, style = MaterialTheme.typography.bodyMedium)
     }
 }

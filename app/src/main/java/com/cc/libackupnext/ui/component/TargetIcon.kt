@@ -1,4 +1,4 @@
-package com.cc.libackupnext.ui.util
+package com.cc.libackupnext.ui.component
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -20,6 +20,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.entity.AppInfo
+import com.cc.libackupnext.ui.util.rememberAppIcon
+import com.cc.libackupnext.ui.util.rememberAppIconWithBackup
 
 /** 固定目标的矢量图标：Wi-Fi / 联系人 / 通话记录 / 短信。 */
 private val SystemDataIcons: Map<BackupTarget, ImageVector> = mapOf(

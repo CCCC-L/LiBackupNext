@@ -10,10 +10,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
@@ -28,7 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.cc.libackupnext.data.ReleaseBlock
 import com.cc.libackupnext.data.ReleaseInfo
-import com.cc.libackupnext.ui.theme.dialogContainer
+import com.cc.libackupnext.ui.component.AppDialog
 
 /** 行内标记：**粗体**、`代码`。其余原样显示，不处理链接。 */
 private val INLINE = Regex("""\*\*(.+?)\*\*|`([^`]+)`""")
@@ -41,16 +39,14 @@ fun UpdateDialog(
 ) {
     val context = LocalContext.current
     val maxContentHeight = LocalConfiguration.current.screenHeightDp.dp * 0.6f
-    val containerColor = MaterialTheme.colorScheme.dialogContainer
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = containerColor,
-        title = {
+    AppDialog(
+        onDismiss = onDismiss,
+        titleContent = {
             Column {
+                // 样式由 AppDialog 的统一样式提供（headlineSmall + Bold），这里不写 style
                 Text(
                     text = "发现新版本",
-                    style = MaterialTheme.typography.headlineSmall,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Spacer(modifier = Modifier.height(2.dp))
@@ -61,45 +57,36 @@ fun UpdateDialog(
                 )
             }
         },
-        text = {
-            Column(
-                modifier = Modifier
-                    .heightIn(max = maxContentHeight)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                if (info.notes.isEmpty()) {
-                    Text(
-                        text = "暂无更新说明",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                } else {
-                    info.notes.forEachIndexed { index, block ->
-                        ReleaseBlockView(block, first = index == 0)
-                    }
-                }
+        confirmText = "浏览器下载",
+        onConfirm = {
+            onDismiss()
+            // 没有浏览器/链接异常时也不该把应用弄崩
+            runCatching {
+                context.startActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse(info.downloadUrl))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
             }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    onDismiss()
-                    // 没有浏览器/链接异常时也不该把应用弄崩
-                    runCatching {
-                        context.startActivity(
-                            Intent(Intent.ACTION_VIEW, Uri.parse(info.downloadUrl))
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        )
-                    }
-                }
-            ) {
-                Text("浏览器下载")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
         }
-    )
+    ) {
+        Column(
+            modifier = Modifier
+                .heightIn(max = maxContentHeight)
+                .verticalScroll(rememberScrollState())
+        ) {
+            if (info.notes.isEmpty()) {
+                Text(
+                    text = "暂无更新说明",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                info.notes.forEachIndexed { index, block ->
+                    ReleaseBlockView(block, first = index == 0)
+                }
+            }
+        }
+    }
 }
 
 @Composable

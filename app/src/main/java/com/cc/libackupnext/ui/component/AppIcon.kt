@@ -1,4 +1,4 @@
-package com.cc.libackupnext.ui.util
+package com.cc.libackupnext.ui.component
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background

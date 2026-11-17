@@ -1,4 +1,4 @@
-package com.cc.libackupnext.ui.util
+package com.cc.libackupnext.ui.component
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable

@@ -1,4 +1,4 @@
-package com.cc.libackupnext.ui.util
+package com.cc.libackupnext.ui.component
 
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Spacer
@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.data.BackupTarget
@@ -43,9 +42,8 @@ sealed class TargetView(
     /** 标题前要不要显示冻结雪花。 */
     open val isFrozen: Boolean = false
 
-    /** 标题颜色；null 用默认色（不存在时灰、否则 onSurface）。 */
-    open val titleColor: Color?
-        @Composable get() = null
+    /** 标题用哪种色调；默认 onSurface，系统应用标红。目标不存在由调用方的 isMissing 表达。 */
+    open val tone: RowTone get() = RowTone.Normal
 
     /**
      * 图标
@@ -87,8 +85,8 @@ class AppView(
     override val isFrozen: Boolean = app.isFrozen
 
     /** 系统应用标题标红，一眼看出哪些是预装的。 */
-    override val titleColor: Color?
-        @Composable get() = systemAppTitleColor(app.isSystem)
+    override val tone: RowTone
+        get() = if (app.isSystem) RowTone.SystemApp else RowTone.Normal
 
     @Composable
     override fun Badge() {

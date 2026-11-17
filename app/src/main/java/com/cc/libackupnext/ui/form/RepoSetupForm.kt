@@ -1,4 +1,4 @@
-package com.cc.libackupnext.ui.util
+package com.cc.libackupnext.ui.form
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement

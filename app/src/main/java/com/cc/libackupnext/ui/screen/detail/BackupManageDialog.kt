@@ -7,27 +7,25 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
-import com.cc.libackupnext.ui.theme.dialogContainer
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import com.cc.libackupnext.data.BackupEntry
 import com.cc.libackupnext.data.BackupGroup
 import com.cc.libackupnext.data.BackupTarget
+import com.cc.libackupnext.ui.component.AppSurfaceDialog
 import com.cc.libackupnext.ui.theme.heighLightColor
 import com.cc.libackupnext.ui.util.formatSize
 
@@ -54,68 +52,60 @@ fun BackupManageDialog(
     onDelete: () -> Unit,
     onRestore: () -> Unit,
 ) {
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = MaterialTheme.shapes.extraLarge,
-            color = MaterialTheme.colorScheme.dialogContainer
+    AppSurfaceDialog(
+        onDismissRequest = onDismiss,
+        titleContent = {
+            // 样式由 AppSurfaceDialog 提供（与 AlertDialog 的标题一致），这里只拼内容
+            Text(
+                text = buildAnnotatedString {
+                    append(entry.title)
+                    // 系统数据（Wi-Fi / 联系人 / 通话记录 / 短信）没有版本号，别挂一个「null」
+                    entry.version?.takeIf { it.isNotBlank() }?.let { version ->
+                        append(" ")
+                        withStyle(SpanStyle(
+                            // 标题是 20sp Bold，版本号跟着放大一档、但压回常规字重，
+                            // 否则和标题一样粗，层级就没了
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Normal,
+                            color = if (isVersionChanged) MaterialTheme.colorScheme.heighLightColor else Color.Unspecified
+                        )) {
+                            append(version)
+                        }
+                    }
+                }
+            )
+        }
+    ) {
+        target.kinds.forEach { group ->
+            val snaps = entry.snapshotsOf(group)
+            val exists = snaps.isNotEmpty()
+            ManageOptionRow(
+                label = group.title,
+                checked = group in checkedKinds,
+                enabled = exists,
+                size = if (exists) formatSize(snaps.sumOf { it.size }) else "",
+                id = if (exists) snaps.joinToString(" ") { it.id.take(8) } else "",
+                onCheckedChange = { onCheckedChange(group, it) }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
         ) {
-            Column(modifier = Modifier.padding(20.dp)) {
-                Text(
-                    text = buildAnnotatedString {
-                        withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
-                            append(entry.title)
-                        }
-                        // 系统数据（Wi-Fi / 联系人 / 通话记录 / 短信）没有版本号，别挂一个「null」
-                        entry.version?.takeIf { it.isNotBlank() }?.let { version ->
-                            append(" ")
-                            withStyle(SpanStyle(
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = if (isVersionChanged) MaterialTheme.colorScheme.heighLightColor else Color.Unspecified
-                            )) {
-                                append(version)
-                            }
-                        }
-
-                    },
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                target.kinds.forEach { group ->
-                    val snaps = entry.snapshotsOf(group)
-                    val exists = snaps.isNotEmpty()
-                    ManageOptionRow(
-                        label = group.title,
-                        checked = group in checkedKinds,
-                        enabled = exists,
-                        size = if (exists) formatSize(snaps.sumOf { it.size }) else "",
-                        id = if (exists) snaps.joinToString(" ") { it.id.take(8) } else "",
-                        onCheckedChange = { onCheckedChange(group, it) }
-                    )
+            if (canOverwrite) {
+                TextButton(onClick = onOverwrite) {
+                    Text("覆盖备份")
                 }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    if (canOverwrite) {
-                        TextButton(onClick = onOverwrite) {
-                            Text("覆盖备份")
-                        }
-                    }
-                    Spacer(Modifier.weight(1f))
-                    TextButton(onClick = onDelete) {
-                        Text("删除", color = MaterialTheme.colorScheme.error)
-                    }
-                    TextButton(onClick = onRestore) {
-                        Text("恢复")
-                    }
-                }
+            }
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = onDelete) {
+                Text("删除", color = MaterialTheme.colorScheme.error)
+            }
+            TextButton(onClick = onRestore) {
+                Text("恢复")
             }
         }
     }
@@ -134,14 +124,12 @@ private fun ManageOptionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = enabled) { onCheckedChange(!checked) },
+            .clickable(enabled = enabled, role = Role.Checkbox) { onCheckedChange(!checked) },
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Checkbox(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            enabled = enabled
-        )
+        // 和备份选项弹窗同一个组件。onCheckedChange 必须非 null —— M3 只在非 null 时才套
+        // minimumInteractiveComponentSize，传 null 会让 Checkbox 缩成 18dp、整行行高塌掉
+        Checkbox(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
         Text(
             text = label,
             style = MaterialTheme.typography.bodyMedium,
@@ -149,8 +137,7 @@ private fun ManageOptionRow(
                 MaterialTheme.colorScheme.onSurface
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            modifier = Modifier.padding(start = 4.dp)
+            }
         )
         Spacer(Modifier.weight(1f))
         Column(horizontalAlignment = Alignment.End) {

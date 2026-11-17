@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -28,7 +27,6 @@ import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -47,13 +45,13 @@ import com.cc.libackupnext.data.FolderPickerMode
 import com.cc.libackupnext.data.RemoteRepo
 import com.cc.libackupnext.service.RcloneClient
 import com.cc.libackupnext.ui.theme.WelcomeTransitionMs
-import com.cc.libackupnext.ui.theme.dialogContainer
 import com.cc.libackupnext.ui.theme.rootCardGrantedBackground
 import com.cc.libackupnext.ui.theme.rootCardGrantedTextColor
 import com.cc.libackupnext.ui.theme.rootCardGrantedTextVariant
 import com.cc.libackupnext.ui.theme.rootGrantedButtonBackground
 import com.cc.libackupnext.ui.theme.rootGrantedButtonContent
-import com.cc.libackupnext.ui.util.RepoSetupForm
+import com.cc.libackupnext.ui.component.AppDialog
+import com.cc.libackupnext.ui.form.RepoSetupForm
 import com.cc.libackupnext.util.AppLog
 import kotlinx.coroutines.launch
 
@@ -377,28 +375,24 @@ fun WelcomeScreen(
 
     // 初始化失败：把 rustic 的原始错误完整展示出来
     initError?.let { message ->
-        AlertDialog(
-            containerColor = MaterialTheme.colorScheme.dialogContainer,
-            onDismissRequest = onDismissError,
-            title = { Text("初始化失败") },
-            text = {
-                Column(
-                    modifier = Modifier
-                        .heightIn(max = 360.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    Text(
-                        text = message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = onDismissError) {
-                    Text("知道了")
-                }
+        AppDialog(
+            title = "初始化失败",
+            onDismiss = onDismissError,
+            confirmText = "知道了",
+            onConfirm = onDismissError,
+            dismissText = null
+        ) {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
-        )
+        }
     }
 }

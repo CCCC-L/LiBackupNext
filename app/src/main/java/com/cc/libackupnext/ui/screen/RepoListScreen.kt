@@ -1,43 +1,37 @@
 package com.cc.libackupnext.ui.screen
 
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.dp
+import com.cc.libackupnext.ui.component.LoadingRow
 import com.cc.libackupnext.data.FolderPickerLauncher
 import com.cc.libackupnext.data.SavedRepo
 import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.ui.AppTopBar
 import com.cc.libackupnext.ui.dialog.RepoSetupDialog
-import com.cc.libackupnext.ui.theme.dialogContainer
-import com.cc.libackupnext.ui.util.AppItemCard
-import com.cc.libackupnext.ui.util.AppListContainer
+import com.cc.libackupnext.ui.component.AppDialog
+import com.cc.libackupnext.ui.component.AppItemCard
+import com.cc.libackupnext.ui.component.AppListContainer
 import kotlinx.coroutines.launch
 import com.cc.libackupnext.util.AppLog
 
@@ -47,7 +41,6 @@ private data class RepoDialogTarget(val editing: SavedRepo?)
 /**
  * 已添加仓库的列表页：设置页「仓库地址」点进来。
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun RepoListScreen(
     repos: List<SavedRepo>,
@@ -145,31 +138,27 @@ fun RepoListScreen(
     }
 
     if (switching) {
-        AlertDialog(
-            containerColor = MaterialTheme.colorScheme.dialogContainer,
-            onDismissRequest = { },
-            title = { Text("切换仓库") },
-            text = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    LoadingIndicator(modifier = Modifier.size(24.dp))
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text("正在校验仓库…")
-                }
-            },
-            confirmButton = { }
-        )
+        AppDialog(
+            title = "切换仓库",
+            onDismiss = { },
+            dismissText = null
+        ) {
+            LoadingRow {
+                Text("正在校验仓库…")
+            }
+        }
     }
 
     switchError?.let { message ->
-        AlertDialog(
-            containerColor = MaterialTheme.colorScheme.dialogContainer,
-            onDismissRequest = { switchError = null },
-            title = { Text("切换失败") },
-            text = { Text(message) },
-            confirmButton = {
-                TextButton(onClick = { switchError = null }) { Text("确定") }
-            }
-        )
+        AppDialog(
+            title = "切换失败",
+            onDismiss = { switchError = null },
+            confirmText = "确定",
+            onConfirm = { switchError = null },
+            dismissText = null
+        ) {
+            Text(message)
+        }
     }
 }
 

@@ -15,10 +15,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.data.BackupEntry
-import com.cc.libackupnext.ui.util.AppItemCard
+import com.cc.libackupnext.ui.component.AppItemCard
+import com.cc.libackupnext.ui.component.RowTextDensity
 import com.cc.libackupnext.ui.util.formatShortDateTime
 
 /**
@@ -47,8 +47,8 @@ fun BackupEntryRow(
         bottomText = entry.description ?: "无备注",
         onClick = onClick,
         shape = shape,
-        titleStyle = MaterialTheme.typography.labelLarge,
-        titleFontWeight = FontWeight.Normal,
+        // 备份记录行是次级信息：标题比主列表小一档且不加粗
+        density = RowTextDensity.Dense,
         subtitleColor = if (isLatest) {
             latestSubtitleColor
         } else {

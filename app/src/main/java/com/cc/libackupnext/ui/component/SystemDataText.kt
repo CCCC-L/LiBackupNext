@@ -1,4 +1,4 @@
-package com.cc.libackupnext.ui.util
+package com.cc.libackupnext.ui.component
 
 import com.cc.libackupnext.data.BackupGroup
 import com.cc.libackupnext.data.BackupTarget

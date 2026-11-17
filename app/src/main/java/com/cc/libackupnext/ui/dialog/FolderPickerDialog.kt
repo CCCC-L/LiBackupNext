@@ -26,7 +26,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -53,12 +52,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
 import com.cc.libackupnext.data.FolderPickerMode
 import com.cc.libackupnext.data.RemoteRepo
@@ -67,7 +63,9 @@ import com.cc.libackupnext.service.RcloneClient
 import com.cc.libackupnext.ui.AppTopBar
 import com.cc.libackupnext.ui.theme.dialogContainer
 import com.cc.libackupnext.ui.theme.pageTransitionSpec
-import com.cc.libackupnext.ui.util.AppListContainer
+import com.cc.libackupnext.ui.component.AppDialog
+import com.cc.libackupnext.ui.component.AppListContainer
+import com.cc.libackupnext.ui.component.AppSurfaceDialog
 import kotlinx.coroutines.delay
 
 /**
@@ -239,315 +237,308 @@ fun FolderPickerDialog(
             }
     }
 
-    Dialog(
+    AppSurfaceDialog(
         onDismissRequest = { handleBack() },
+        modifier = Modifier
+            .fillMaxSize()
+            // 先铺一层遮罩阴影：状态栏区域、顶部圆角之外露出的都是它
+            .background(Color.Black.copy(alpha = 0.32f))
+            // 再让弹窗本身从状态栏下方开始
+            .statusBarsPadding(),
+        // 全屏 sheet：只有上圆角，和居中卡片不是一套形状
+        shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
         properties = DialogProperties(
             usePlatformDefaultWidth = false,
             // 背景铺到系统栏后面，内容自己用 statusBarsPadding / navigationBarsPadding 让开
             decorFitsSystemWindows = false
-        )
+        ),
+        // 内边距由各段自己给（AppTopBar / 列表 / 悬浮按钮），这里不加
+        contentPadding = PaddingValues(0.dp),
+        // 内容只需避开导航栏 / 键盘，状态栏已由上面 modifier 的 padding 让开
+        contentModifier = Modifier
+            .fillMaxSize()
+            .navigationBarsPadding()
+            .imePadding(),
+        windowConfig = { w ->
+            // Compose Dialog 的窗口高度默认是 WRAP_CONTENT，光靠 fillMaxSize 拉不满，
+            // 显式把窗口设成 MATCH_PARENT x MATCH_PARENT
+            w.setLayout(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT
+            )
+            // scrim 自己画（状态栏那一条也要是阴影色），关掉系统 dim 免得叠成两层；
+            // 状态栏图标压在阴影上，改用浅色才看得清
+            w.setDimAmount(0f)
+            runCatching {
+                WindowCompat.getInsetsController(w, w.decorView)
+                    .isAppearanceLightStatusBars = false
+            }
+        }
     ) {
-        // Compose Dialog 的窗口高度默认是 WRAP_CONTENT，光靠 fillMaxSize 拉不满，
-        // 显式把窗口设成 MATCH_PARENT x MATCH_PARENT
-        val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
-        LaunchedEffect(Unit) {
-            dialogWindow?.let { w ->
-                w.setLayout(
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    WindowManager.LayoutParams.MATCH_PARENT
+
+        AppTopBar(
+            title = "选择文件夹",
+            pageBackground = MaterialTheme.colorScheme.dialogContainer,
+            searchBarBackground = MaterialTheme.colorScheme.surfaceContainerHigh,
+            navigationIcon = {
+                IconButton(onClick = { handleBack() }) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                }
+            },
+            // 搜索状态完全由弹窗自己管，不读写主页面的全局搜索流
+            searchPlaceholder = "搜索文件夹",
+            searchOpen = searching,
+            searchQueryText = query,
+            onToggleSearch = { toggleSearch() },
+            onSearchQueryChange = { query = it },
+            // Dialog 是独立窗口，Surface 已让开状态栏，别让 TopAppBar 再吃一次 inset
+            windowInsets = WindowInsets(0, 0, 0, 0),
+            // 排序 / 用户切换 / 更多菜单对目录浏览都没用，换成自己的两个按钮；
+            // 搜索按钮由 AppTopBar 统一渲染，展开搜索栏时在槽位内擦除，
+            // 右边缘贴着新建按钮，不会飞到屏幕右边
+            customActions = {
+                // 卷列表页没有「当前目录」，不能新建文件夹
+                IconButton(
+                    onClick = {
+                        newName = ""
+                        showCreate = true
+                    },
+                    enabled = page.path != VOLUME_PAGE
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "添加文件夹")
+                }
+                IconButton(onClick = { refresh++ }) {
+                    Icon(Icons.Default.Refresh, contentDescription = "刷新")
+                }
+            }
+        )
+
+        // 当前路径跟着目录切换淡入淡出；刷新 / 新建时 path 不变，不会重放
+        AnimatedContent(
+            targetState = page.path,
+            transitionSpec = {
+                fadeIn(animationSpec = tween(200)) togetherWith
+                        fadeOut(animationSpec = tween(200))
+            },
+            label = "FolderPathTransition"
+        ) { path ->
+            // 本地把绝对路径拆成可点面包屑：卷根段显示别名，其余段逐层可跳。
+            // 按本页 path 算，旧页滑出期间不会串成新路径
+            val segments = remember(path, allowRoot, isLocal) {
+                if (isLocal && path != VOLUME_PAGE) {
+                    LocalVolumes.pathSegments(path, allowRoot)
+                } else {
+                    emptyList()
+                }
+            }
+            when {
+                path == VOLUME_PAGE -> Text(
+                    text = "选择存储位置",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp)
                 )
-                // scrim 自己画（状态栏那一条也要是阴影色），关掉系统 dim 免得叠成两层；
-                // 状态栏图标压在阴影上，改用浅色才看得清
-                w.setDimAmount(0f)
-                runCatching {
-                    WindowCompat.getInsetsController(w, w.decorView)
-                        .isAppearanceLightStatusBars = false
+
+                // 远程仍是服务内的绝对路径，没有卷别名这一层
+                !isLocal -> Text(
+                    text = path,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp)
+                )
+
+                else -> Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 22.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    segments.forEachIndexed { index, segment ->
+                        if (index > 0) {
+                            Text(
+                                text = "/",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                        }
+                        val isCurrent = index == segments.lastIndex
+                        Text(
+                            text = segment.label,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isCurrent) {
+                                MaterialTheme.colorScheme.onSurface
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            },
+                            maxLines = 1,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable {
+                                    hasClicked = true
+                                    // 回「选择存储位置」页走列表里的「..」
+                                    goTo(segment.path)
+                                    // 点当前目录等同原地刷新（page 不变不会重跑加载）
+                                    if (segment.path == path) refresh++
+                                }
+                                .padding(horizontal = 3.dp, vertical = 2.dp)
+                        )
+                    }
                 }
             }
         }
 
-        Surface(
-            modifier = Modifier
-                .fillMaxSize()
-                // 先铺一层遮罩阴影：状态栏区域、顶部圆角之外露出的都是它
-                .background(Color.Black.copy(alpha = 0.32f))
-                // 再让弹窗本身从状态栏下方开始
-                .statusBarsPadding(),
-            shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
-            color = MaterialTheme.colorScheme.dialogContainer
-        ) {
-            // 内容只需避开导航栏 / 键盘，状态栏已由 Surface 的 padding 让开
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .navigationBarsPadding()
-                    .imePadding()
-            ) {
-                AppTopBar(
-                    title = "选择文件夹",
-                    pageBackground = MaterialTheme.colorScheme.dialogContainer,
-                    searchBarBackground = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    navigationIcon = {
-                        IconButton(onClick = { handleBack() }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                        }
-                    },
-                    // 搜索状态完全由弹窗自己管，不读写主页面的全局搜索流
-                    searchPlaceholder = "搜索文件夹",
-                    searchOpen = searching,
-                    searchQueryText = query,
-                    onToggleSearch = { toggleSearch() },
-                    onSearchQueryChange = { query = it },
-                    // Dialog 是独立窗口，Surface 已让开状态栏，别让 TopAppBar 再吃一次 inset
-                    windowInsets = WindowInsets(0, 0, 0, 0),
-                    // 排序 / 用户切换 / 更多菜单对目录浏览都没用，换成自己的两个按钮；
-                    // 搜索按钮由 AppTopBar 统一渲染，展开搜索栏时在槽位内擦除，
-                    // 右边缘贴着新建按钮，不会飞到屏幕右边
-                    customActions = {
-                        // 卷列表页没有「当前目录」，不能新建文件夹
-                        IconButton(
-                            onClick = {
-                                newName = ""
-                                showCreate = true
-                            },
-                            enabled = page.path != VOLUME_PAGE
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = "添加文件夹")
-                        }
-                        IconButton(onClick = { refresh++ }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "刷新")
-                        }
+        // 列表铺满剩余空间，底部留出悬浮按钮的空间
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            AnimatedContent(
+                targetState = page,
+                // 层级越深越靠右：进入子目录从右滑入，返回父目录反向，
+                // 和 AppListScreen 的页面切换用同一套规格
+                transitionSpec = pageTransitionSpec<DirPage> { it.depth },
+                label = "FolderPageTransition",
+                modifier = Modifier.fillMaxSize().clipToBounds()
+            ) { targetPage ->
+                // 只读本页的快照：旧页滑出期间不会被新目录的加载态顶掉
+                val snapshot = contents[targetPage.path] ?: DirContent()
+                val visibleRows = remember(snapshot.rows, query) {
+                    snapshot.rows.orEmpty().filter {
+                        query.isBlank() || it.name.contains(query, ignoreCase = true) ||
+                                it.subtitle?.contains(query, ignoreCase = true) == true
                     }
-                )
-
-                // 当前路径跟着目录切换淡入淡出；刷新 / 新建时 path 不变，不会重放
-                AnimatedContent(
-                    targetState = page.path,
-                    transitionSpec = {
-                        fadeIn(animationSpec = tween(200)) togetherWith
-                                fadeOut(animationSpec = tween(200))
-                    },
-                    label = "FolderPathTransition"
-                ) { path ->
-                    // 本地把绝对路径拆成可点面包屑：卷根段显示别名，其余段逐层可跳。
-                    // 按本页 path 算，旧页滑出期间不会串成新路径
-                    val segments = remember(path, allowRoot, isLocal) {
-                        if (isLocal && path != VOLUME_PAGE) {
-                            LocalVolumes.pathSegments(path, allowRoot)
-                        } else {
-                            emptyList()
-                        }
-                    }
+                }
+                Box(modifier = Modifier.fillMaxSize()) {
                     when {
-                        path == VOLUME_PAGE -> Text(
-                            text = "选择存储位置",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp)
+                        snapshot.loading -> LoadingIndicator(
+                            modifier = Modifier.align(Alignment.Center)
                         )
 
-                        // 远程仍是服务内的绝对路径，没有卷别名这一层
-                        !isLocal -> Text(
-                            text = path,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp)
-                        )
-
-                        else -> Row(
+                        snapshot.error != null -> Column(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState())
-                                .padding(horizontal = 22.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                                .align(Alignment.Center)
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            segments.forEachIndexed { index, segment ->
-                                if (index > 0) {
-                                    Text(
-                                        text = "/",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(horizontal = 4.dp)
-                                    )
+                            Text(
+                                text = snapshot.error.orEmpty(),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            TextButton(onClick = { refresh++ }) { Text("重试") }
+                        }
+
+                        visibleRows.isEmpty() && query.isNotBlank() -> Text(
+                            text = if (targetPage.path == VOLUME_PAGE) {
+                                "没有匹配的存储位置"
+                            } else {
+                                "没有匹配的文件夹"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+
+                        else -> {
+                            // 有上一级才给「..」：卷列表页和远程服务根都没有。
+                            // 用本页的 depth 判断，旧页滑出时列表不会跳动
+                            val rows = buildList {
+                                parentTarget(targetPage)?.let {
+                                    add(PickerRow("..", it))
                                 }
-                                val isCurrent = index == segments.lastIndex
-                                Text(
-                                    text = segment.label,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = if (isCurrent) {
-                                        MaterialTheme.colorScheme.onSurface
-                                    } else {
-                                        MaterialTheme.colorScheme.primary
-                                    },
-                                    maxLines = 1,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .clickable {
-                                            hasClicked = true
-                                            // 回「选择存储位置」页走列表里的「..」
-                                            goTo(segment.path)
-                                            // 点当前目录等同原地刷新（page 不变不会重跑加载）
-                                            if (segment.path == path) refresh++
-                                        }
-                                        .padding(horizontal = 3.dp, vertical = 2.dp)
-                                )
+                                addAll(visibleRows)
                             }
+                            // 圆角直接用 AppListContainer 算好的 shape（首尾 extraLarge、中间 extraSmall），
+                            // 和应用 tab 页的列表完全一致
+                            AppListContainer(
+                                items = rows,
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(
+                                    start = 16.dp,
+                                    end = 16.dp,
+                                    top = 8.dp,
+                                    bottom = 100.dp
+                                ),
+                                itemContent = { _, row, shape ->
+                                    Surface(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                hasClicked = true
+                                                if (targetPage.path == VOLUME_PAGE) {
+                                                    // 从卷列表进卷：先记下卷根，再落到卷根
+                                                    // 或 initialPath（编辑已有仓库时少走几步）
+                                                    val root = row.target
+                                                        .trim('/')
+                                                        .split('/')
+                                                        .filter { it.isNotEmpty() }
+                                                    val landing = if (
+                                                        row.target != "/" &&
+                                                        initialPath.isNotBlank() &&
+                                                        isUnder(initialPath, row.target)
+                                                    ) initialPath else row.target
+                                                    goTo(landing, root)
+                                                } else {
+                                                    // 目录页：行里的 target 就是本页推导出来的，
+                                                    // 动画期间再点也不会基于最新页面多跳一级
+                                                    goTo(row.target)
+                                                }
+                                            },
+                                        shape = shape,
+                                        color = MaterialTheme.colorScheme.surface
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(
+                                                horizontal = 16.dp,
+                                                vertical = 14.dp
+                                            )
+                                        ) {
+                                            Text(
+                                                text = row.name,
+                                                style = MaterialTheme.typography.titleMedium,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            if (row.subtitle != null) {
+                                                Text(
+                                                    text = row.subtitle,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.padding(top = 2.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            )
                         }
                     }
                 }
+            }
 
-                // 列表铺满剩余空间，底部留出悬浮按钮的空间
-                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    AnimatedContent(
-                        targetState = page,
-                        // 层级越深越靠右：进入子目录从右滑入，返回父目录反向，
-                        // 和 AppListScreen 的页面切换用同一套规格
-                        transitionSpec = pageTransitionSpec<DirPage> { it.depth },
-                        label = "FolderPageTransition",
-                        modifier = Modifier.fillMaxSize().clipToBounds()
-                    ) { targetPage ->
-                        // 只读本页的快照：旧页滑出期间不会被新目录的加载态顶掉
-                        val snapshot = contents[targetPage.path] ?: DirContent()
-                        val visibleRows = remember(snapshot.rows, query) {
-                            snapshot.rows.orEmpty().filter {
-                                query.isBlank() || it.name.contains(query, ignoreCase = true) ||
-                                        it.subtitle?.contains(query, ignoreCase = true) == true
-                            }
-                        }
-                        Box(modifier = Modifier.fillMaxSize()) {
-                            when {
-                                snapshot.loading -> LoadingIndicator(
-                                    modifier = Modifier.align(Alignment.Center)
-                                )
-
-                                snapshot.error != null -> Column(
-                                    modifier = Modifier
-                                        .align(Alignment.Center)
-                                        .padding(24.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Text(
-                                        text = snapshot.error.orEmpty(),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.error
-                                    )
-                                    TextButton(onClick = { refresh++ }) { Text("重试") }
-                                }
-
-                                visibleRows.isEmpty() && query.isNotBlank() -> Text(
-                                    text = if (targetPage.path == VOLUME_PAGE) {
-                                        "没有匹配的存储位置"
-                                    } else {
-                                        "没有匹配的文件夹"
-                                    },
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.align(Alignment.Center)
-                                )
-
-                                else -> {
-                                    // 有上一级才给「..」：卷列表页和远程服务根都没有。
-                                    // 用本页的 depth 判断，旧页滑出时列表不会跳动
-                                    val rows = buildList {
-                                        parentTarget(targetPage)?.let {
-                                            add(PickerRow("..", it))
-                                        }
-                                        addAll(visibleRows)
-                                    }
-                                    // 圆角直接用 AppListContainer 算好的 shape（首尾 extraLarge、中间 extraSmall），
-                                    // 和应用 tab 页的列表完全一致
-                                    AppListContainer(
-                                        items = rows,
-                                        modifier = Modifier.fillMaxSize(),
-                                        contentPadding = PaddingValues(
-                                            start = 16.dp,
-                                            end = 16.dp,
-                                            top = 8.dp,
-                                            bottom = 100.dp
-                                        ),
-                                        itemContent = { _, row, shape ->
-                                            Surface(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .clickable {
-                                                        hasClicked = true
-                                                        if (targetPage.path == VOLUME_PAGE) {
-                                                            // 从卷列表进卷：先记下卷根，再落到卷根
-                                                            // 或 initialPath（编辑已有仓库时少走几步）
-                                                            val root = row.target
-                                                                .trim('/')
-                                                                .split('/')
-                                                                .filter { it.isNotEmpty() }
-                                                            val landing = if (
-                                                                row.target != "/" &&
-                                                                initialPath.isNotBlank() &&
-                                                                isUnder(initialPath, row.target)
-                                                            ) initialPath else row.target
-                                                            goTo(landing, root)
-                                                        } else {
-                                                            // 目录页：行里的 target 就是本页推导出来的，
-                                                            // 动画期间再点也不会基于最新页面多跳一级
-                                                            goTo(row.target)
-                                                        }
-                                                    },
-                                                shape = shape,
-                                                color = MaterialTheme.colorScheme.surface
-                                            ) {
-                                                Column(
-                                                    modifier = Modifier.padding(
-                                                        horizontal = 16.dp,
-                                                        vertical = 14.dp
-                                                    )
-                                                ) {
-                                                    Text(
-                                                        text = row.name,
-                                                        style = MaterialTheme.typography.titleMedium,
-                                                        color = MaterialTheme.colorScheme.onSurface,
-                                                        maxLines = 1,
-                                                        overflow = TextOverflow.Ellipsis
-                                                    )
-                                                    if (row.subtitle != null) {
-                                                        Text(
-                                                            text = row.subtitle,
-                                                            style = MaterialTheme.typography.bodySmall,
-                                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                            maxLines = 1,
-                                                            overflow = TextOverflow.Ellipsis,
-                                                            modifier = Modifier.padding(top = 2.dp)
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // 悬浮按钮：没有底栏背景、没有分隔线，直接浮在列表上。
-                    // 卷列表页还不是一个可选目录，不显示
-                    if (page.path != VOLUME_PAGE) {
-                        Button(
-                            onClick = { onPick(page.path) },
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .fillMaxWidth(0.6f)
-                                .padding(bottom = 16.dp),
-                            shape = MaterialTheme.shapes.large,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary
-                            ),
-                            contentPadding = PaddingValues(vertical = 14.dp)
-                        ) {
-                            Text("使用此文件夹", style = MaterialTheme.typography.titleMedium)
-                        }
-                    }
+            // 悬浮按钮：没有底栏背景、没有分隔线，直接浮在列表上。
+            // 卷列表页还不是一个可选目录，不显示
+            if (page.path != VOLUME_PAGE) {
+                Button(
+                    onClick = { onPick(page.path) },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth(0.6f)
+                        .padding(bottom = 16.dp),
+                    shape = MaterialTheme.shapes.large,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    ),
+                    contentPadding = PaddingValues(vertical = 14.dp)
+                ) {
+                    Text("使用此文件夹", style = MaterialTheme.typography.titleMedium)
                 }
             }
         }
@@ -563,37 +554,29 @@ fun FolderPickerDialog(
             delay(100)
             keyboard?.show()
         }
-        AlertDialog(
-            containerColor = MaterialTheme.colorScheme.dialogContainer,
-            onDismissRequest = { showCreate = false },
-            title = { Text("新建文件夹") },
-            text = {
-                OutlinedTextField(
-                    value = newName,
-                    onValueChange = { newName = it },
-                    label = { Text("文件夹名称") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(focusRequester)
-                )
+        AppDialog(
+            title = "新建文件夹",
+            onDismiss = { showCreate = false },
+            confirmText = "确定",
+            onConfirm = {
+                val name = newName.trim()
+                if (name.isNotEmpty()) {
+                    pendingCreate = name
+                    showCreate = false
+                    refresh++
+                }
             },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        val name = newName.trim()
-                        if (name.isNotEmpty()) {
-                            pendingCreate = name
-                            showCreate = false
-                            refresh++
-                        }
-                    },
-                    enabled = newName.isNotBlank()
-                ) { Text("确定") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCreate = false }) { Text("取消") }
-            }
-        )
+            confirmEnabled = newName.isNotBlank()
+        ) {
+            OutlinedTextField(
+                value = newName,
+                onValueChange = { newName = it },
+                label = { Text("文件夹名称") },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester)
+            )
+        }
     }
 }

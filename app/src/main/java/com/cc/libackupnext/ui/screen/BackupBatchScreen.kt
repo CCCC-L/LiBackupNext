@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -43,8 +44,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -81,14 +84,19 @@ import com.cc.libackupnext.ui.theme.rememberRowSwipeState
 import com.cc.libackupnext.ui.theme.rowSelectedBackground
 import com.cc.libackupnext.ui.theme.heighLightColor
 import com.cc.libackupnext.ui.util.AppIconStore
-import com.cc.libackupnext.ui.util.AppListContainer
-import com.cc.libackupnext.ui.util.TargetIconBox
-import com.cc.libackupnext.ui.util.dimmedWhen
+import com.cc.libackupnext.ui.component.AppListContainer
+import com.cc.libackupnext.ui.component.RowTextBlock
+import com.cc.libackupnext.ui.component.RowTextDensity
+import com.cc.libackupnext.ui.component.RowTextLine
+import com.cc.libackupnext.ui.component.RowTone
+import com.cc.libackupnext.ui.component.TargetIconBox
+import com.cc.libackupnext.ui.component.dimmedWhen
 import com.cc.libackupnext.ui.util.formatShortDateTime
-import com.cc.libackupnext.ui.util.isMissing
-import com.cc.libackupnext.ui.util.missingTitleColor
+import com.cc.libackupnext.ui.component.isMissing
+import com.cc.libackupnext.ui.component.missingTitleColor
+import com.cc.libackupnext.ui.component.rowTitleColor
 import com.cc.libackupnext.ui.util.sortTimeLabel
-import com.cc.libackupnext.ui.util.systemAppTitleColor
+import com.cc.libackupnext.ui.component.systemAppTitleColor
 import com.cc.libackupnext.util.BackupNotifier
 import com.cc.libackupnext.util.AppLog
 import kotlinx.coroutines.NonCancellable
@@ -970,72 +978,15 @@ fun BackupBatchScreen(
                 )
             }
 
-            if (mode == BackupBatchMode.CREATE) {
-                Button(
-                    onClick = {
-                        if (doubleClickGuard.consume("create")) startCreate()
-                    },
-                    enabled = actionableCount > 0 && !running,
-                    shape = MaterialTheme.shapes.large,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                        .height(52.dp)
-                ) {
-                    Text("备份", style = MaterialTheme.typography.titleMedium)
-                }
-            } else {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FilledTonalButton(
-                        onClick = {
-                            if (doubleClickGuard.consume("delete")) startDelete()
-                        },
-                        enabled = actionableCount > 0 && !running,
-                        shape = MaterialTheme.shapes.medium,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                        modifier = Modifier
-                            .weight(0.9f)
-                            .height(40.dp)
-                    ) {
-                        Text(
-                            "删除",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                    FilledTonalButton(
-                        onClick = {
-                            if (doubleClickGuard.consume("overwrite")) startOverwrite()
-                        },
-                        enabled = actionableCount > 0 && !running,
-                        shape = MaterialTheme.shapes.medium,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                        modifier = Modifier
-                            .weight(1.1f)
-                            .height(40.dp)
-                    ) {
-                        Text("覆盖备份", style = MaterialTheme.typography.bodyMedium)
-                    }
-                    FilledTonalButton(
-                        onClick = {
-                            if (doubleClickGuard.consume("restore")) startRestore()
-                        },
-                        enabled = actionableCount > 0 && !running,
-                        shape = MaterialTheme.shapes.medium,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                        modifier = Modifier
-                            .weight(1.4f)
-                            .height(40.dp)
-                    ) {
-                        Text("恢复", style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
-            }
+            BatchActionBar(
+                mode = mode,
+                actionableCount = actionableCount,
+                running = running,
+                onCreate = { if (doubleClickGuard.consume("create")) startCreate() },
+                onDelete = { if (doubleClickGuard.consume("delete")) startDelete() },
+                onOverwrite = { if (doubleClickGuard.consume("overwrite")) startOverwrite() },
+                onRestore = { if (doubleClickGuard.consume("restore")) startRestore() }
+            )
         }
     }
 
@@ -1123,36 +1074,51 @@ private fun SelectionHeader(
             )
         }
 
-        Column(
-            modifier = Modifier.width(KindColumnWidth),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
+        KindCheckboxColumn(
+            checked = allChecked,
+            enabled = enabled,
+            onToggle = onToggleAll,
+            label = "all"
+        )
+        // 只有一种内容时（例如目录的 dir），「all」和那一列是一回事，只留 all
+        if (columns.size > 1) columns.forEach { kind ->
+            KindCheckboxColumn(
+                checked = columnChecked(kind),
+                enabled = enabled,
+                onToggle = { onToggleColumn(kind) },
+                label = kind.title
+            )
+        }
+    }
+}
+
+/**
+ * 批量页的一个勾选列：固定宽度、勾选框居中，可选下面挂一行标签。
+ *
+ * 表头（带标签）和行内（不带标签）共用这一个格子。列宽和勾选框尺寸只由
+ * [KindColumnWidth] / [KindCheckboxSize] 决定，加新列时不会漏掉某处的对齐。
+ */
+@Composable
+private fun KindCheckboxColumn(
+    checked: Boolean,
+    enabled: Boolean,
+    onToggle: () -> Unit,
+    label: String? = null,
+) {
+    Box(
+        modifier = Modifier.width(KindColumnWidth),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Checkbox(
-                checked = allChecked,
-                onCheckedChange = { onToggleAll() },
+                checked = checked,
+                onCheckedChange = { onToggle() },
                 enabled = enabled,
                 modifier = Modifier.size(KindCheckboxSize)
             )
-            Text(
-                text = "all",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        // 只有一种内容时（例如目录的 dir），「all」和那一列是一回事，只留 all
-        if (columns.size > 1) columns.forEach { kind ->
-            Column(
-                modifier = Modifier.width(KindColumnWidth),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Checkbox(
-                    checked = columnChecked(kind),
-                    onCheckedChange = { onToggleColumn(kind) },
-                    enabled = enabled,
-                    modifier = Modifier.size(KindCheckboxSize)
-                )
+            if (label != null) {
                 Text(
-                    text = kind.title,
+                    text = label,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1247,106 +1213,150 @@ private fun BackupSelectRow(
             Spacer(modifier = Modifier.width(12.dp))
 
             // 点这一块进应用详情页；点行的其他地方是勾选。多选模式下整行都只切换选中
-            Column(
+            val rowTone = when {
+                missing -> RowTone.Missing
+                target.isApp && app.isSystem -> RowTone.SystemApp
+                else -> RowTone.Normal
+            }
+            RowTextBlock(
                 modifier = Modifier
                     .weight(1f)
-                    .then(if (multiSelect) Modifier else Modifier.clickable(onClick = onOpenDetail))
-            ) {
-                // 应用名加粗、版本号正常字重且更小；显示不下就省略
-                Text(
-                    text = buildAnnotatedString {
-                        withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
-                            append(app.name)
-                        }
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = systemAppTitleColor(target.isApp && app.isSystem)
-                        ?: missingTitleColor(missing),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textDecoration = if (missing) TextDecoration.LineThrough else null
-                )
-
-                // 文件夹、系统数据没有版本号
-                if (app.version.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(1.dp))
-                    Text(
-                        text = buildAnnotatedString {
-                            append(app.version)
-                            if (showBackupTime && target.isApp && versionChanged) {
-                                withStyle(SpanStyle(color = colors.heighLightColor)) {
-                                    append(" > $backupVersion")
-                                }
+                    .then(if (multiSelect) Modifier else Modifier.clickable(onClick = onOpenDetail)),
+                density = RowTextDensity.Compact,
+                tone = rowTone,
+                // 应用名加粗由 RowTextBlock 按密度给（Compact 档是 SemiBold）
+                title = AnnotatedString(app.name),
+                // 文件夹、系统数据没有版本号；版本行和标题同色
+                subtitle = if (app.version.isNotBlank()) {
+                    buildAnnotatedString {
+                        append(app.version)
+                        if (showBackupTime && target.isApp && versionChanged) {
+                            withStyle(SpanStyle(color = colors.heighLightColor)) {
+                                append(" > $backupVersion")
                             }
-
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = systemAppTitleColor(target.isApp && app.isSystem) ?: missingTitleColor(missing),
+                        }
+                    }
+                } else {
+                    null
+                },
+                subtitleColor = rowTitleColor(rowTone),
+                caption = AnnotatedString(app.packageName),
+                captionColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                captionMaxLines = 1,
+                extra = {
+                    RowTextLine(
+                        text = AnnotatedString("${summary?.count ?: 0}个备份"),
+                        density = RowTextDensity.Compact
                     )
-                }
-
-                Spacer(modifier = Modifier.height(1.dp))
-                Text(
-                    text = app.packageName,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.height(1.dp))
-                Text(
-                    text = "${summary?.count ?: 0}个备份",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
-                )
-                // 新建页：时间跟着排序方式变；按名称排序 / 时间戳无效 / 没备份就不显示这一行
-                if (target.isApp && !showBackupTime) {
-                    sortTimeLabel(sortType, app, summary?.latest?.time)?.let { label ->
-                        Spacer(modifier = Modifier.height(1.dp))
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1
+                    // 新建页：时间跟着排序方式变；按名称排序 / 时间戳无效 / 没备份就不显示这一行
+                    if (target.isApp && !showBackupTime) {
+                        sortTimeLabel(sortType, app, summary?.latest?.time)?.let { label ->
+                            RowTextLine(text = AnnotatedString(label), density = RowTextDensity.Compact)
+                        }
+                    }
+                    if (showBackupTime && entry != null) {
+                        RowTextLine(
+                            text = AnnotatedString("备份于 ${formatShortDateTime(entry.time)}"),
+                            density = RowTextDensity.Compact
                         )
+                        // 有备注就显示在时间下面，备注可能换行所以不限行数
+                        entry.description?.takeIf { it.isNotBlank() }?.let { note ->
+                            RowTextLine(
+                                text = AnnotatedString(note),
+                                density = RowTextDensity.Compact,
+                                maxLines = Int.MAX_VALUE
+                            )
+                        }
                     }
                 }
-                if (showBackupTime && entry != null) {
-                    Spacer(modifier = Modifier.height(1.dp))
-                    Text(
-                        text = "备份于 ${formatShortDateTime(entry.time)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1
-                    )
-                    // 有备注就显示在时间下面
-                    entry.description?.takeIf { it.isNotBlank() }?.let { note ->
-                        Spacer(modifier = Modifier.height(1.dp))
-                        Text(
-                            text = note,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
+            )
 
             Row(horizontalArrangement = Arrangement.End) {
                 columns.forEach { kind ->
-                    Box(
-                        modifier = Modifier.width(KindColumnWidth),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Checkbox(
-                            checked = kind in kinds,
-                            onCheckedChange = { onToggleKind(kind) },
-                            enabled = kind in availableKinds,
-                            modifier = Modifier.size(KindCheckboxSize)
-                        )
-                    }
+                    KindCheckboxColumn(
+                        checked = kind in kinds,
+                        enabled = kind in availableKinds,
+                        onToggle = { onToggleKind(kind) }
+                    )
                 }
             }
         }
+    }
+}
+
+/**
+ * 批量页底部操作栏。
+ *
+ * 新建模式只有一个「备份」大按钮；管理模式是删除 / 覆盖备份 / 恢复三个等高的次要按钮。
+ * 三种操作都走双击确认，[DoubleClickGuard] 由调用方持有（key 各不相同），这里只负责排版。
+ *
+ * 没有任何可操作的行时全部置灰（[actionableCount] == 0），运行中也不可点。
+ */
+@Composable
+private fun BatchActionBar(
+    mode: BackupBatchMode,
+    actionableCount: Int,
+    running: Boolean,
+    onCreate: () -> Unit,
+    onDelete: () -> Unit,
+    onOverwrite: () -> Unit,
+    onRestore: () -> Unit,
+) {
+    val enabled = actionableCount > 0 && !running
+
+    if (mode == BackupBatchMode.CREATE) {
+        Button(
+            onClick = onCreate,
+            enabled = enabled,
+            shape = MaterialTheme.shapes.large,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .height(52.dp)
+        ) {
+            Text("备份", style = MaterialTheme.typography.titleMedium)
+        }
+        return
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        BatchActionButton("删除", 0.9f, enabled, destructive = true, onClick = onDelete)
+        BatchActionButton("覆盖备份", 1.1f, enabled, onClick = onOverwrite)
+        BatchActionButton("恢复", 1.4f, enabled, onClick = onRestore)
+    }
+}
+
+/** [BatchActionBar] 里的一个次要按钮：宽度按权重分，高度固定 40dp。 */
+@Composable
+private fun RowScope.BatchActionButton(
+    text: String,
+    weight: Float,
+    enabled: Boolean,
+    destructive: Boolean = false,
+    onClick: () -> Unit,
+) {
+    FilledTonalButton(
+        onClick = onClick,
+        enabled = enabled,
+        shape = MaterialTheme.shapes.medium,
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+        modifier = Modifier
+            .weight(weight)
+            .height(40.dp)
+    ) {
+        Text(
+            text = text,
+            color = if (destructive) {
+                MaterialTheme.colorScheme.error
+            } else {
+                Color.Unspecified
+            },
+            style = MaterialTheme.typography.bodyMedium
+        )
     }
 }

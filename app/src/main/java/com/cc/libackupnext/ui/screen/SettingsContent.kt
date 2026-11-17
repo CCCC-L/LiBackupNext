@@ -10,11 +10,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,8 +30,10 @@ import com.cc.libackupnext.data.AppPrefs
 import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.ui.PageContentPadding
 import com.cc.libackupnext.ui.dialog.PruneProgressDialog
-import com.cc.libackupnext.ui.theme.dialogContainer
+import com.cc.libackupnext.ui.component.AppDialog
 import com.cc.libackupnext.ui.util.AppIconStore
+import com.cc.libackupnext.ui.component.CardGroup
+import com.cc.libackupnext.ui.component.SettingsCard
 import com.cc.libackupnext.ui.util.formatSize
 import com.cc.libackupnext.util.AppLog
 import com.cc.libackupnext.util.KeepAwake
@@ -263,66 +263,52 @@ fun SettingsContent(
     }
 
     if (showCleanConfirm) {
-        AlertDialog(
-            containerColor = MaterialTheme.colorScheme.dialogContainer,
-            onDismissRequest = { showCleanConfirm = false },
-            title = { Text("整理仓库") },
-            text = {
-                Column {
-                    Text("将清理已删除备份占用的磁盘空间，并回收没有备份的应用残留的图标。过程中请不要关闭应用。")
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Text(
-                        text = when {
-                            estimating -> "正在估算可清理的空间…"
-                            reclaimable == null -> "暂时无法估算可清理的空间"
-                            reclaimable!! <= 0L -> "当前没有可清理的空间"
-                            else -> "预计可清理 ${formatSize(reclaimable!!)}"
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = if (reclaimable != null && reclaimable!! > 0L) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        }
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showCleanConfirm = false
-                        cleaning = true
-                        scope.launch {
-                            KeepAwake.acquire(context)
-                            val result = try {
-                                // 彻底清理：repack 所有半空的包
-                                RusticClient.prune()
-                            } finally {
-                                KeepAwake.release()
-                            }
-                            cleaning = false
-                            val removedIcons = result.getOrDefault(0)
-                            AppLog.toastOnMain(when {
-                                    result.isFailure ->
-                                        "整理失败：${result.exceptionOrNull()?.message ?: "未知错误"}"
-                                    removedIcons > 0 -> "整理完成，清理了 $removedIcons 个残留图标"
-                                    else -> "整理完成"
-                                })
-                        }
+        AppDialog(
+            title = "整理仓库",
+            onDismiss = { showCleanConfirm = false },
+            confirmText = "开始整理",
+            onConfirm = {
+                showCleanConfirm = false
+                cleaning = true
+                scope.launch {
+                    KeepAwake.acquire(context)
+                    val result = try {
+                        // 彻底清理：repack 所有半空的包
+                        RusticClient.prune()
+                    } finally {
+                        KeepAwake.release()
                     }
-                ) {
-                    Text("开始整理")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCleanConfirm = false }) {
-                    Text("取消")
+                    cleaning = false
+                    val removedIcons = result.getOrDefault(0)
+                    AppLog.toastOnMain(when {
+                        result.isFailure ->
+                            "整理失败：${result.exceptionOrNull()?.message ?: "未知错误"}"
+                        removedIcons > 0 -> "整理完成，清理了 $removedIcons 个残留图标"
+                        else -> "整理完成"
+                    })
                 }
             }
-        )
+        ) {
+            Text("将清理已删除备份占用的磁盘空间，并回收没有备份的应用残留的图标。过程中请不要关闭应用。")
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(
+                text = when {
+                    estimating -> "正在估算可清理的空间…"
+                    reclaimable == null -> "暂时无法估算可清理的空间"
+                    reclaimable!! <= 0L -> "当前没有可清理的空间"
+                    else -> "预计可清理 ${formatSize(reclaimable!!)}"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = if (reclaimable != null && reclaimable!! > 0L) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+        }
     }
 
     if (cleaning) {

@@ -20,10 +20,10 @@ import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.ui.BottomBarContentSpace
 import com.cc.libackupnext.ui.PageContentHorizontalPadding
 import com.cc.libackupnext.ui.PageContentPadding
-import com.cc.libackupnext.ui.util.AppItemCard
-import com.cc.libackupnext.ui.util.AppListContainer
-import com.cc.libackupnext.ui.util.isMissing
-import com.cc.libackupnext.ui.util.targetViewOf
+import com.cc.libackupnext.ui.component.AppItemCard
+import com.cc.libackupnext.ui.component.AppListContainer
+import com.cc.libackupnext.ui.component.isMissing
+import com.cc.libackupnext.ui.component.targetViewOf
 
 /**
  * 列表里的一行：属于哪个目标 + 展示数据。
@@ -36,7 +36,7 @@ data class TargetRow(val target: BackupTarget, val item: AppInfo)
 /**
  * 备份目标列表：应用页 / 文件页 / 其他页共用。
  *
- * 图标、标题、副标题、要不要置灰都由 [com.cc.libackupnext.ui.util.TargetView] 决定，
+ * 图标、标题、副标题、要不要置灰都由 [com.cc.libackupnext.ui.component.TargetView] 决定，
  * 这里只负责排版、备份数、下拉刷新和点击。
  *
  * @param extraBottomText 第三行下面的小字（应用页按安装/更新/备份时间排序时显示对应时间）
@@ -137,8 +137,8 @@ private fun ListContent(
             icon = { view.Icon() },
             frozen = view.isFrozen,
             dimmed = view.isMissing,
+            tone = view.tone,
             title = view.title,
-            titleColor = view.titleColor,
             subtitle = view.subtitle,
             bottomText = "${summaries[row.item.packageName]?.count ?: 0}个备份",
             extraBottomText = extraBottomText(row.item),

@@ -1,16 +1,22 @@
-package com.cc.libackupnext.ui.screen
+package com.cc.libackupnext.ui.component
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -21,20 +27,78 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.cc.libackupnext.ui.util.GroupVerticalSpacing
-import com.cc.libackupnext.ui.util.groupedItemShape
 
 /**
- * 设置页 / 关于页 / 开源声明页共用的一套「分组卡片」。
+ * 「分组卡片」这一套规则的唯一出口。
  *
- * 形状和 apptab 的列表卡片（[com.cc.libackupnext.ui.util.AppListContainer]）完全一致：
- * 圆角按组内位置由 [groupedItemShape] 算，行与行之间只隔 [GroupVerticalSpacing]，
- * 没有分割线 —— 一组看起来就是一张被切成几段的卡片。
+ * 设置页、关于页、开源声明页、apptab 列表、批量页都用同一套形状：一组的第 i 行圆角由
+ * [groupedItemShape] 按位置算，行与行之间只隔 [GroupVerticalSpacing]，没有分割线 ——
+ * 一组看起来就是一张被切成几段的卡片。
+ *
+ * 这里有四个入口，选哪个只看调用方是什么容器：
+ * - [AppListContainer]：数据驱动的 LazyColumn，自己管 state / padding / key
+ * - [cardGroup]：已经在 LazyColumn 里，再往里追加一组（开源声明页）
+ * - [CardGroup]：普通 Column 里的一组（设置页、关于页）
+ * - [SettingsCard]：组里的一行
+ *
+ * 形状规则只有 [groupedItemShape] 一份，四个入口都走它，不要各写一套圆角。
  */
 
+/** 一组卡片里第 [index] 项该用的圆角（[count] 是这一组的行数）。 */
 @Composable
-internal fun SectionTitle(text: String) {
+fun groupedItemShape(index: Int, count: Int): Shape {
+    val shapes = MaterialTheme.shapes
+    val largeCorner = shapes.extraLarge.topStart
+    val smallCorner = shapes.extraSmall.topStart
+    val isFirst = index == 0
+    val isLast = index == count - 1
+    return when {
+        isFirst && isLast -> shapes.extraLarge
+        isFirst -> RoundedCornerShape(
+            topStart = largeCorner, topEnd = largeCorner,
+            bottomStart = smallCorner, bottomEnd = smallCorner
+        )
+        isLast -> RoundedCornerShape(
+            topStart = smallCorner, topEnd = smallCorner,
+            bottomStart = largeCorner, bottomEnd = largeCorner
+        )
+        else -> shapes.extraSmall
+    }
+}
+
+/** 组内相邻两行之间的缝：就是页面底色露出来的那一条。 */
+val GroupVerticalSpacing: Dp = 2.dp
+
+@Composable
+fun <T> AppListContainer(
+    items: List<T>,
+    modifier: Modifier = Modifier,
+    state: LazyListState = rememberLazyListState(),
+    contentPadding: PaddingValues = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+    verticalSpacing: Dp = GroupVerticalSpacing,
+    header: (@Composable () -> Unit)? = null,
+    key: ((index: Int, item: T) -> Any)? = null,
+    itemContent: @Composable (index: Int, item: T, shape: Shape) -> Unit
+) {
+    LazyColumn(
+        modifier = modifier,
+        state = state,
+        verticalArrangement = Arrangement.spacedBy(verticalSpacing),
+        contentPadding = contentPadding
+    ) {
+        if (header != null) {
+            item { header() }
+        }
+        itemsIndexed(items, key = key) { index, item ->
+            itemContent(index, item, groupedItemShape(index, items.size))
+        }
+    }
+}
+
+@Composable
+fun SectionTitle(text: String) {
     // 撑满宽度：关于页的父 Column 是水平居中的，不撑满标题会跟着居中
     Text(
         text = text,
@@ -55,7 +119,7 @@ internal fun SectionTitle(text: String) {
  * @param title 组标题；传 null 就不带标题（关于页的版本卡这种）。
  */
 @Composable
-internal fun CardGroup(
+fun CardGroup(
     title: String?,
     vararg rows: @Composable (Shape) -> Unit
 ) {
@@ -70,7 +134,7 @@ internal fun CardGroup(
  * [CardGroup] 的 LazyColumn 版：长列表（开源软件声明）用它，圆角 / 间距规则一模一样，
  * 只是每行作为独立的 lazy item 提交，不一次性组合。
  */
-internal fun <T> LazyListScope.cardGroup(
+fun <T> LazyListScope.cardGroup(
     title: String?,
     items: List<T>,
     key: ((item: T) -> Any)? = null,
@@ -94,7 +158,7 @@ internal fun <T> LazyListScope.cardGroup(
  * （bodyMedium Medium + bodySmall），比列表卡片的 titleMedium 轻一档。
  */
 @Composable
-internal fun SettingsCard(
+fun SettingsCard(
     shape: Shape,
     title: String,
     subtitle: String,
