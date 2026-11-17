@@ -50,10 +50,6 @@ class RootServiceManager<T : IInterface>(
     private var reconnectJob: Job? = null
     private var attempts = 0
 
-    /** 一次断开只提示一次，避免两个回调连着弹两个 Toast。 */
-    @Volatile
-    private var deathNotified = false
-
     suspend fun getService(): T {
         service?.let { return it }                       // 快速路径，零锁
         return mutex.withLock {
@@ -71,20 +67,17 @@ class RootServiceManager<T : IInterface>(
                     cont.resumeWithException(IllegalStateException("onServiceConnected 返回 null binder"))
                 } else {
                     attempts = 0
-                    deathNotified = false
                     cont.resume(b)
                 }
             }
 
             override fun onServiceDisconnected(name: ComponentName?) {
                 AppLog.w("RootService", "服务连接意外断开，准备重连")
-                notifyDeathOnce()
                 reconnect()
             }
 
             override fun onBindingDied(name: ComponentName?) {
                 AppLog.w("RootService", "绑定死亡（:root 进程可能被杀），准备重连")
-                notifyDeathOnce()
                 reconnect()
             }
 
@@ -101,12 +94,6 @@ class RootServiceManager<T : IInterface>(
 
         val intent = Intent(appContext, serviceClass)
         Handler(Looper.getMainLooper()).post { RootService.bind(intent, conn) }
-    }
-
-    private fun notifyDeathOnce() {
-        if (deathNotified) return
-        deathNotified = true
-        AppLog.toastOnMain("root 服务已断开，正在自动重连")
     }
 
     private fun reconnect() {
