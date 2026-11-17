@@ -56,7 +56,7 @@ private const val ERASE_DURATION_MS = 300L
  * 用户按钮和排序按钮共用这一个 tween，两处同时起步、同时到位。
  */
 private const val POSITION_DURATION_MS = 250L
-/** 搜索栏展开 / 收缩的时长；顶栏等它收完再弹键盘也用这个值。 */
+/** 搜索栏展开 / 收缩的时长。 */
 const val SearchBarDurationMs = 300
 /** 搜索栏弹出时：搜索图标、更多按钮在槽内擦除消失的时长（比搜索栏本身略快）。 */
 const val SearchButtonHideMs = 250

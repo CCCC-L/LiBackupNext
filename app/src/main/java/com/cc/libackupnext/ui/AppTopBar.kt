@@ -43,6 +43,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.android.awaitFrame
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -59,7 +60,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.ui.theme.IconSlotWidth
 import com.cc.libackupnext.ui.theme.actionGroupWidthContinuous
-import com.cc.libackupnext.ui.theme.SearchBarDurationMs
 import com.cc.libackupnext.ui.theme.SearchButtonHideMs
 import com.cc.libackupnext.ui.theme.collapseHorizontally
 import com.cc.libackupnext.ui.theme.eraseToRight
@@ -68,7 +68,6 @@ import com.cc.libackupnext.ui.theme.rememberEraseProgress
 import com.cc.libackupnext.ui.theme.rememberMiddleButtonEndPadding
 import com.cc.libackupnext.ui.theme.rememberPendingRetryPulse
 import com.cc.libackupnext.ui.theme.rememberSearchBarProgress
-import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -228,8 +227,8 @@ fun AppTopBar(
     val keyboardController = LocalSoftwareKeyboardController.current
     LaunchedEffect(isSearching) {
         if (isSearching) {
-            // 等展开动画走完再弹键盘，输入框还在往右长的时候别把键盘顶上来
-            delay(SearchBarDurationMs.toLong())
+            // 展开动画起步就聚焦并弹键盘；等一帧只是让刚进组的输入框完成挂载，
+            awaitFrame()
             runCatching { searchFocusRequester.requestFocus() }
             keyboardController?.show()
         } else {
