@@ -40,7 +40,8 @@ fun BackupEntryRow(
     onManage: () -> Unit,
 ) {
     AppItemCard(
-        title = "${entry.title} ${entry.version}",
+        // 文件夹、系统数据没有版本号
+        title = entry.version?.takeIf { it.isNotBlank() }?.let { "${entry.title} $it" } ?: entry.title,
         subtitle = listOfNotNull(entry.userName, formatShortDateTime(entry.time))
             .joinToString(" · "),
         bottomText = entry.description ?: "无备注",

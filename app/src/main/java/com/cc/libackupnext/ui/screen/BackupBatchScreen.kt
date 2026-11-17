@@ -1267,20 +1267,23 @@ private fun BackupSelectRow(
                     textDecoration = if (missing) TextDecoration.LineThrough else null
                 )
 
-                Spacer(modifier = Modifier.height(1.dp))
-                Text(
-                    text = buildAnnotatedString {
-                        append(app.version)
-                        if (showBackupTime && target.isApp && versionChanged) {
-                            withStyle(SpanStyle(color = colors.heighLightColor)) {
-                                append(" > $backupVersion")
+                // 文件夹、系统数据没有版本号
+                if (app.version.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(1.dp))
+                    Text(
+                        text = buildAnnotatedString {
+                            append(app.version)
+                            if (showBackupTime && target.isApp && versionChanged) {
+                                withStyle(SpanStyle(color = colors.heighLightColor)) {
+                                    append(" > $backupVersion")
+                                }
                             }
-                        }
 
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = systemAppTitleColor(target.isApp && app.isSystem) ?: missingTitleColor(missing),
-                )
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = systemAppTitleColor(target.isApp && app.isSystem) ?: missingTitleColor(missing),
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(1.dp))
                 Text(
