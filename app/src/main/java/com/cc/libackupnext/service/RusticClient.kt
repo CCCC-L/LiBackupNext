@@ -368,6 +368,7 @@ object RusticClient {
                 user = request.backupUser,
                 data = request.backupData,
                 permissions = request.backupPermissions,
+                kinds = request.kinds,
                 timestamp = operationId,
                 includeIcon = !hasIcon && !isDir,
                 parents = parentIds?.takeIf { it.isNotEmpty() }?.mapKeys { it.key.key },
@@ -721,8 +722,8 @@ object RusticClient {
      * @return 清掉的图标快照数量
      */
     /**
-     * 系统数据（Wi-Fi / 联系人 / 通话记录）各有多少条；读不到的类型不在结果里。
-     * 三类都由 root 侧数（Wi-Fi 走 WifiManager，另外两类走 provider 的外部通道）。
+     * 系统数据（Wi-Fi / 联系人 / 通话记录 / 短信 / 彩信）各有多少条；读不到的类型不在结果里。
+     * 全部由 root 侧数（Wi-Fi 走 WifiManager，其余走 provider 的外部通道）。
      * 只是借 root 进程权限读本机数据，不碰仓库：用 [bindService] 只拿 binder，
      * 不走 [remoteCall]，也不注入当前仓库的凭据。
      */
@@ -1101,7 +1102,10 @@ object RusticClient {
         SnapshotKind.DATA,
         SnapshotKind.WIFI,
         SnapshotKind.CONTACTS,
-        SnapshotKind.CALLS
+        SnapshotKind.CALLS,
+        // 短信先于彩信：恢复时彩信的会话要建在短信已经建好的 thread 上
+        SnapshotKind.SMS,
+        SnapshotKind.MMS
     )
 
     /** 备份要显示的步骤（顺序固定）。 */
@@ -1155,7 +1159,13 @@ object RusticClient {
         backupObb = BackupGroup.APK in groups,
         backupUser = BackupGroup.USER in groups,
         backupData = BackupGroup.DATA in groups,
-        backupPermissions = BackupGroup.APK in groups
+        backupPermissions = BackupGroup.APK in groups,
+        // 固定目标要带上勾了哪几项；应用 / 文件夹由上面几个 bool 决定
+        kinds = if (BackupTarget.of(app).isFixed) {
+            groups.flatMap { it.kinds }.map { it.key }.distinct()
+        } else {
+            null
+        }
     )
 
     private fun statusOf(state: String, fallback: BackupStepStatus): BackupStepStatus =

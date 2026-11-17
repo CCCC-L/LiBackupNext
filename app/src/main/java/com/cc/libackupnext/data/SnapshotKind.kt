@@ -23,7 +23,13 @@ enum class SnapshotKind(val key: String) {
     CONTACTS("contacts"),
 
     /** 通话记录。 */
-    CALLS("calls");
+    CALLS("calls"),
+
+    /** 短信：content://sms 的标准列。 */
+    SMS("sms"),
+
+    /** 彩信：content://mms + 它的 addr / part 子表。 */
+    MMS("mms");
 
     companion object {
         /** 容错解析：仓库里可能有本版本还不认识的类型，返回 null 而不是抛异常。 */
@@ -52,7 +58,13 @@ enum class BackupGroup(
 
     WIFI("wifi", "wifi", listOf(SnapshotKind.WIFI)),
     CONTACTS("contacts", "contacts", listOf(SnapshotKind.CONTACTS)),
-    CALLS("calls", "calls", listOf(SnapshotKind.CALLS));
+    CALLS("calls", "calls", listOf(SnapshotKind.CALLS)),
+
+    /** 短信：和彩信共用「短信」这一个目标，但在备份弹窗里是各自独立的一项。 */
+    SMS("短信", "短信", listOf(SnapshotKind.SMS)),
+
+    /** 彩信：附件会一起进快照，体积比短信大得多。 */
+    MMS("彩信", "彩信", listOf(SnapshotKind.MMS));
 
     /** 这个勾选单位是否包含某个快照类型（null 表示解析不出来的未知类型）。 */
     fun covers(kind: SnapshotKind?): Boolean = kind != null && kind in kinds

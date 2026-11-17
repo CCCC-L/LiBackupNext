@@ -94,3 +94,42 @@ data class ContactDataDto(
 /** 每行都是「列名 -> 值」的动态 Map：不同版本 / 厂商的列不一样。 */
 @Serializable
 data class CallsBackup(val calls: List<Map<String, String>>)
+
+// ==================== sms.json ====================
+
+/**
+ * 短信：每行都是「标准列名 -> 值」。
+ *
+ * 只收 AOSP 定义的标准列，厂商私有列（oplus_* / rcs_* / bubble 这些）一个都不存 ——
+ * 它们回写时会被 provider 拒绝，或者写进去让信息应用显示错乱。
+ */
+@Serializable
+data class SmsBackup(val messages: List<Map<String, String>>)
+
+// ==================== mms.json ====================
+
+/** 彩信：一条 mms 行 + 它的地址表和 part 表。 */
+@Serializable
+data class MmsBackup(val messages: List<MmsDto>)
+
+@Serializable
+data class MmsDto(
+    /** mms 表的字段（同样只收标准列） */
+    val fields: Map<String, String>,
+    /** content://mms/<id>/addr 的行：收件人 / 发件人 / 抄送 */
+    val addrs: List<Map<String, String>> = emptyList(),
+    val parts: List<MmsPartDto> = emptyList()
+)
+
+/**
+ * 一个 part。
+ *
+ * @param fields part 表的字段；`_data` 不存 —— 它指向 provider 的私有目录，
+ *   恢复时要重新生成
+ * @param dataFile 附件在快照目录里的相对路径（`parts/xxx`）。附件是**独立文件**。
+ */
+@Serializable
+data class MmsPartDto(
+    val fields: Map<String, String>,
+    val dataFile: String? = null
+)

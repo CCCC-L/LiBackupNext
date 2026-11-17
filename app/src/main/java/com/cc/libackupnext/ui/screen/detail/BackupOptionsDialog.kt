@@ -32,7 +32,8 @@ import com.cc.libackupnext.data.BackupTarget
  * 备份选项弹窗。
  *
  * 应用：apk / user / data 三选
- * 文件夹 / 系统数据 没有可选项，只有一句确认。
+ * 短信：短信 / 彩信 两选
+ * 文件夹和其余系统数据没有可选项，只有一句确认。
  */
 @Composable
 fun BackupOptionsDialog(

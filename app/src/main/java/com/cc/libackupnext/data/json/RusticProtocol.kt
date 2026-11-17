@@ -66,6 +66,13 @@ data class BackupOptions(
     val includeIcon: Boolean = true,
     val parents: Map<String, String>? = null,
     val batch: String? = null,
+    /**
+     * 固定目标（Wi-Fi / 联系人 / 通话记录 / 短信）要备份哪几项，值是 [SnapshotKind.key]。
+     *
+     * 应用 / 文件夹不看这个字段（它们由上面几个 bool 决定）；
+     * null 表示「全备」，老客户端不带这个字段时行为不变。
+     */
+    val kinds: List<String>? = null,
     val overrides: Map<String, SnapshotOverrideDto>? = null
 )
 

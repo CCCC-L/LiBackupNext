@@ -37,21 +37,35 @@ enum class BackupTarget(
     CONTACTS("个联系人", listOf(BackupGroup.CONTACTS), fixedId = "contacts", displayName = "联系人"),
 
     /** 通话记录。 */
-    CALLS("条记录", listOf(BackupGroup.CALLS), fixedId = "calls", displayName = "通话记录");
+    CALLS("条记录", listOf(BackupGroup.CALLS), fixedId = "calls", displayName = "通话记录"),
+
+    /**
+     * 短彩信：一个目标，底下两个快照分开勾选。
+     *
+     * 合成一个目标是因为用户认知里它们是同一个「信息」；拆成两个快照是因为
+     * 彩信带附件、体积大得多，失败也要能隔离。
+     */
+    SMS(
+        "条记录",
+        listOf(BackupGroup.SMS, BackupGroup.MMS),
+        fixedId = "messaging",
+        displayName = "短彩信"
+    );
 
     /** 是不是「应用」这种目标。目前只用来决定详情页 / 批量页显不显示用户切换按钮。 */
     val isApp: Boolean get() = this == APP
 
-    /** 内容固定、永远只有一行的目标（Wi-Fi / 联系人 / 通话记录）。 */
+    /** 内容固定、永远只有一行的目标（Wi-Fi / 联系人 / 通话记录 / 短彩信）。 */
     val isFixed: Boolean get() = fixedId != null
 
     /** 详情页顶栏标题。 */
     val detailTitle: String get() = when (this) {
         APP -> "应用信息"
         DIR -> "文件信息"
-        WIFI -> "Wi-Fi 信息"
-        CONTACTS -> "联系人信息"
-        CALLS -> "通话记录信息"
+        WIFI -> "Wi-Fi"
+        CONTACTS -> "联系人"
+        CALLS -> "通话记录"
+        SMS -> "短彩信"
     }
 
     /** 详情页「帮助」里显示的内容，一行一段。 */
@@ -82,18 +96,21 @@ enum class BackupTarget(
         CALLS -> listOf(
             "注：备份时建议用其他软件也备份一次"
         )
+
+        SMS -> listOf(
+            "短信、彩信：只备份标准字段，厂商私有字段（气泡、RCS 标记等）不备份",
+            "恢复：已存在的消息会跳过，不会重复写入"
+        )
     }
 
     /**
      * 这次备份要产出的内容。
      *
-     * 应用：用户勾了哪些就是哪些；
-     * 其余：整个全备，没有可选项，勾选状态忽略。
+     * 只有一项的类型整体全备（没有可选项，勾选状态忽略）；
+     * 有多项的类型（应用、短信）按勾选来 —— 判据和备份弹窗用的是同一个。
      */
-    fun backupKinds(checked: Set<BackupGroup>): Set<BackupGroup> = when (this) {
-        APP -> checked intersect kinds.toSet()
-        else -> kinds.toSet()
-    }
+    fun backupKinds(checked: Set<BackupGroup>): Set<BackupGroup> =
+        if (kinds.size == 1) kinds.toSet() else checked intersect kinds.toSet()
 
     /**
      * 这一页要列的目标。
@@ -113,7 +130,7 @@ enum class BackupTarget(
                 .filterNot { create && !File(it).isDirectory }
                 .map { dirAppInfo(it) }
             // 固定目标永远只有一行，和系统里有没有数据无关
-            WIFI, CONTACTS, CALLS -> listOf(fixedAppInfo())
+            else -> listOf(fixedAppInfo())
         }
         return if (create) all else all.filter { hasBackup(it.packageName) }
     }

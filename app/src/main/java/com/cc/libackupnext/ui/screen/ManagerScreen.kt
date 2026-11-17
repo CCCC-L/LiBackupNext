@@ -71,7 +71,6 @@ import com.cc.libackupnext.ui.theme.heighLightColor
 import com.cc.libackupnext.ui.util.AppIconStore
 import com.cc.libackupnext.ui.util.AppListContainer
 import com.cc.libackupnext.ui.util.countText
-import com.cc.libackupnext.ui.util.systemCount
 import com.cc.libackupnext.util.BackupNotifier
 import com.cc.libackupnext.util.AppLog
 import com.cc.libackupnext.util.KeepAwake
@@ -172,7 +171,7 @@ fun AppBackupScreen(
                         (loadedUserId == currentUserId && appForCurrentUser == null))
         // 系统数据没有「装没装」这回事
         BackupTarget.WIFI, BackupTarget.CONTACTS,
-        BackupTarget.CALLS -> false
+        BackupTarget.CALLS, BackupTarget.SMS -> false
     }
 
     var isBusy by remember { mutableStateOf(false) }
@@ -180,8 +179,8 @@ fun AppBackupScreen(
 
     // ==================== 备份 ====================
     var showBackupOptions by remember { mutableStateOf(false) }
-    // 备份弹窗里勾了哪些内容：默认全勾
-    var backupGroups by remember { mutableStateOf(BackupTarget.APP.kinds.toSet()) }
+    // 备份弹窗里勾了哪些内容：默认全勾（换目标时要重置，否则会带上上一个目标的勾选）
+    var backupGroups by remember(target) { mutableStateOf(target.kinds.toSet()) }
     var showBackupProgress by remember { mutableStateOf(false) }
     var backupRunning by remember { mutableStateOf(false) }
 
@@ -713,7 +712,7 @@ fun AppBackupScreen(
                         onAction = { perform(it) },
                         onBackup = { showBackupOptions = true },
                         subtitle = if (target.isFixed) {
-                            target.countText(target.systemCount(systemCounts))
+                            target.countText(systemCounts)
                         } else {
                             null
                         }

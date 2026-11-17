@@ -69,13 +69,14 @@ enum class HomeTab(
         manageLabel = "管理文件备份"
     ),
 
-    /** Wi-Fi / 联系人 / 通话记录：一页列多个固定目标。 */
+    /** Wi-Fi / 联系人 / 通话记录 / 短信：一页列多个固定目标。 */
     OTHERS(
         "系统", Icons.Filled.Android,
         listOf(
             BackupTarget.WIFI,
             BackupTarget.CONTACTS,
-            BackupTarget.CALLS
+            BackupTarget.CALLS,
+            BackupTarget.SMS
         ),
         searchHint = "搜索",
         createLabel = "新建系统数据备份",

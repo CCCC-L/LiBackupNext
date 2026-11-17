@@ -158,7 +158,7 @@ fun targetViewOf(
     BackupTarget.APP -> AppView(app, isMissing)
     BackupTarget.DIR -> DirView(app, isMissing)
     BackupTarget.WIFI, BackupTarget.CONTACTS,
-    BackupTarget.CALLS -> SystemView(target, app, subtitle)
+    BackupTarget.CALLS, BackupTarget.SMS -> SystemView(target, app, subtitle)
 }
 
 /**
@@ -172,5 +172,5 @@ fun BackupTarget.isMissing(app: AppInfo): Boolean = when (this) {
     BackupTarget.DIR -> !File(app.packageName).isDirectory
     // 系统数据只要 provider 读得到就有；读不到时备份会自己跳过并给出说明
     BackupTarget.WIFI, BackupTarget.CONTACTS,
-    BackupTarget.CALLS -> false
+    BackupTarget.CALLS, BackupTarget.SMS -> false
 }

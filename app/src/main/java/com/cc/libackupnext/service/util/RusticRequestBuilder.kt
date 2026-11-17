@@ -96,7 +96,8 @@ internal class RusticRequestBuilder(
 
         val batch = options.batch?.takeIf { it.isNotBlank() }
 
-        // 目录备份：一个目录就是一个快照，label 固定为 `dir:<绝对路径>`。
+        // 目录备份：一个目录就是一个快照，label 是 `<绝对路径>:dir` —— 类型仍在最后，
+        // 和应用 / 固定目标同构，SnapshotMeta 一套规则就能解析全部 label。
         // 快照里顶层目录名用文件夹名（as_path），恢复时落到父目录即可还原。
         if (packageName.startsWith('/')) {
             val dir = File(packageName)
@@ -118,25 +119,36 @@ internal class RusticRequestBuilder(
             )
         }
 
-        // 系统数据（Wi-Fi / 联系人 / 通话记录）：内容由 root 侧导出成 JSON。
-        // 这里只声明要备份哪一项，sources 留空、由 RusticServer 导出后填。
+        // 系统数据（Wi-Fi / 联系人 / 通话记录 / 短信）：内容由 root 侧导出成 JSON。
+        // 这里只声明要备份哪几项，sources 留空、由 RusticServer 导出后填。
         val fixedTarget = BackupTarget.entries
             .firstOrNull { it.fixedId != null && it.fixedId == packageName }
         if (fixedTarget != null) {
-            val kind = fixedTarget.kinds.first().kinds.first()
-            val systemItem = item(
-                stage = kind.key,
-                label = labelOf(kind.key, "$packageName:${kind.key}"),
-                tags = tagsOf(kind.key, tags),
-                sources = emptyList(),
-                asPath = "$packageName.json",
-                description = descriptionOf(kind.key)
-            ).copy(
-                system = true,
-                parent = parents?.get(kind.key)?.takeIf { it.isNotBlank() }
-            )
+            // 这个目标支持的全部类型；用户勾了哪些就只备哪些（没传 kinds 时按全备处理）
+            val available = fixedTarget.kinds.flatMap { it.kinds }
+            val wanted = options.kinds
+                ?.mapNotNull { SnapshotKind.of(it) }
+                ?.filter { it in available }
+                ?: available
+            if (wanted.isEmpty()) return null
 
-            return RusticBackupRequest(items = listOf(systemItem), batch = batch)
+            val items = wanted.map { kind ->
+                item(
+                    stage = kind.key,
+                    label = labelOf(kind.key, "$packageName:${kind.key}"),
+                    tags = tagsOf(kind.key, tags),
+                    sources = emptyList(),
+                    // 兜底值：RusticServer 把内容导出成目录后，会把 as_path 覆盖成 "/"，
+                    // 让整个导出目录就是快照根
+                    asPath = "${kind.key}.json",
+                    description = descriptionOf(kind.key)
+                ).copy(
+                    system = true,
+                    parent = parents?.get(kind.key)?.takeIf { it.isNotBlank() }
+                )
+            }
+
+            return RusticBackupRequest(items = items, batch = batch)
         }
 
         val items = mutableListOf<BackupItemDto>()

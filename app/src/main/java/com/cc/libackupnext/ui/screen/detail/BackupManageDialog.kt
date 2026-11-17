@@ -65,13 +65,16 @@ fun BackupManageDialog(
                         withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
                             append(entry.title)
                         }
-                        append(" ")
-                        withStyle(SpanStyle(
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = if (isVersionChanged) MaterialTheme.colorScheme.heighLightColor else Color.Unspecified
-                        )) {
-                            append((entry.version))
+                        // 系统数据（Wi-Fi / 联系人 / 通话记录 / 短信）没有版本号，别挂一个「null」
+                        entry.version?.takeIf { it.isNotBlank() }?.let { version ->
+                            append(" ")
+                            withStyle(SpanStyle(
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = if (isVersionChanged) MaterialTheme.colorScheme.heighLightColor else Color.Unspecified
+                            )) {
+                                append(version)
+                            }
                         }
 
                     },

@@ -465,8 +465,13 @@ object RusticServer {
                     emit(kind, "running")
 
                     val result = try {
-                        val json = loadJsonFromRepo(id, kind.key)
-                        SystemDataRestorer.restore(context, kind, json)
+                        // 解到临时目录（彩信的附件也在里面），用完删掉
+                        val dir = loadSystemDirFromRepo(id, kind)
+                        try {
+                            SystemDataRestorer.restoreFrom(context, kind, dir)
+                        } finally {
+                            dir.deleteRecursively()
+                        }
                     } catch (t: Throwable) {
                         AppLog.e(TAG, "恢复 ${kind.key} 失败", t, opOf(request))
                         emit(kind, "failed")
@@ -499,7 +504,7 @@ object RusticServer {
 
         /** 从仓库里取回备份文件原文；坏文件抛 IllegalArgumentException 让调用方标成「跳过」。 */
         private fun loadJsonFromRepo(id: String, kind: String): String {
-            val dir = File(context.cacheDir, "restore_${kind}").apply {
+            val dir = File(context.cacheDir, "restore_$kind").apply {
                 deleteRecursively()
                 mkdirs()
             }
@@ -511,7 +516,7 @@ object RusticServer {
 
                 // 快照里的文件名就是 <kind>.json（导出时就是这么写的）
                 val text = try {
-                    File(dir, "${kind}.json").readText()
+                    File(dir, "$kind.json").readText()
                 } catch (t: Throwable) {
                     throw IllegalArgumentException()
                 }
@@ -522,6 +527,38 @@ object RusticServer {
                 return text
             } finally {
                 dir.deleteRecursively()
+            }
+        }
+
+        /**
+         * 把系统数据快照解到临时目录，返回这个目录 —— **调用方负责删**。
+         *
+         * 和 [loadJsonFromRepo] 的区别：彩信的附件是快照里的独立文件，不能只把 JSON
+         * 读成字符串。坏快照抛 IllegalArgumentException，让调用方标成「跳过」。
+         */
+        private fun loadSystemDirFromRepo(id: String, kind: SnapshotKind): File {
+            val dir = File(context.cacheDir, "restore_${kind.key}").apply {
+                deleteRecursively()
+                mkdirs()
+            }
+            try {
+                val error = restoreTo(id, dir.absolutePath, delete = false)
+                if (error.isNotBlank()) throw IllegalStateException(error)
+
+                // 快照里一定有一个 <kind>.json（导出时就是这么写的）
+                val text = try {
+                    File(dir, "${kind.key}.json").readText()
+                } catch (t: Throwable) {
+                    throw IllegalArgumentException()
+                }
+                // 先确认是个 JSON 对象，再交给各 handler 按类型解码
+                if (runCatching { AppJson.parseToJsonElement(text).jsonObject }.isFailure) {
+                    throw IllegalArgumentException()
+                }
+                return dir
+            } catch (t: Throwable) {
+                dir.deleteRecursively()
+                throw t
             }
         }
 
@@ -715,9 +752,11 @@ object RusticServer {
         }
 
         /**
-         * 系统数据（Wi-Fi / 联系人 / 通话记录）的快照不是文件：
-         * 备份前先把内容导出成 JSON 写进 cache，再把路径填进 item 的 sources。
+         * 系统数据（Wi-Fi / 联系人 / 通话记录 / 短信）的快照不是文件：
+         * 备份前先导出到一个临时目录，整个目录进快照（`as_path = "/"`，快照根就是目录内容）。
          *
+         * 用目录而不是单文件是为了彩信 —— 附件是独立文件、流复制进去，多大都不占内存。
+         * 一个目标可能有多个 item（短信目标下有 sms / mms 两个），各自一个目录。
          * 导出失败时把 item 标成跳过 —— Rust 侧看到空 sources 会自己跳。
          */
         private fun prepareSystemItems(request: RusticBackupRequest): RusticBackupRequest {
@@ -725,23 +764,29 @@ object RusticServer {
                 if (item.system != true) return@map item
                 val kind = SnapshotKind.of(item.stage) ?: return@map item
 
-                val json = SystemDataExporter.export(context, kind)
-                    ?: return@map item.copy(skipReason = "导出失败")
-
-                // 文件名就是快照里的名字（rustic 对单文件源不认 as_path）
-                val file = File(context.cacheDir, "${kind.key}.json")
-                file.writeText(json)
-                item.copy(sources = listOf(file.absolutePath))
+                val dir = systemDataDir(kind)
+                if (!SystemDataExporter.exportTo(context, kind, dir)) {
+                    dir.deleteRecursively()
+                    return@map item.copy(skipReason = "导出失败")
+                }
+                item.copy(sources = listOf(dir.absolutePath), asPath = "/")
             }
             return request.copy(items = items)
         }
 
-        /** 备份结束后删掉导出用的临时文件。 */
+        /** 导出用的临时目录；每次先清空，别让上一轮的残留混进快照。 */
+        private fun systemDataDir(kind: SnapshotKind): File =
+            File(context.cacheDir, "sysdata_${kind.key}").apply {
+                deleteRecursively()
+                mkdirs()
+            }
+
+        /** 备份结束后删掉导出用的临时目录。 */
         private fun cleanupSystemItems(request: RusticBackupRequest) {
             request.items.forEach { item ->
                 if (item.system != true) return@forEach
                 val kind = SnapshotKind.of(item.stage) ?: return@forEach
-                runCatching { File(context.cacheDir, "${kind.key}.json").delete() }
+                runCatching { File(context.cacheDir, "sysdata_${kind.key}").deleteRecursively() }
             }
         }
     }

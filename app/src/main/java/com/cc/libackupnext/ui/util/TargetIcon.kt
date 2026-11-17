@@ -7,6 +7,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Sms
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -20,11 +21,12 @@ import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.entity.AppInfo
 
-/** 固定目标的矢量图标：Wi-Fi / 联系人 / 通话记录。 */
+/** 固定目标的矢量图标：Wi-Fi / 联系人 / 通话记录 / 短信。 */
 private val SystemDataIcons: Map<BackupTarget, ImageVector> = mapOf(
     BackupTarget.WIFI to Icons.Filled.Wifi,
     BackupTarget.CONTACTS to Icons.Filled.Contacts,
-    BackupTarget.CALLS to Icons.Filled.Phone
+    BackupTarget.CALLS to Icons.Filled.Phone,
+    BackupTarget.SMS to Icons.Filled.Sms
 )
 
 /**
@@ -55,7 +57,7 @@ fun TargetIconBox(
         BackupTarget.DIR -> VectorIconBox(Icons.Filled.Folder, size, modifier)
 
         BackupTarget.WIFI, BackupTarget.CONTACTS,
-        BackupTarget.CALLS -> VectorIconBox(
+        BackupTarget.CALLS, BackupTarget.SMS -> VectorIconBox(
             icon = SystemDataIcons.getValue(target),
             size = size,
             modifier = modifier,

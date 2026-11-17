@@ -137,6 +137,6 @@ fun detailTargetOf(
     BackupTarget.APP -> AppTarget(app, isUninstalled, latestVersion, onAction, onBackup)
     BackupTarget.DIR -> DirTarget(app, isUninstalled, onAction, onBackup)
     BackupTarget.WIFI, BackupTarget.CONTACTS,
-    BackupTarget.CALLS ->
+    BackupTarget.CALLS, BackupTarget.SMS ->
         SystemTarget(kind, app, subtitle, onAction, onBackup)
 }

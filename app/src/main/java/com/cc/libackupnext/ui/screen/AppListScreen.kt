@@ -62,7 +62,6 @@ import com.cc.libackupnext.ui.theme.TabScrollDurationMs
 import com.cc.libackupnext.ui.theme.pageTransitionSpec
 import com.cc.libackupnext.ui.util.countText
 import com.cc.libackupnext.ui.util.sortTimeLabel
-import com.cc.libackupnext.ui.util.systemCount
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -573,9 +572,9 @@ fun AppListScreen(
                                     viewModel.refresh()
                                     viewModel.refreshSystemData()
                                 },
-                                // 副标题是条数：已保存 12 个 / 共 123 个 / 共 86 条
+                                // 副标题是条数：已保存 12 个 / 共 123 个 / 短信 22 · 彩信 2
                                 subtitleOf = { row ->
-                                    row.target.countText(row.target.systemCount(systemCounts))
+                                    row.target.countText(systemCounts)
                                 }
                             )
 

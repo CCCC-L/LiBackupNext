@@ -16,7 +16,12 @@ data class BackupRequest(
     val backupObb: Boolean,
     val backupUser: Boolean,
     val backupData: Boolean,
-    val backupPermissions: Boolean = false
+    val backupPermissions: Boolean = false,
+    /**
+     * 固定目标（Wi-Fi / 联系人 / 通话记录 / 短信）勾了哪几项，值是 [SnapshotKind.key]。
+     * 应用 / 文件夹传 null —— 它们看上面那几个 bool。
+     */
+    val kinds: List<String>? = null
 )
 
 /**
