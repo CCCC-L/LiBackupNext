@@ -19,6 +19,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.BuildConfig
 import com.cc.libackupnext.data.AppPrefs
 import com.cc.libackupnext.service.RusticClient
+import com.cc.libackupnext.service.screenOnSetting
 import com.cc.libackupnext.ui.PageContentPadding
 import com.cc.libackupnext.ui.dialog.PruneProgressDialog
 import com.cc.libackupnext.ui.component.AppDialog
@@ -96,6 +98,7 @@ fun SettingsContent(
         }
     }
     var backupSelf by remember { mutableStateOf(AppPrefs.backupSelf) }
+    val screenOnEnabled by screenOnSetting.enabled.collectAsState()
     var fetchIconFromRepo by remember { mutableStateOf(AppPrefs.fetchIconFromRepo) }
     var checkUpdateOnLaunch by remember { mutableStateOf(AppPrefs.checkUpdateOnLaunch) }
     var verboseLog by remember { mutableStateOf(AppPrefs.verboseLog) }
@@ -185,6 +188,19 @@ fun SettingsContent(
                                 backupSelf = it
                                 AppPrefs.backupSelf = it
                             }
+                        )
+                    }
+                )
+            },
+            { shape ->
+                SettingsCard(
+                    shape = shape,
+                    title = "备份/恢复时屏幕常亮",
+                    subtitle = "操作期间保持屏幕点亮，结束后自动恢复",
+                    trailing = {
+                        Switch(
+                            checked = screenOnEnabled,
+                            onCheckedChange = { screenOnSetting.setEnabled(it) }
                         )
                     }
                 )

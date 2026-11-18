@@ -6,7 +6,7 @@ import android.util.Log
 
 /**
  * 操作期间的 CPU 保持：备份 / 恢复 / 删除 / 整理仓库时持有 Partial WakeLock，
- * 避免屏幕熄灭或进入 Doze 后任务被挂起。
+ * 避免进入 Doze 后任务被挂起。屏幕常亮由 UI 层的 keepScreenOn 负责，两者职责不同。
  *
  * 支持多个持有者（前台服务 + 页面里的单次操作），内部按计数管理，归零才真正释放。
  */

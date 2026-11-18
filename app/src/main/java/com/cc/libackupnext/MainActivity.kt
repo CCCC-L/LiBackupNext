@@ -16,6 +16,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,8 +33,10 @@ import com.cc.libackupnext.service.RootManager
 import com.cc.libackupnext.data.ReleaseInfo
 import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.service.UpdateChecker
+import com.cc.libackupnext.service.screenOnDecision
 import com.cc.libackupnext.ui.HomeTab
 import com.cc.libackupnext.ui.WelcomeScreen
+import com.cc.libackupnext.ui.component.keepScreenOnWhen
 import com.cc.libackupnext.ui.dialog.UpdateDialog
 import com.cc.libackupnext.ui.screen.AppListScreen
 import com.cc.libackupnext.ui.dialog.FolderPickerDialog
@@ -41,11 +44,9 @@ import com.cc.libackupnext.ui.theme.AppManagerTheme
 import com.cc.libackupnext.util.AppLog
 import com.topjohnwu.superuser.Shell
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import kotlin.time.Duration.Companion.milliseconds
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -74,6 +75,9 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AppRoot(crashRecovery: Boolean) {
     val context = LocalContext.current
+
+    // 屏幕常亮的判断在 service 层完成，页面只消费最终决策
+    val shouldKeepScreenOn by screenOnDecision.shouldKeepOn.collectAsState(initial = false)
 
     // 启动时检查更新：单独一个 effect，不阻塞 root 授权流程。
     // 开关关掉 / 无网络 / GitHub 限流一律静默，只有确实查到新版本才弹窗。
@@ -151,10 +155,6 @@ private fun AppRoot(crashRecovery: Boolean) {
             hasRoot = true
             // 提前绑定 root 服务，后面调用不用再等 su 握手
             scope.launch(Dispatchers.IO) {
-                // 升级后旧进程还在跑上一版代码，先断开、等它真正退出再绑定
-                AppManagerService.restart()
-                RusticClient.restart()
-                delay(800.milliseconds)
                 AppManagerService.warmUp()
                 // 上次备份如果被强杀，目标应用可能还停在 SIGSTOP 状态，这里恢复
                 runCatching { AppManagerService.resumeAllPaused() }
@@ -197,7 +197,11 @@ private fun AppRoot(crashRecovery: Boolean) {
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .keepScreenOnWhen(shouldKeepScreenOn)
+    ) {
         when {
             isChecking -> Box(modifier = Modifier.fillMaxSize())
 

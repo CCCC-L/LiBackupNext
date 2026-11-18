@@ -31,6 +31,7 @@ object AppPrefs {
     private const val KEY_SORT_REVERSE = "sort_reverse"
     private const val KEY_SHOW_SYSTEM = "show_system_apps"
     private const val KEY_BACKUP_SELF = "backup_self"
+    private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
     private const val KEY_RETENTION_LIMIT = "retention_limit"
     private const val KEY_FETCH_ICON_FROM_REPO = "fetch_icon_from_repo"
     private const val KEY_PAUSED_APPS = "paused_apps"
@@ -123,6 +124,11 @@ object AppPrefs {
     var backupSelf: Boolean
         get() = prefs.getBoolean(KEY_BACKUP_SELF, true)
         set(value) = prefs.edit { putBoolean(KEY_BACKUP_SELF, value) }
+
+    /** 备份 / 恢复期间是否保持屏幕常亮；默认关闭。 */
+    var keepScreenOn: Boolean
+        get() = prefs.getBoolean(KEY_KEEP_SCREEN_ON, false)
+        set(value) = prefs.edit { putBoolean(KEY_KEEP_SCREEN_ON, value) }
 
     /**
      * 超过几个备份开始清理；`0` 表示不限。

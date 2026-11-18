@@ -16,6 +16,8 @@ import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import com.cc.libackupnext.MainActivity
 import com.cc.libackupnext.service.ProgressService
+import com.cc.libackupnext.service.operationLifecycle
+import com.cc.libackupnext.service.operationState
 import com.cc.libackupnext.ui.util.AppIconStore
 
 /**
@@ -36,11 +38,12 @@ object BackupNotifier {
     /**
      * 是否还有进行中的备份 / 恢复。
      *
-     * 进度回调是 `oneway` 的，最后几个事件可能在操作返回、[finish] 之后才送到，
-     * 会把「完成」通知又刷回「正在恢复permissions」——结束后直接忽略这些迟到的事件。
+     * 进度回调是 `oneway` 的，最后几个事件可能在操作返回、finish 之后才送到，
+     * 会把通知刷回「正在备份」——结束后直接忽略这些迟到的事件。
+     *
+     * 状态本身由 [operationState] 维护，通知只读取，不再兼管屏幕常亮。
      */
-    @Volatile
-    private var running = false
+    private val running get() = operationState.isRunning.value
 
     /** 只在第一次发现前台服务没了时写日志，避免刷屏。 */
     @Volatile
@@ -65,7 +68,7 @@ object BackupNotifier {
         appTotal: Int
     ) {
         ensureChannel(context)
-        running = true
+        operationLifecycle.begin()
         reportedServiceGone = false
 
         // 首帧直接是真实内容（应用名 + 应用图标），避免先闪一下「准备中」
@@ -154,7 +157,7 @@ object BackupNotifier {
 
     /** 结束：显示完成态，几秒后自动收起。 */
     fun finish(context: Context, action: String, failed: Int, appTotal: Int) {
-        running = false
+        operationLifecycle.end()
 
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
 
@@ -203,7 +206,7 @@ object BackupNotifier {
      * 收尾顺序和 [finish] 一致，避免部分 ROM 把进度快照重画回来。
      */
     fun abort(context: Context, action: String) {
-        running = false
+        operationLifecycle.end()
 
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         val notification = build(
@@ -222,7 +225,7 @@ object BackupNotifier {
     }
 
     fun cancel(context: Context) {
-        running = false
+        operationLifecycle.end()
 
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         runCatching { manager.cancel(NOTIFICATION_ID) }
