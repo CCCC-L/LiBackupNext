@@ -3,14 +3,19 @@ package com.cc.libackupnext.ui.screen
 import android.content.ClipData
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -19,7 +24,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
@@ -38,6 +45,7 @@ import com.cc.libackupnext.ui.util.formatSize
 import com.cc.libackupnext.util.AppLog
 import com.cc.libackupnext.util.KeepAwake
 import com.cc.libackupnext.util.LogReport
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -92,6 +100,9 @@ fun SettingsContent(
     var checkUpdateOnLaunch by remember { mutableStateOf(AppPrefs.checkUpdateOnLaunch) }
     var verboseLog by remember { mutableStateOf(AppPrefs.verboseLog) }
     var exporting by remember { mutableStateOf(false) }
+
+    // 最大备份数：0 表示不限，滑块直接改
+    var retentionLimit by remember { mutableStateOf(AppPrefs.retentionLimit) }
 
     // 系统文件选择器：用户自己选目录和文件名，不需要任何权限
     val exportLogs = rememberLauncherForActivityResult(
@@ -175,6 +186,16 @@ fun SettingsContent(
                                 AppPrefs.backupSelf = it
                             }
                         )
+                    }
+                )
+            },
+            { shape ->
+                RetentionLimitCard(
+                    shape = shape,
+                    limit = retentionLimit,
+                    onLimitChange = {
+                        retentionLimit = it
+                        AppPrefs.retentionLimit = it
                     }
                 )
             }
@@ -315,4 +336,69 @@ fun SettingsContent(
         PruneProgressDialog()
     }
 
+}
+
+/**
+ * 最大备份数：0~10 的滑块，`0` 表示不限。
+ *
+ * 用滑块而不是弹窗，是因为这个值只有一个维度、只有 11 个取值 ——
+ * 点开弹窗再选一项再关闭，三步换一个数字，不如直接拖。
+ * 卡片高度固定（副标题只写当前状态，不随值变长短），拖动时不会跳。
+ */
+@Composable
+private fun RetentionLimitCard(
+    shape: Shape,
+    limit: Int,
+    onLimitChange: (Int) -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = shape,
+        color = MaterialTheme.colorScheme.surface
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "最大备份数",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = if (limit <= 0) "不限" else "$limit 个",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            Text(
+                text = if (limit <= 0) {
+                    "不自动删除，所有备份都留着"
+                } else {
+                    "超过 $limit 个备份后自动清理"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Slider(
+                value = limit.toFloat(),
+                onValueChange = { onLimitChange(it.roundToInt()) },
+                valueRange = 0f..10f,
+                // 0..10 共 11 个位置：中间 9 个刻度
+                steps = 9,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = "只删被更新的备份完整覆盖的旧备份，所以实际可能多留几个",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline
+            )
+        }
+    }
 }

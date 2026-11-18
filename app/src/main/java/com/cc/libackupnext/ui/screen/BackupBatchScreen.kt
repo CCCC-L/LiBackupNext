@@ -179,6 +179,8 @@ fun BackupBatchScreen(
     var progressRestore by remember { mutableStateOf(false) }
     var progressError by remember { mutableStateOf<String?>(null) }
     var showProgress by remember { mutableStateOf(false) }
+    /** 这一批自动清理掉的旧备份行数：只用于完成时的副标题，没清理就不提。 */
+    var cleanedBackups by remember { mutableStateOf(0) }
     /** 远程仓库连接中断：弹窗改中断态，只留一行提示；错误原文走日志。 */
     var connectionInterrupted by remember { mutableStateOf(false) }
 
@@ -535,6 +537,7 @@ fun BackupBatchScreen(
         progressRestore = isRestore
         progressError = null
         connectionInterrupted = false
+        cleanedBackups = 0
         progressSubtitle = "开始:${list.first().app.packageName}"
         progressSections = emptyList()
         running = true
@@ -640,6 +643,8 @@ fun BackupBatchScreen(
                 append("完成 $succeeded/$total")
                 if (failed > 0) append("，失败 $failed 个")
                 if (notRun > 0) append("，未执行 $notRun 个")
+                // 自动清理是收尾动作，说一句就够，不另开弹窗
+                if (cleanedBackups > 0) append("，清理 $cleanedBackups 条旧备份")
             }
             if (aborted) {
                 BackupNotifier.abort(context, actionLabel)
@@ -687,8 +692,12 @@ fun BackupBatchScreen(
                 // 同类型最新快照的 id：给 rustic 当 parent，省掉它自己列一遍全部快照
                 parentIds = overview[item.app.packageName]?.latest?.snapshots
                     ?.mapNotNull { snapshot -> snapshot.kind()?.let { it to snapshot.id } }
-                    ?.toMap()
-            )
+                    ?.toMap(),
+                // 概况里已经有备份次数：没到保留上限就不用为清理再查一次仓库
+                knownBackupCount = overview[item.app.packageName]?.count
+            ).map { cleaned ->
+                cleanedBackups += cleaned
+            }
         }
     }
 

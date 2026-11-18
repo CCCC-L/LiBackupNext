@@ -362,12 +362,20 @@ fun AppBackupScreen(
             }
 
             val result = if (overwrite == null) {
-                RusticClient.backup(displayApp, groups, onProgress, operationId = operationId)
+                RusticClient.backup(
+                    displayApp, groups, onProgress,
+                    operationId = operationId,
+                    // 详情页已经有条目列表：没到保留上限就不用为清理再查一次仓库
+                    knownBackupCount = entries.size
+                ).onSuccess { cleaned ->
+                    // 清理是收尾：说一句就够，没清理就完全静默
+                    if (cleaned > 0) AppLog.toastOnMain("已清理 $cleaned 条旧备份")
+                }
             } else {
                 RusticClient.overwrite(
                     displayApp, overwrite, groups, onProgress,
                     operationId = operationId
-                )
+                ).map { 0 }
             }
 
             backupRunning = false

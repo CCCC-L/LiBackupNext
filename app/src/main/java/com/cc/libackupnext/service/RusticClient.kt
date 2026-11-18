@@ -14,6 +14,7 @@ import com.cc.libackupnext.data.BackupStepStatus
 import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.data.RemoteRepo
 import com.cc.libackupnext.data.RepoOverview
+import com.cc.libackupnext.data.Retention
 import com.cc.libackupnext.data.SavedRepo
 import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.SnapshotMeta
@@ -850,7 +851,13 @@ object RusticClient {
     /** 覆盖备份按钮是否展示：应用没装就不允许覆盖。 */
     fun canOverwrite(installed: Boolean): Boolean = installed
 
-    /** 普通备份。 */
+    /**
+     * 普通备份。
+     *
+     * @param knownBackupCount 调用方已知这个目标现在有几行备份（列表概况 / 详情页条目数）。
+     *   没到保留上限就一次 IPC 都不发，清理逻辑直接跳过 —— 绝大多数备份走这条捷径。
+     * @return 成功时返回本次自动清理掉的旧备份行数（0 表示没清理）
+     */
     suspend fun backup(
         app: AppInfo,
         groups: Set<BackupGroup>,
@@ -877,8 +884,10 @@ object RusticClient {
          * 传给 rustic 当 parent：有了它就不用再列一遍全部快照去找 parent。
          * 传 null 就退回 rustic 的默认行为。
          */
-        parentIds: Map<SnapshotKind, String>? = null
-    ): Result<Unit> {
+        parentIds: Map<SnapshotKind, String>? = null,
+        /** 见方法说明：用来判断要不要跑清理，不参与备份本身。 */
+        knownBackupCount: Int? = null
+    ): Result<Int> {
         if (groups.isEmpty()) {
             return Result.failure(IllegalStateException("请先选择要备份的内容"))
         }
@@ -892,9 +901,54 @@ object RusticClient {
                 parentIds = parentIds
             )
         }
+        result.exceptionOrNull()?.let { return Result.failure(it) }
+
+        // 清理放在暂停结束之后：应用已经恢复运行，没必要为收尾多冻它几秒
+        val cleaned = enforceRetention(
+            packageName = app.packageName,
+            knownCount = knownBackupCount,
+            justWritten = operationId
+        )
         // 批量备份（batchId 有值）留到整批结束后由调用方统一做一次 —— 目标始终是同一个
-        if (result.isSuccess && batchId == null) exportSelfApk()
-        return result
+        if (batchId == null) exportSelfApk()
+        return Result.success(cleaned)
+    }
+
+    /**
+     * 备份成功后清理过期备份，返回删掉的行数。
+     *
+     * 只删「已经被更新的备份完全替代」的行 —— 判据在 [Retention]，这里只负责
+     * 查列表、调策略、删快照（策略与执行分开，策略才能单独测）。
+     *
+     * 清理是收尾，不是备份本身：失败不回滚、也不改备份结果。
+     *
+     * @param knownCount 调用方已知的行数，没到上限就跳过（省掉一次查仓库的 IPC）
+     * @param justWritten 刚写进去那次备份的时间戳，用来精确排除刚写入的行
+     */
+    private suspend fun enforceRetention(
+        packageName: String,
+        knownCount: Int?,
+        justWritten: Long
+    ): Int {
+        val limit = AppPrefs.retentionLimit
+        if (limit <= 0) return 0
+        if (knownCount != null && knownCount + 1 <= limit) return 0
+
+        return try {
+            val rows = Retention.rows(listSnapshots(packageName).getOrThrow())
+            val victims = Retention.plan(rows, limit, justWritten)
+            if (victims.isEmpty()) return 0
+
+            deleteSnapshots(victims.flatMap { it.ids }).getOrThrow()
+            AppLog.i(TAG, "自动清理 $packageName：${victims.size} 条旧备份")
+            victims.size
+        } catch (t: CancellationException) {
+            // 取消不是失败，不能被吞掉
+            throw t
+        } catch (t: Throwable) {
+            AppLog.w(TAG, "自动清理旧备份失败：$packageName", t)
+            0
+        }
     }
 
     /**

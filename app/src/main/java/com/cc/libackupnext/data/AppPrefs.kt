@@ -31,6 +31,7 @@ object AppPrefs {
     private const val KEY_SORT_REVERSE = "sort_reverse"
     private const val KEY_SHOW_SYSTEM = "show_system_apps"
     private const val KEY_BACKUP_SELF = "backup_self"
+    private const val KEY_RETENTION_LIMIT = "retention_limit"
     private const val KEY_FETCH_ICON_FROM_REPO = "fetch_icon_from_repo"
     private const val KEY_PAUSED_APPS = "paused_apps"
     private const val KEY_EXTRA_DIRS = "extra_dirs"
@@ -44,6 +45,9 @@ object AppPrefs {
     private val prefs: SharedPreferences by lazy {
         App.application.getSharedPreferences(NAME, Context.MODE_PRIVATE)
     }
+
+    /** 默认保留份数：当前这份 + 两次历史。 */
+    const val DEFAULT_RETENTION_LIMIT = 0
 
     // ==================== rustic 仓库 ====================
 
@@ -119,6 +123,16 @@ object AppPrefs {
     var backupSelf: Boolean
         get() = prefs.getBoolean(KEY_BACKUP_SELF, true)
         set(value) = prefs.edit { putBoolean(KEY_BACKUP_SELF, value) }
+
+    /**
+     * 超过几个备份开始清理；`0` 表示不限。
+     *
+     * 它只是**触发清理的阈值**：真正删哪几行由 [Retention] 按「是否被更新的某一次备份
+     * 整行替代」决定，所以实际行数可能比这个值多 —— 孤本和最近一次完整备份都优先于上限。
+     */
+    var retentionLimit: Int
+        get() = prefs.getInt(KEY_RETENTION_LIMIT, DEFAULT_RETENTION_LIMIT)
+        set(value) = prefs.edit { putInt(KEY_RETENTION_LIMIT, value) }
 
     /** 是否从仓库里取「没有安装的应用」的图标。 */
     var fetchIconFromRepo: Boolean
