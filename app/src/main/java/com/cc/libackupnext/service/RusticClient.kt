@@ -1,5 +1,6 @@
 package com.cc.libackupnext.service
 
+import android.os.DeadObjectException
 import android.os.IBinder
 import android.util.Log
 import com.cc.libackupnext.App
@@ -148,12 +149,33 @@ object RusticClient {
      *
      * block 必须是 suspend（里面要调 [getService]）；catch 里要调 suspend 的
      * [remoteFailure]（停 serve），所以用 try/catch 而不是 runCatching。
+     *
+     * @param retryOnDeath 只在**只读**调用上打开。`:root` 被系统收走时，正在飞的 binder
+     *   事务会抛 [DeadObjectException]；只读操作重放一次没有副作用，用户就不该看到这个错误。
+     *   备份 / 恢复 / 删除 / prune 不开：进程可能死在操作中途，重放是否安全要按业务语义判断。
      */
-    private suspend fun <T> remoteCall(block: suspend () -> T): T = try {
+    private suspend fun <T> remoteCall(
+        retryOnDeath: Boolean = false,
+        block: suspend () -> T,
+    ): T = try {
         block()
     } catch (t: Throwable) {
-        throw remoteFailure(t)
+        if (retryOnDeath && isBinderDeath(t)) {
+            AppLog.w(TAG, "root 服务在调用中死亡，重绑后重试一次", t)
+            // 不用手动重绑：block 里的 getService() 会拿到新 binder 并重新注入凭据
+            try {
+                block()
+            } catch (t2: Throwable) {
+                throw remoteFailure(t2)
+            }
+        } else {
+            throw remoteFailure(t)
+        }
     }
+
+    /** binder 事务没落地（目标进程已死）。沿 Caused by 链找，root 侧可能把异常包过一层。 */
+    private fun isBinderDeath(t: Throwable): Boolean =
+        generateSequence(t) { it.cause }.any { it is DeadObjectException }
 
     /**
      * root 侧把 rustic 的失败包成 error 字符串 / `ok=false` 返回，并不抛异常。
@@ -197,18 +219,6 @@ object RusticClient {
         return service
     }
 
-    /**
-     * 断开并重启 root 服务进程。
-     *
-     * 应用升级后旧进程还跑着上一版 dex，新加的 AIDL 方法会调用失败，
-     * 启动时先断一次，确保进程里跑的是当前 APK 的代码。
-     */
-    fun restart() {
-        AppLog.i(TAG, "主动断开 root 服务，等待重连")
-        manager.release()
-        invalidateCredentials()
-    }
-
     // ==================== 快照缓存 ====================
 
     /**
@@ -221,7 +231,7 @@ object RusticClient {
         if (!AppPrefs.hasRepository()) return@withContext Result.success(emptyList())
 
         try {
-            val response = remoteCall { getService().overview(EMPTY_REQUEST) }
+            val response = remoteCall(retryOnDeath = true) { getService().overview(EMPTY_REQUEST) }
                 .parseJson<OverviewResponse>()
             if (!response.ok) {
                 val message = response.error.orEmpty().ifBlank { "读取备份概况失败" }
@@ -279,7 +289,9 @@ object RusticClient {
     ): Result<List<BackupSnapshot>> = withContext(Dispatchers.IO) {
         try {
             val request = ListSnapshotsRequest(packageName = packageName.orEmpty())
-            val response = remoteCall { getService().listSnapshots(request.toJsonText()) }
+            val response = remoteCall(retryOnDeath = true) {
+                getService().listSnapshots(request.toJsonText())
+            }
                 .parseJson<ListSnapshotsResponse>()
             if (!response.ok) {
                 return@withContext Result.failure(
@@ -816,7 +828,9 @@ object RusticClient {
      */
     suspend fun estimatePrune(): Result<Long> = withContext(Dispatchers.IO) {
         try {
-            val response = remoteCall { getService().pruneEstimate(EMPTY_REQUEST) }
+            val response = remoteCall(retryOnDeath = true) {
+                getService().pruneEstimate(EMPTY_REQUEST)
+            }
                 .parseJson<EstimateResponse>()
             if (response.ok) {
                 Result.success(response.bytes)

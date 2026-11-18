@@ -85,6 +85,11 @@ object AppManagerService {
     }
 
     class Service : RootService() {
+        // libsu 不会实例化 Application，:root 的日志只能在这里装（install 幂等）
+        override fun onCreate() {
+            AppLog.install(applicationContext)
+        }
+
         override fun onBind(intent: Intent): IBinder = Impl(applicationContext).apply { onBind() }
     }
 
@@ -380,11 +385,6 @@ object AppManagerService {
     }
 
     suspend fun getService(): IAppManagerService = manager.getService()
-
-    /** 断开并重启 root 服务进程（应用升级后用，避免跑旧代码）。 */
-    fun restart() {
-        manager.release()
-    }
 
     /** 提前绑定 root 服务，避免真正拉列表时再等 su 握手。 */
     suspend fun warmUp() {

@@ -162,6 +162,11 @@ object RusticServer {
     private external fun nativeSetRepo(path: String, password: String, options: String): Int
 
     class Service : RootService() {
+        // libsu 不会实例化 Application，:root 的日志只能在这里装（install 幂等）
+        override fun onCreate() {
+            AppLog.install(applicationContext)
+        }
+
         override fun onBind(intent: Intent): IBinder = Impl(applicationContext).apply { onBind() }
     }
 

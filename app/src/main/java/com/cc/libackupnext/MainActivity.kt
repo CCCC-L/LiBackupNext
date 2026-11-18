@@ -153,7 +153,9 @@ private fun AppRoot(crashRecovery: Boolean) {
         AppLog.breadcrumb("启动", "root 授权结果=$granted")
         if (granted) {
             hasRoot = true
-            // 提前绑定 root 服务，后面调用不用再等 su 握手
+            // 提前绑定 root 服务，后面调用不用再等 su 握手。
+            // 不再「先断开再绑定」：libsu 的 :root 进程自己盯着 APK，包一换就退出，
+            // 升级后跑旧 dex 的问题它已经解决了；主动断一次只会白拆一个进程。
             scope.launch(Dispatchers.IO) {
                 AppManagerService.warmUp()
                 // 上次备份如果被强杀，目标应用可能还停在 SIGSTOP 状态，这里恢复

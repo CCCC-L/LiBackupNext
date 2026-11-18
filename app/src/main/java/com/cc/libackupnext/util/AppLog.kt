@@ -31,7 +31,9 @@ import java.util.concurrent.atomic.AtomicLong
  * 不套缓冲、不起后台线程、不逐条 fsync。App 进程被杀不会丢页缓存数据，
  * 只有 FATAL 的崩溃报告写完才 sync。这样非崩溃场景随时导出都是完整的。
  *
- * 主进程和 :root 进程都会走 App.onCreate，各写各的 main.log / root.log，
+ * 主进程走 App.onCreate，:root 进程走各自 RootService.onCreate —— libsu 的
+ * RootServerMain 只创建 package Context 并直接 new Service，**不会实例化 Application**，
+ * 所以 :root 侧不能依赖 App.onCreate。两边各写各的 main.log / root.log，
  * 共享同一个 filesDir —— 两进程都是同一 UID，但 root 进程以 uid 0 建文件，
  * 所以目录和文件都显式 chmod，保证主进程也能写、也能清理。
  */
@@ -105,9 +107,15 @@ object AppLog {
 
     // ==================== 安装 ====================
 
-    fun install(app: Application) {
+    fun install(app: Application) = install(app.applicationContext, app)
+
+    /**
+     * 主进程传 Application（要注册 Activity 生命周期回调）；
+     * :root 进程只有 package Context，传 [context] 即可，活动栈回调用不上。
+     */
+    fun install(context: Context, app: Application? = null) {
         if (installed) return
-        appContext = app.applicationContext
+        appContext = context
 
         process = if (runCatching { Application.getProcessName() }.getOrNull().orEmpty()
                 .endsWith(":root")
@@ -126,7 +134,7 @@ object AppLog {
         verbose = runCatching { AppPrefs.verboseLog }.getOrDefault(false)
 
         installed = true
-        app.registerActivityLifecycleCallbacks(activityCallbacks)
+        app?.registerActivityLifecycleCallbacks(activityCallbacks)
         installCrashHandler()
 
         writeLine(
@@ -299,6 +307,18 @@ object AppLog {
 
     private fun installCrashHandler() {
         previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+
+        if (process == "root") {
+            // :root 没有 Activity，续命、拉起界面、标记待恢复全都无意义，
+            // 而且 markPendingCrash 会让主进程下次启动误以为主进程崩过。
+            // 这里只留证据，然后让进程照常死掉——客户端会自动重绑。
+            Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+                writeCrashReport(thread, error)
+                previousHandler?.uncaughtException(thread, error)
+            }
+            return
+        }
+
         Thread.setDefaultUncaughtExceptionHandler { thread, error -> handleCrash(thread, error) }
     }
 
