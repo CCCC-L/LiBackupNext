@@ -28,8 +28,9 @@ val openSourceLibs: List<OpenSourceLib> = listOf(
         "数据备份 DataBackup", "GNU GPL v3.0", "参考项目",
         "https://github.com/XayahSuSuSu/Android-DataBackup"
     ),
+    OpenSourceLib("备份工具箱", "", "参考项目", ""),
     OpenSourceLib(
-        "Metric", "仓库未标注许可证", "参考项目",
+        "Metric", "", "参考项目",
         "https://github.com/ItosEO/Metric"
     ),
 
