@@ -3,7 +3,6 @@ package com.cc.libackupnext.ui.screen
 import android.content.ClipData
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -34,23 +33,24 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.BuildConfig
-import com.cc.libackupnext.data.AppPrefs
-import com.cc.libackupnext.service.RusticClient
-import com.cc.libackupnext.service.screenOnSetting
+import com.cc.libackupnext.service.display.screenOnSetting
 import com.cc.libackupnext.ui.PageContentPadding
-import com.cc.libackupnext.ui.dialog.PruneProgressDialog
 import com.cc.libackupnext.ui.component.AppDialog
-import com.cc.libackupnext.ui.util.AppIconStore
 import com.cc.libackupnext.ui.component.CardGroup
 import com.cc.libackupnext.ui.component.SettingsCard
+import com.cc.libackupnext.ui.di.LocalBackupPrefs
+import com.cc.libackupnext.ui.di.LocalRepoWriter
+import com.cc.libackupnext.ui.di.LocalViewPrefs
+import com.cc.libackupnext.ui.dialog.PruneProgressDialog
+import com.cc.libackupnext.ui.util.AppIconStore
 import com.cc.libackupnext.ui.util.formatSize
 import com.cc.libackupnext.util.AppLog
 import com.cc.libackupnext.util.KeepAwake
 import com.cc.libackupnext.util.LogReport
-import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 
 /**
  * 设置页的内容：Rustic 仓库信息 + 备份行为。
@@ -67,7 +67,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun SettingsContent(
     modifier: Modifier = Modifier,
-    /** 当前仓库地址（展示用）：外层按仓库变化重新读 AppPrefs 后传进来，这里只展示。 */
+    /** 当前仓库地址（展示用）：外层按仓库变化重新读仓库信息后传进来，这里只展示。 */
     repoAddress: String,
     /** 影响应用列表的设置项改动后通知外面重新加载。 */
     onSettingChanged: () -> Unit = {},
@@ -79,6 +79,10 @@ fun SettingsContent(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboard.current
+    // 整理仓库走接口：设置页只需要写能力
+    val writer = LocalRepoWriter.current
+    val backupPrefs = LocalBackupPrefs.current
+    val viewPrefs = LocalViewPrefs.current
     // 整理仓库（prune）
     var showCleanConfirm by remember { mutableStateOf(false) }
     var cleaning by remember { mutableStateOf(false) }
@@ -93,19 +97,20 @@ fun SettingsContent(
         estimating = true
         reclaimable = null
         scope.launch {
-            reclaimable = RusticClient.estimatePrune().getOrNull()
+            reclaimable = writer.estimatePrune().getOrNull()
             estimating = false
         }
     }
-    var backupSelf by remember { mutableStateOf(AppPrefs.backupSelf) }
+
+    var backupSelf by remember { mutableStateOf(backupPrefs.backupSelf) }
     val screenOnEnabled by screenOnSetting.enabled.collectAsState()
-    var fetchIconFromRepo by remember { mutableStateOf(AppPrefs.fetchIconFromRepo) }
-    var checkUpdateOnLaunch by remember { mutableStateOf(AppPrefs.checkUpdateOnLaunch) }
-    var verboseLog by remember { mutableStateOf(AppPrefs.verboseLog) }
+    var fetchIconFromRepo by remember { mutableStateOf(backupPrefs.fetchIconFromRepo) }
+    var checkUpdateOnLaunch by remember { mutableStateOf(viewPrefs.checkUpdateOnLaunch) }
+    var verboseLog by remember { mutableStateOf(viewPrefs.verboseLog) }
     var exporting by remember { mutableStateOf(false) }
 
     // 最大备份数：0 表示不限，滑块直接改
-    var retentionLimit by remember { mutableStateOf(AppPrefs.retentionLimit) }
+    var retentionLimit by remember { mutableStateOf(backupPrefs.retentionLimit) }
 
     // 系统文件选择器：用户自己选目录和文件名，不需要任何权限
     val exportLogs = rememberLauncherForActivityResult(
@@ -186,7 +191,7 @@ fun SettingsContent(
                             checked = backupSelf,
                             onCheckedChange = {
                                 backupSelf = it
-                                AppPrefs.backupSelf = it
+                                backupPrefs.backupSelf = it
                             }
                         )
                     }
@@ -211,7 +216,7 @@ fun SettingsContent(
                     limit = retentionLimit,
                     onLimitChange = {
                         retentionLimit = it
-                        AppPrefs.retentionLimit = it
+                        backupPrefs.retentionLimit = it
                     }
                 )
             }
@@ -241,7 +246,7 @@ fun SettingsContent(
                             checked = verboseLog,
                             onCheckedChange = {
                                 verboseLog = it
-                                AppPrefs.verboseLog = it
+                                viewPrefs.verboseLog = it
                                 AppLog.setVerbose(it)
                             }
                         )
@@ -263,7 +268,7 @@ fun SettingsContent(
                             checked = fetchIconFromRepo,
                             onCheckedChange = {
                                 fetchIconFromRepo = it
-                                AppPrefs.fetchIconFromRepo = it
+                                backupPrefs.fetchIconFromRepo = it
                                 // 关掉时把已经取到的图标也清掉，列表重新加载
                                 AppIconStore.clearAll()
                                 onSettingChanged()
@@ -282,7 +287,7 @@ fun SettingsContent(
                             checked = checkUpdateOnLaunch,
                             onCheckedChange = {
                                 checkUpdateOnLaunch = it
-                                AppPrefs.checkUpdateOnLaunch = it
+                                viewPrefs.checkUpdateOnLaunch = it
                             }
                         )
                     }
@@ -311,7 +316,7 @@ fun SettingsContent(
                     KeepAwake.acquire(context)
                     val result = try {
                         // 彻底清理：repack 所有半空的包
-                        RusticClient.prune()
+                        writer.prune()
                     } finally {
                         KeepAwake.release()
                     }

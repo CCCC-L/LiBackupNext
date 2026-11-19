@@ -23,17 +23,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.dp
-import com.cc.libackupnext.ui.component.LoadingRow
 import com.cc.libackupnext.data.FolderPickerLauncher
 import com.cc.libackupnext.data.SavedRepo
-import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.ui.AppTopBar
-import com.cc.libackupnext.ui.dialog.RepoSetupDialog
 import com.cc.libackupnext.ui.component.AppDialog
 import com.cc.libackupnext.ui.component.AppItemCard
 import com.cc.libackupnext.ui.component.AppListContainer
-import kotlinx.coroutines.launch
+import com.cc.libackupnext.ui.component.LoadingRow
+import com.cc.libackupnext.ui.di.LocalRepoAdmin
+import com.cc.libackupnext.ui.dialog.RepoSetupDialog
 import com.cc.libackupnext.util.AppLog
+import kotlinx.coroutines.launch
 
 /** null = 不显示弹窗；editing=null 是新增，非 null 是编辑这条记录。 */
 private data class RepoDialogTarget(val editing: SavedRepo?)
@@ -52,6 +52,8 @@ fun RepoListScreen(
     modifier: Modifier = Modifier
 ) {
     val scope = rememberCoroutineScope()
+    // 切换仓库走接口：列表页不需要认识具体实现
+    val admin = LocalRepoAdmin.current
     val pageBackground = MaterialTheme.colorScheme.surfaceContainer
     val searchBarBackground = MaterialTheme.colorScheme.surfaceContainerHighest
 
@@ -65,8 +67,8 @@ fun RepoListScreen(
         scope.launch {
             switching = true
             val result = record.remote?.let {
-                RusticClient.initRemoteRepository(it, record.password, switching = true)
-            } ?: RusticClient.initRepository(
+                admin.initRemoteRepository(it, record.password, switching = true)
+            } ?: admin.initRepository(
                 record.location, record.password, switching = true
             )
             switching = false

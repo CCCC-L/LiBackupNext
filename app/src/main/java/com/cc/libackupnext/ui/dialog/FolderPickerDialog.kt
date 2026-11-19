@@ -11,8 +11,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -58,21 +58,21 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.WindowCompat
 import com.cc.libackupnext.data.FolderPickerMode
 import com.cc.libackupnext.data.RemoteRepo
-import com.cc.libackupnext.service.LocalVolumes
-import com.cc.libackupnext.service.RcloneClient
+import com.cc.libackupnext.service.browse.LocalVolumes
 import com.cc.libackupnext.ui.AppTopBar
-import com.cc.libackupnext.ui.theme.dialogContainer
-import com.cc.libackupnext.ui.theme.pageTransitionSpec
 import com.cc.libackupnext.ui.component.AppDialog
 import com.cc.libackupnext.ui.component.AppListContainer
 import com.cc.libackupnext.ui.component.AppSurfaceDialog
+import com.cc.libackupnext.ui.di.LocalDirectoryBrowser
+import com.cc.libackupnext.ui.theme.dialogContainer
+import com.cc.libackupnext.ui.theme.pageTransitionSpec
 import kotlinx.coroutines.delay
 
 /**
  * 通用文件夹选择：铺满全屏的独立 Dialog 窗口，由 MainActivity 按 launcher 显示。
  *
  * 本地 / 远程共用一套界面，只有数据来源不同：本地走 rclone 的 local 后端，
- * 远程走 [RemoteRepo] 派生出来的 inline 配置，二者都由 [RusticClient] 下发。
+ * 远程走 [RemoteRepo] 派生出来的 inline 配置，二者都由 rclone 通道下发。
  */
 
 /** 卷列表页的虚拟 path：不会和任何真实目录（最小是 "/"）撞上。 */
@@ -114,6 +114,8 @@ fun FolderPickerDialog(
     onBack: () -> Unit
 ) {
     val isLocal = mode == FolderPickerMode.LOCAL
+    // 目录浏览走接口：弹窗不认识 rclone 后端怎么连
+    val browser = LocalDirectoryBrowser.current
     // 当前选中卷的根（路径段）；选「根目录」时是空列表
     var volumeRoot by remember { mutableStateOf(emptyList<String>()) }
     // 本地一律从卷列表开始，远程仍按 initialPath / 仓库路径进目录
@@ -218,10 +220,10 @@ fun FolderPickerDialog(
                 }
             }
 
-            isLocal -> RcloneClient.listLocalDirs(targetPath, create)
+            isLocal -> browser.listLocalDirs(targetPath, create)
                 .map { dirs -> dirs.map { PickerRow(it, joinPath(targetPath, it)) } }
 
-            else -> (repo?.let { RcloneClient.listRemoteDirs(it, targetPath, create) }
+            else -> (repo?.let { browser.listRemoteDirs(it, targetPath, create) }
                 ?: Result.failure<List<String>>(IllegalStateException("缺少远程服务配置")))
                 .map { dirs -> dirs.map { PickerRow(it, joinPath(targetPath, it)) } }
         }
@@ -394,14 +396,18 @@ fun FolderPickerDialog(
         }
 
         // 列表铺满剩余空间，底部留出悬浮按钮的空间
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+        Box(modifier = Modifier
+            .weight(1f)
+            .fillMaxWidth()) {
             AnimatedContent(
                 targetState = page,
                 // 层级越深越靠右：进入子目录从右滑入，返回父目录反向，
                 // 和 AppListScreen 的页面切换用同一套规格
                 transitionSpec = pageTransitionSpec<DirPage> { it.depth },
                 label = "FolderPageTransition",
-                modifier = Modifier.fillMaxSize().clipToBounds()
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clipToBounds()
             ) { targetPage ->
                 // 只读本页的快照：旧页滑出期间不会被新目录的加载态顶掉
                 val snapshot = contents[targetPage.path] ?: DirContent()

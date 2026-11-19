@@ -89,6 +89,12 @@ android {
         buildConfig = true
     }
 
+    // 纯逻辑单测（Retention / OperationPlan / usecase）跑在 JVM 上，
+    // 它们间接调用的 android.util.Log 需要返回默认值而不是抛「not mocked」
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     packaging {
         jniLibs {
             // cargo-ndk 会把依赖 crate 的 cdylib 一起拷进来，这里只保留我们自己的库

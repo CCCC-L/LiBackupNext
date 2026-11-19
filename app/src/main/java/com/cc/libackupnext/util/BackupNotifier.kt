@@ -15,16 +15,18 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import com.cc.libackupnext.MainActivity
+import com.cc.libackupnext.data.AppInfo
+import com.cc.libackupnext.data.BackupProgress
 import com.cc.libackupnext.service.ProgressService
-import com.cc.libackupnext.service.operationLifecycle
-import com.cc.libackupnext.service.operationState
+import com.cc.libackupnext.service.operation.operationLifecycle
+import com.cc.libackupnext.service.operation.operationState
 import com.cc.libackupnext.ui.util.AppIconStore
 
 /**
  * 备份 / 恢复的进度通知。
  *
  * Live Updates（API 36）的流体云是「左边图标 + 右边短文本」两栏：
- * 左边用被备份应用自己的图标（代替系统的下载图标），右边是当前步骤。
+ * 左边用被备份应用自己的图标，右边是当前步骤。
  */
 object BackupNotifier {
 
@@ -346,4 +348,72 @@ object BackupNotifier {
 
         return builder.build()
     }
+}
+
+/**
+ * 一次操作的通知会话：构造时绑定「操作名 + 是哪个应用 + 第几个 / 共几个」，
+ * 之后每次只需传进度。
+ *
+ * 为什么要有它：原来每个调用点都要写 7~10 个参数（context / action / appName /
+ * packageName / userId / appIndex / appTotal / stageLabel / stageIndex / stageTotal），
+ * 详情页两处、批量页三处各写一遍，改一个字段要改五处。
+ *
+ * 用普通类而不是 Composable：它不需要重组，只是把参数绑起来，
+ * 可以在 `scope.launch` 里创建和使用。
+ */
+class NotifierSession(
+    private val context: Context,
+    private val action: String,
+    private val app: AppInfo,
+    private val appIndex: Int = 1,
+    private val appTotal: Int = 1,
+) {
+
+    fun start() = BackupNotifier.start(
+        context = context,
+        action = action,
+        appName = app.name,
+        packageName = app.packageName,
+        userId = app.userId,
+        appIndex = appIndex,
+        appTotal = appTotal
+    )
+
+    /**
+     * 上报一次进度。
+     *
+     * @param stepIndex 这一步在步骤列表里的下标；-1 表示对不上，按第 1 步显示
+     */
+    fun update(progress: BackupProgress, stepIndex: Int, stepTotal: Int) =
+        BackupNotifier.update(
+            context = context,
+            action = action,
+            appName = app.name,
+            packageName = app.packageName,
+            userId = app.userId,
+            appIndex = appIndex,
+            appTotal = appTotal,
+            stageLabel = progress.stage,
+            stageIndex = if (stepIndex >= 0) stepIndex + 1 else 1,
+            stageTotal = stepTotal
+        )
+
+    /** 开始一项、但还没有具体 stage（批量页切到下一个应用时用）。 */
+    fun updateApp(stepTotal: Int) = BackupNotifier.update(
+        context = context,
+        action = action,
+        appName = app.name,
+        packageName = app.packageName,
+        userId = app.userId,
+        appIndex = appIndex,
+        appTotal = appTotal,
+        stageLabel = "",
+        stageIndex = 0,
+        stageTotal = stepTotal
+    )
+
+    fun finish(failed: Int, total: Int = appTotal) =
+        BackupNotifier.finish(context, action, failed, total)
+
+    fun abort() = BackupNotifier.abort(context, action)
 }

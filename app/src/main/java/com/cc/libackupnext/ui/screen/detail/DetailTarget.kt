@@ -3,9 +3,11 @@ package com.cc.libackupnext.ui.screen.detail
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import com.cc.libackupnext.data.AppInfo
 import com.cc.libackupnext.data.BackupTarget
-import com.cc.libackupnext.entity.AppInfo
-import com.cc.libackupnext.ui.dialog.ItemAction
+import com.cc.libackupnext.data.target.ItemAction
+import com.cc.libackupnext.data.target.TargetSpecs
+import com.cc.libackupnext.data.target.TargetViewKind
 import com.cc.libackupnext.ui.component.AppView
 import com.cc.libackupnext.ui.component.DirView
 import com.cc.libackupnext.ui.component.SystemView
@@ -71,19 +73,12 @@ class AppTarget(
 
     override val version: String? = app.version.ifBlank { latestVersion.orEmpty() }.ifBlank { null }
 
-    override val actions: List<ItemAction> = buildList {
-        add(ItemAction.LAUNCH)
-        add(ItemAction.FORCE_STOP)
-        add(if (app.isFrozen) ItemAction.UNFREEZE else ItemAction.FREEZE)
-        add(ItemAction.APP_SETTINGS)
-        add(ItemAction.CLEAR_DATA)
-        add(ItemAction.UNINSTALL)
-    }
+    override val actions: List<ItemAction> = TargetSpecs.of(BackupTarget.APP).actions(app)
 }
 
 /** 备份过的文件夹。 */
 class DirTarget(
-    app: AppInfo,
+    private val app: AppInfo,
     isUninstalled: Boolean,
     onAction: (ItemAction) -> Unit,
     onBackup: () -> Unit,
@@ -91,12 +86,12 @@ class DirTarget(
 
     override val version: String? = null
 
-    override val actions: List<ItemAction> = listOf(ItemAction.OPEN_DIR, ItemAction.DELETE_DIR)
+    override val actions: List<ItemAction> = TargetSpecs.of(BackupTarget.DIR).actions(app)
 }
 
 /** Wi-Fi / 联系人 / 通话记录：菜单里只有「打开系统对应的界面」。 */
 class SystemTarget(
-    target: BackupTarget,
+    private val target: BackupTarget,
     app: AppInfo,
     subtitle: String?,
     onAction: (ItemAction) -> Unit,
@@ -105,21 +100,14 @@ class SystemTarget(
 
     override val version: String? = null
 
-    override val actions: List<ItemAction> = when (target) {
-        BackupTarget.WIFI -> listOf(
-            ItemAction.WIFI_ON,
-            ItemAction.WIFI_OFF,
-            ItemAction.OPEN_WIFI_SETTINGS,
-        )
-
-        BackupTarget.CONTACTS -> listOf(ItemAction.OPEN_CONTACTS)
-        BackupTarget.CALLS -> listOf(ItemAction.OPEN_CALL_LOG)
-        else -> emptyList()
-    }
+    override val actions: List<ItemAction> = TargetSpecs.of(target).actions(app)
 }
 
 /**
  * 按目标类型造对应的 [DetailTarget]。
+ *
+ * 骨架由 spec 的 [TargetViewKind] 决定 —— 加新类型只要在 `TargetSpecs` 注册一条，
+ * 这里不用改。
  *
  * @param isUninstalled 由调用方算好 —— 它依赖「是否只在备份里」「刚卸载」「目录还在不在」
  *   这些页面状态，子类拿不到。
@@ -133,10 +121,8 @@ fun detailTargetOf(
     onBackup: () -> Unit,
     /** 固定目标的副标题（「共 123 个」这类），其它类型不用传 */
     subtitle: String? = null,
-): DetailTarget = when (kind) {
-    BackupTarget.APP -> AppTarget(app, isUninstalled, latestVersion, onAction, onBackup)
-    BackupTarget.DIR -> DirTarget(app, isUninstalled, onAction, onBackup)
-    BackupTarget.WIFI, BackupTarget.CONTACTS,
-    BackupTarget.CALLS, BackupTarget.SMS ->
-        SystemTarget(kind, app, subtitle, onAction, onBackup)
+): DetailTarget = when (TargetSpecs.of(kind).viewKind) {
+    TargetViewKind.APP -> AppTarget(app, isUninstalled, latestVersion, onAction, onBackup)
+    TargetViewKind.DIR -> DirTarget(app, isUninstalled, onAction, onBackup)
+    TargetViewKind.SYSTEM -> SystemTarget(kind, app, subtitle, onAction, onBackup)
 }

@@ -47,7 +47,7 @@ static LOG_DIR: OnceLock<String> = OnceLock::new();
 
 /// `RusticServer.nativeSetLogDir(path: String): Int`
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeSetLogDir<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_nativeSetLogDir<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     path: JString<'local>,
@@ -328,7 +328,7 @@ fn repo_key(config: &RepoConfig) -> String {
 ///
 /// options 是 JSON 对象字符串；空串 / 非法 JSON 都退化成空 map（本地仓库就是这种情况）。
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeSetRepo<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_nativeSetRepo<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     path: JString<'local>,
@@ -355,7 +355,7 @@ pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeSetRe
 /// 请求：`{"path":"仓库位置","password":"候选密码","options":{}}`，只用于本次建库 /
 /// 校验密码，不读写全局仓库凭据。返回 0 成功，1 业务失败，2 共享内存不可用。
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeInitRepo<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_nativeInitRepo<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -414,7 +414,7 @@ fn init_repo(
     // 已有仓库且密码正确时 open 成功；否则尝试 init：空仓库会成功，
     // config 已存在时 init 会失败。把两次原因都带出来，便于区分「密码错」和「连不上」。
     let opened = Repository::new(&repo_opts, &backends)
-        .map_err(|e| format!("无法访问仓库：{}", describe_error(&e)))?
+        .map_err(|e| describe_error(&e))?
         .open(&credentials);
     if opened.is_ok() {
         return Ok(());
@@ -422,7 +422,7 @@ fn init_repo(
     let open_error = opened.err().map(|e| describe_error(&e)).unwrap_or_default();
 
     Repository::new(&repo_opts, &backends)
-        .map_err(|e| format!("无法访问仓库：{}", describe_error(&e)))?
+        .map_err(|e| describe_error(&e))?
         .init(
             &credentials,
             &KeyOptions::default(),
@@ -443,7 +443,7 @@ fn init_repo(
 ///
 /// 传空串表示关闭缓存。root 服务启动时调一次。
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeSetCacheDir<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_nativeSetCacheDir<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     path: JString<'local>,
@@ -470,7 +470,7 @@ pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeSetCa
 /// 请求：`{"package_name":"包名"}`
 /// 响应：`{"ok":true,"snapshots":[{"id","label","tags","time","description"}]}`
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeListSnapshots<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_nativeListSnapshots<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -564,7 +564,7 @@ fn list_snapshots(request: &ListRequest) -> Result<Vec<SnapshotInfo>, String> {
             Some(label) => snap.label == *label,
             None => !filter_by_package || snap.label.starts_with(&prefix),
         })
-        .map_err(|e| format!("读取快照失败：{}", describe_error(&e)))?
+        .map_err(|e| describe_error(&e))?
         .into_iter()
         .map(|snap| SnapshotInfo {
             id: snap.id.to_string(),
@@ -648,7 +648,7 @@ fn repository_backends(
         .repository(effective.as_str())
         .options(backend_options)
         .to_backends()
-        .map_err(|e| format!("无法打开仓库：{}", describe_error(&e)))
+        .map_err(|e| describe_error(&e))
 }
 
 /// 打开仓库（不需要索引，列表/改备注都够用）。
@@ -656,9 +656,9 @@ fn open_repo(config: &RepoConfig) -> Result<rustic_core::Repository<rustic_core:
     let backends = repository_backends(&config.path, &config.options)?;
 
     Repository::new(&repo_options(), &backends)
-        .map_err(|e| format!("无法访问仓库：{}", describe_error(&e)))?
+        .map_err(|e| describe_error(&e))?
         .open(&Credentials::password(&config.password))
-        .map_err(|e| format!("打开仓库失败（密码是否正确？）：{}", describe_error(&e)))
+        .map_err(|e| describe_error(&e))
 }
 
 /// 缓存的仓库实例：同一时间只保留一个（应用只会打开一个仓库）。
@@ -761,7 +761,7 @@ fn open_indexed_repo_cached() -> Result<Arc<Repository<rustic_core::IndexedFullS
     let repo = Arc::new(
         open_repo(&config)?
             .to_indexed()
-            .map_err(|e| format!("读取仓库索引失败：{}", describe_error(&e)))?,
+            .map_err(|e| describe_error(&e))?,
     );
 
     if let Ok(mut guard) = OPEN_INDEXED.lock() {
@@ -809,13 +809,13 @@ fn open_backup_repo_cached(
         _ => {
             let backends = repository_backends(&config.path, &config.options)?;
             let repository = Repository::new(&repo_options(), &backends)
-                .map_err(|e| format!("无法访问仓库：{}", describe_error(&e)))?;
+                .map_err(|e| describe_error(&e))?;
             return Ok(Arc::new(
                 repository
                     .open(&Credentials::password(&config.password))
-                    .map_err(|e| format!("打开仓库失败（密码是否正确？）：{}", describe_error(&e)))?
+                    .map_err(|e| describe_error(&e))?
                     .to_indexed_ids()
-                    .map_err(|e| format!("读取仓库索引失败：{}", describe_error(&e)))?,
+                    .map_err(|e| describe_error(&e))?,
             ));
         }
     };
@@ -836,14 +836,14 @@ fn open_backup_repo_cached(
 
     let backends = repository_backends(&config.path, &config.options)?;
     let repository = Repository::new(&repo_options(), &backends)
-        .map_err(|e| format!("无法访问仓库：{}", describe_error(&e)))?;
+        .map_err(|e| describe_error(&e))?;
 
     let repo = Arc::new(
         repository
             .open(&Credentials::password(&config.password))
-            .map_err(|e| format!("打开仓库失败（密码是否正确？）：{}", describe_error(&e)))?
+            .map_err(|e| describe_error(&e))?
             .to_indexed_ids()
-            .map_err(|e| format!("读取仓库索引失败：{}", describe_error(&e)))?,
+            .map_err(|e| describe_error(&e))?,
     );
 
     if let Ok(mut guard) = OPEN_BACKUP.lock() {
@@ -927,7 +927,7 @@ fn build_overview() -> Result<Vec<PackageOverview>, String> {
 
     let snapshots = repository
         .get_matching_snapshots(|_| true)
-        .map_err(|e| format!("读取快照失败：{}", describe_error(&e)))?;
+        .map_err(|e| describe_error(&e))?;
 
     // 包名 -> 该包的所有快照（图标快照不算一次备份）
     let mut by_package: std::collections::BTreeMap<String, Vec<&SnapshotFile>> =
@@ -1035,7 +1035,7 @@ fn write_overview_response(ptr: *mut u8, capacity: usize, response: OverviewResp
 /// 一次拿到所有包的备份概况：每个包一条，只带最近一次备份的快照。
 /// 相比「拉全量快照列表」，响应大小只跟应用数量有关，跟备份次数无关。
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeOverview<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_nativeOverview<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -1074,7 +1074,7 @@ pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeOverv
 ///
 /// 请求：`{"ids":["..."],"description":"..."|null}`
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeUpdateDescription<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_nativeUpdateDescription<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -1125,10 +1125,10 @@ fn update_descriptions(request: &UpdateDescriptionRequest) -> Result<(), String>
 
     let mut snapshots = repository
         .get_snapshots(&request.ids)
-        .map_err(|e| format!("读取快照失败：{}", describe_error(&e)))?;
+        .map_err(|e| describe_error(&e))?;
 
     if snapshots.is_empty() {
-        return Err("没有找到对应的快照".to_string());
+        return Err("snapshot not found".to_string());
     }
 
     // 快照 id 是内容哈希，改完 description 会变成新 id，所以先记住旧 id 再删
@@ -1145,11 +1145,11 @@ fn update_descriptions(request: &UpdateDescriptionRequest) -> Result<(), String>
 
     repository
         .save_snapshots(snapshots)
-        .map_err(|e| format!("保存快照失败：{}", describe_error(&e)))?;
+        .map_err(|e| describe_error(&e))?;
 
     let result = repository
         .delete_snapshots(&old_ids)
-        .map_err(|e| format!("删除旧快照失败：{}", describe_error(&e)));
+        .map_err(|e| describe_error(&e));
 
     // 备注改了就是新快照 id，缓存里还是旧的，必须清掉
     invalidate_indexed_repo();
@@ -1178,7 +1178,7 @@ fn run_simple<'local>(
 
 /// `RusticServer.nativeDeleteSnapshots(buffer: ByteBuffer): Int`
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeDeleteSnapshots<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_nativeDeleteSnapshots<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -1219,14 +1219,14 @@ fn delete_snapshots(request: &DeleteRequest) -> Result<(), String> {
 
     let ids = repository
         .get_snapshots(&request.ids)
-        .map_err(|e| format!("读取快照失败：{}", describe_error(&e)))?
+        .map_err(|e| describe_error(&e))?
         .into_iter()
         .map(|snap| snap.id)
         .collect::<Vec<_>>();
 
     let result = repository
         .delete_snapshots(&ids)
-        .map_err(|e| format!("删除快照失败：{}", describe_error(&e)));
+        .map_err(|e| describe_error(&e));
 
     // 结束时再失效一次：删除期间如果有 listSnapshots 把「删之前的索引」缓存进来，
     // 之后 10 分钟内都会看到已经删掉的快照
@@ -1253,7 +1253,7 @@ fn clean_orphan_icons() -> Result<u32, String> {
 
     let snapshots = repository
         .get_matching_snapshots(|_| true)
-        .map_err(|e| format!("读取快照失败：{}", describe_error(&e)))?;
+        .map_err(|e| describe_error(&e))?;
 
     // 包名 -> 是否还有真实备份（非 icon）
     let mut has_backup: std::collections::BTreeMap<&str, bool> =
@@ -1290,7 +1290,7 @@ fn clean_orphan_icons() -> Result<u32, String> {
     let removed = orphan_ids.len() as u32;
     repository
         .delete_snapshots(&orphan_ids)
-        .map_err(|e| format!("删除孤立图标失败：{}", describe_error(&e)))?;
+        .map_err(|e| describe_error(&e))?;
 
     invalidate_indexed_repo();
     Ok(removed)
@@ -1304,7 +1304,7 @@ fn write_cleanup_response(ptr: *mut u8, capacity: usize, response: CleanupRespon
 
 /// `RusticServer.nativeCleanOrphanIcons(buffer: ByteBuffer): Int`
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeCleanOrphanIcons<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_nativeCleanOrphanIcons<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -1343,7 +1343,7 @@ pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeClean
 ///
 /// 删除快照后回收空间：rustic 删快照只是删引用，数据要 prune 才真正释放。
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativePrune<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_nativePrune<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -1388,11 +1388,11 @@ fn prune_repo() -> Result<(), String> {
 
     let plan = repository
         .prune_plan(&options)
-        .map_err(|e| format!("计算回收计划失败：{}", describe_error(&e)))?;
+        .map_err(|e| describe_error(&e))?;
 
     let result = repository
         .prune(&options, plan)
-        .map_err(|e| format!("回收空间失败：{}", describe_error(&e)));
+        .map_err(|e| describe_error(&e));
 
     // 整理重写了 pack 和索引，收尾再失效一次
     invalidate_indexed_repo();
@@ -1410,7 +1410,7 @@ fn prune_estimate() -> Result<u64, String> {
     let options = prune_options();
     let plan = repository
         .prune_plan(&options)
-        .map_err(|e| format!("计算回收计划失败：{}", describe_error(&e)))?;
+        .map_err(|e| describe_error(&e))?;
 
     let stats = &plan.stats;
     let blobs = stats.size_sum();
@@ -1452,7 +1452,7 @@ fn write_estimate(ptr: *mut u8, capacity: usize, result: Result<u64, String>) {
 ///
 /// 只算不删，返回 `{"ok":true,"bytes":可回收字节数}`。
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativePruneEstimate<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_nativePruneEstimate<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -1473,7 +1473,7 @@ pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativePrune
 
 /// `RusticServer.nativeRestore(buffer: ByteBuffer): Int`
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeRestore<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_nativeRestore<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -1514,10 +1514,10 @@ fn restore_snapshots(request: &RestoreRequest) -> Result<(), String> {
     for item in &request.items {
         let snapshot = repository
             .get_snapshots(&[item.id.as_str()])
-            .map_err(|e| format!("读取快照失败：{}", describe_error(&e)))?
+            .map_err(|e| describe_error(&e))?
             .into_iter()
             .next()
-            .ok_or_else(|| format!("找不到快照 {}", item.id))?;
+            .ok_or_else(|| format!("snapshot {} not found", item.id))?;
 
         restore_snapshot(
             repository.as_ref(),
@@ -1525,7 +1525,7 @@ fn restore_snapshots(request: &RestoreRequest) -> Result<(), String> {
             std::path::Path::new(&item.dest),
             item.delete,
         )
-        .map_err(|e| format!("恢复 {} 失败：{e}", item.id))?;
+        .map_err(|e| format!("restore {} failed: {e}", item.id))?;
     }
 
     Ok(())
@@ -1592,7 +1592,7 @@ fn restore_file<S: rustic_core::IndexedFull + Sync>(
 
     let open = repository
         .open_file(node)
-        .map_err(|e| format!("读取文件失败：{}", describe_error(&e)))?;
+        .map_err(|e| describe_error(&e))?;
 
     // 上一轮可能留下同名目录 / 软链：直接 File::create 会 EISDIR，或者写穿到链接指向的文件
     remove_existing(target);
@@ -1608,7 +1608,7 @@ fn restore_file<S: rustic_core::IndexedFull + Sync>(
             let len = RESTORE_CHUNK.min(size - offset);
             let data = repository
                 .read_file_at(&open, offset, len)
-                .map_err(|e| format!("读取数据块失败：{}", describe_error(&e)))?;
+                .map_err(|e| describe_error(&e))?;
             file.write_all(&data)
                 .map_err(|e| format!("{}: {e}", target.display()))?;
             offset += len;
@@ -1639,7 +1639,7 @@ fn restore_file<S: rustic_core::IndexedFull + Sync>(
                         let len = RESTORE_CHUNK.min(end - offset);
                         let data = repository
                             .read_file_at(open, offset, len)
-                            .map_err(|e| format!("读取数据块失败：{}", describe_error(&e)))?;
+                            .map_err(|e| describe_error(&e))?;
                         write_at(file, &data, offset as u64)
                             .map_err(|e| format!("{}: {e}", target.display()))?;
                         offset += len;
@@ -1706,11 +1706,11 @@ fn restore_snapshot<S: rustic_core::IndexedFull + Sync>(
     // 空路径就是快照根节点
     let root = repository
         .node_from_path(snapshot.tree, std::path::Path::new(""))
-        .map_err(|e| format!("读取快照根节点失败：{}", describe_error(&e)))?;
+        .map_err(|e| describe_error(&e))?;
 
     let streamer = repository
         .ls(&root, &LsOptions::default())
-        .map_err(|e| format!("读取快照内容失败：{}", describe_error(&e)))?;
+        .map_err(|e| describe_error(&e))?;
 
     let mut written: std::collections::HashSet<std::path::PathBuf> =
         std::collections::HashSet::new();
@@ -1728,7 +1728,7 @@ fn restore_snapshot<S: rustic_core::IndexedFull + Sync>(
     let mut hardlink_followers: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
 
     for entry in streamer {
-        let (path, node) = entry.map_err(|e| format!("读取快照条目失败：{}", describe_error(&e)))?;
+        let (path, node) = entry.map_err(|e| describe_error(&e))?;
         if path.as_os_str().is_empty() {
             continue;
         }
@@ -1787,7 +1787,7 @@ fn restore_snapshot<S: rustic_core::IndexedFull + Sync>(
             .num_threads(restore_threads())
             .thread_name(|index| format!("restore-{index}"))
             .build()
-            .map_err(|e| format!("创建恢复线程池失败：{e}"))?;
+            .map_err(|e| format!("create restore thread pool failed: {e}"))?;
 
         pool.install(|| {
             use rayon::prelude::*;
@@ -1957,7 +1957,7 @@ fn collect_extras(
 ///
 /// 返回 0 成功，1 业务失败，2 共享内存不可用。
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RusticServer_nativeBackup<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_nativeBackup<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -2045,7 +2045,7 @@ fn backup_items(
             let reason = item
                 .skip_reason
                 .clone()
-                .unwrap_or_else(|| format!("路径不存在：{}", item.sources.join("、")));
+                .unwrap_or_else(|| format!("path not found: {}", item.sources.join(", ")));
             progress.emit_skipped(&item.stage, &reason);
             continue;
         }
@@ -2056,13 +2056,13 @@ fn backup_items(
             let tags = item.tags.join(",");
             snapshot_options.tags = vec![tags
                 .parse::<StringList>()
-                .map_err(|e| format!("tag 非法 `{tags}`：{e}"))?];
+                .map_err(|e| format!("invalid tag `{tags}`: {e}"))?];
         }
 
         snapshot_options.description.clone_from(&item.description);
 
         let snapshot = SnapshotFile::from_options(&snapshot_options)
-            .map_err(|e| format!("构造快照失败：{}", describe_error(&e)))?;
+            .map_err(|e| describe_error(&e))?;
 
         let mut backup_options = BackupOptions::default();
         backup_options.as_path = item.as_path.as_ref().map(PathBuf::from);
@@ -2086,7 +2086,7 @@ fn backup_items(
 
         let snapshot = repository
             .backup(&backup_options, &paths, snapshot)
-            .map_err(|e| format!("备份 {} 失败：{}", item.stage, describe_error(&e)))?;
+            .map_err(|e| format!("backup {} failed: {}", item.stage, describe_error(&e)))?;
 
         let files = snapshot
             .summary
@@ -2184,7 +2184,7 @@ impl ProgressCtx {
 /// 读取指定偏移处的「大端 i32 长度 + JSON」帧。
 fn read_frame_at(ptr: *mut u8, capacity: usize, offset: usize) -> Result<Vec<u8>, String> {
     if offset + 4 > capacity {
-        return Err("共享内存太小".to_string());
+        return Err("shared memory too small".to_string());
     }
 
     unsafe {
@@ -2192,12 +2192,12 @@ fn read_frame_at(ptr: *mut u8, capacity: usize, offset: usize) -> Result<Vec<u8>
         let length = i32::from_be_bytes([header[0], header[1], header[2], header[3]]);
 
         if length < 0 {
-            return Err(format!("数据长度非法：{length}"));
+            return Err(format!("invalid frame length: {length}"));
         }
 
         let length = length as usize;
         if offset + 4 + length > capacity {
-            return Err("数据超出共享内存".to_string());
+            return Err("frame exceeds shared memory".to_string());
         }
 
         Ok(std::slice::from_raw_parts(ptr.add(offset + 4), length).to_vec())

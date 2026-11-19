@@ -14,7 +14,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -27,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import com.cc.libackupnext.data.ReleaseBlock
 import com.cc.libackupnext.data.ReleaseInfo
 import com.cc.libackupnext.ui.component.AppDialog
+import androidx.core.net.toUri
 
 /** 行内标记：**粗体**、`代码`。其余原样显示，不处理链接。 */
 private val INLINE = Regex("""\*\*(.+?)\*\*|`([^`]+)`""")
@@ -38,7 +40,10 @@ fun UpdateDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val maxContentHeight = LocalConfiguration.current.screenHeightDp.dp * 0.6f
+    // LocalConfiguration.screenHeightDp 已废弃：窗口尺寸改从 LocalWindowInfo 拿（px 转 dp）
+    val maxContentHeight = with(LocalDensity.current) {
+        (LocalWindowInfo.current.containerSize.height * 0.6f).toDp()
+    }
 
     AppDialog(
         onDismiss = onDismiss,
@@ -63,7 +68,7 @@ fun UpdateDialog(
             // 没有浏览器/链接异常时也不该把应用弄崩
             runCatching {
                 context.startActivity(
-                    Intent(Intent.ACTION_VIEW, Uri.parse(info.downloadUrl))
+                    Intent(Intent.ACTION_VIEW, info.downloadUrl.toUri())
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 )
             }

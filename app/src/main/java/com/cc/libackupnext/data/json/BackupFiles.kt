@@ -24,7 +24,10 @@ data class AppStateFile(
     @EncodeDefault(EncodeDefault.Mode.ALWAYS) val granted: List<String> = emptyList(),
     @EncodeDefault(EncodeDefault.Mode.ALWAYS) val requested: List<String> = emptyList(),
     val appops: AppOpsFile? = null,
-    /** 老快照没有这个字段，不能当成 false —— 那会把白名单删掉。 */
+    /**
+     * null 表示快照里没有这个字段，恢复时**跳过**白名单处理。
+     * 不能当成 false —— 那等于主动把用户的白名单清空。
+     */
     @EncodeDefault(EncodeDefault.Mode.ALWAYS) val batteryWhitelist: Boolean? = null,
     @EncodeDefault(EncodeDefault.Mode.ALWAYS) val standbyBucket: Int = -1
 )
@@ -39,7 +42,7 @@ data class AppOpsFile(
 // ==================== wifi.json ====================
 
 @Serializable
-data class WifiBackup(val networks: List<WifiNetworkDto>)
+data class WifiBackupFile(val networks: List<WifiNetworkDto>)
 
 @Serializable
 data class WifiNetworkDto(

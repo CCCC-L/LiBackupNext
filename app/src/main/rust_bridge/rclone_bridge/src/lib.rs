@@ -24,7 +24,7 @@ static LOG_DIR: OnceLock<String> = OnceLock::new();
 
 /// `RcloneServer.nativeSetLogDir(path: String): Int`
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RcloneServer_nativeSetLogDir<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_root_RcloneServer_nativeSetLogDir<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     path: JString<'local>,
@@ -190,7 +190,7 @@ struct ListDirsRequest {
 /// 请求：{"lib":"...","fs":"{...}","path":"/","create":null,"fixup":"..."}
 /// 响应：{"ok":true,"dirs":[...]} 或 {"ok":false,"error":"..."}
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RcloneServer_nativeListDirs<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_root_RcloneServer_nativeListDirs<'local>(
     env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -239,7 +239,7 @@ struct EnsureServeRequest {
 /// 请求：{"lib":"...","fs":"{...}","key":"<location>|<fs>"}
 /// 响应：{"ok":true,"url":"http://user:pass@127.0.0.1:port/"} 或错误
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RcloneServer_nativeEnsureServe<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_root_RcloneServer_nativeEnsureServe<'local>(
     env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,
@@ -277,7 +277,7 @@ fn handle_ensure_serve(ptr: *mut u8, capacity: usize) -> jint {
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_RcloneServer_nativeStopServe<'local>(
+pub extern "system" fn Java_com_cc_libackupnext_service_root_RcloneServer_nativeStopServe<'local>(
     env: EnvUnowned<'local>,
     _this: JObject<'local>,
     buffer: JByteBuffer<'local>,

@@ -1,7 +1,6 @@
 package com.cc.libackupnext.ui
 
 import android.app.Application
-import android.content.pm.UserInfo
 import android.os.SystemClock
 import android.util.Log
 import androidx.compose.runtime.mutableStateMapOf
@@ -9,15 +8,21 @@ import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.cc.libackupnext.data.AppBackupSummary
-import com.cc.libackupnext.data.AppPrefs
+import com.cc.libackupnext.data.AppInfo
+import com.cc.libackupnext.data.BackupBatchMode
 import com.cc.libackupnext.data.BackupGroup
+import com.cc.libackupnext.data.BatchItem
+import com.cc.libackupnext.data.PendingBatch
 import com.cc.libackupnext.data.SnapshotKind
-import com.cc.libackupnext.entity.AppInfo
-import com.cc.libackupnext.service.AppManagerService
-import com.cc.libackupnext.service.RusticClient
+import com.cc.libackupnext.data.UserAccount
+import com.cc.libackupnext.data.prefs.PendingBatchStore
+import com.cc.libackupnext.data.prefs.RepoDisplay
+import com.cc.libackupnext.data.prefs.ViewPrefs
+import com.cc.libackupnext.service.gateway.BackendErrors
+import com.cc.libackupnext.service.gateway.DeviceGateway
+import com.cc.libackupnext.service.gateway.RepoReader
 import com.cc.libackupnext.service.json.encodePendingBatch
 import com.cc.libackupnext.service.json.loadPendingBatch
-import com.cc.libackupnext.ui.screen.BackupBatchMode
 import com.cc.libackupnext.ui.util.AppIconStore
 import com.cc.libackupnext.util.AppLog
 import kotlinx.coroutines.CancellationException
@@ -34,7 +39,20 @@ import kotlinx.coroutines.withContext
 
 enum class SortType { NAME, INSTALL_TIME, UPDATE_TIME, BACKUP_TIME }
 
-class MainViewModel(application: Application) : AndroidViewModel(application) {
+/**
+ * 列表页的状态持有者。
+ *
+ * 只依赖 [RepoReader]（只读）而不是整个仓库访问面：这里没有任何写操作，
+ * 拿不到写能力就不会误写。依赖由 `AppListScreen` 的工厂注入，不再是全局单例。
+ */
+class MainViewModel(
+    application: Application,
+    private val reader: RepoReader,
+    private val viewPrefs: ViewPrefs,
+    private val pendingStore: PendingBatchStore,
+    private val repoDisplay: RepoDisplay,
+    private val device: DeviceGateway,
+) : AndroidViewModel(application) {
 
     // ==================== 应用数据 ====================
     private val _allApps = MutableStateFlow<List<AppInfo>>(emptyList())
@@ -72,7 +90,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * 中断 / 失败后剩下的待办。放在 ViewModel 里是因为入口在 tab 页的「更多」菜单，
      * 用户会先退出批量页 / 详情页，页面内的 remember 早就没了。
      */
-    private val _pendingBatch = MutableStateFlow<PendingBatch?>(loadPendingBatch())
+    private val _pendingBatch =
+        MutableStateFlow<PendingBatch?>(loadPendingBatch(pendingStore, repoDisplay.location))
     val pendingBatch: StateFlow<PendingBatch?> = _pendingBatch.asStateFlow()
 
     /** 点「继续未完成」后置 true；目标页面消费后复位。 */
@@ -83,7 +102,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * 中途被系统杀掉也不会丢掉已完成的项，重启后不会又备份一遍。
      */
     private fun persistPending(batch: PendingBatch?) {
-        AppPrefs.pendingBatchJson = batch?.let { encodePendingBatch(it) }.orEmpty()
+        pendingStore.json = batch?.let { encodePendingBatch(it, repoDisplay.location) }.orEmpty()
     }
 
     /** 发起新操作：覆盖旧待办（同时换新的 operationId）。 */
@@ -103,13 +122,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** 放弃未完成的内容。 */
     fun clearPending() {
         _pendingBatch.value = null
-        AppPrefs.pendingBatchJson = ""
+        pendingStore.json = ""
         resumeRequested.value = false
     }
 
     var sortType = MutableStateFlow(loadSortType())
-    var isReverse = MutableStateFlow(AppPrefs.sortReverse)
-    var showSystemApps = MutableStateFlow(AppPrefs.showSystemApps)
+    var isReverse = MutableStateFlow(viewPrefs.sortReverse)
+    var showSystemApps = MutableStateFlow(viewPrefs.showSystemApps)
 
     /**
      * 批量页排序菜单的「置顶不同版本」：打开后把「备份时的版本 ≠ 当前安装的版本」
@@ -118,8 +137,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var pinDifferentVersions = MutableStateFlow(false)
 
     // ==================== 用户列表 ====================
-    private val _users = MutableStateFlow<List<UserInfo>>(emptyList())
-    val users: StateFlow<List<UserInfo>> = _users.asStateFlow()
+    private val _users = MutableStateFlow<List<UserAccount>>(emptyList())
+    val users: StateFlow<List<UserAccount>> = _users.asStateFlow()
 
     var isUserMenuExpanded = MutableStateFlow(false)
     var currentUserId = MutableStateFlow(0)
@@ -178,7 +197,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** 「其他」页条数：这几个数是别的应用随时会改的，不能只信进应用时那次。 */
     fun refreshSystemData() {
         viewModelScope.launch {
-            _systemDataCounts.value = RusticClient.systemDataCounts()
+            _systemDataCounts.value = reader.systemDataCounts()
         }
     }
 
@@ -195,7 +214,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val list = withContext(Dispatchers.IO) {
                 try {
-                    AppManagerService.getUsers()
+                    device.getUsers()
                 } catch (t: Throwable) {
                     AppLog.e(TAG, "loadUsers failed", t)
                     emptyList()
@@ -276,11 +295,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 // 已装应用和仓库里的备份同时查，省一次等待
                 val installedDeferred = async(Dispatchers.IO) {
-                    AppManagerService.getInstalledAppsAsUser(userId)
+                    device.getInstalledApps(userId)
                 }
                 // 备份概况只查一次：既用来补「只在备份里」的应用，也用来算备份数
                 val overviewDeferred = async(Dispatchers.IO) {
-                    RusticClient.repoOverview()
+                    reader.repoOverview()
                 }
 
                 // 先渲染已安装应用，备份里独有的应用到了再追加。
@@ -298,16 +317,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 val overviewResult = overviewDeferred.await()
                 overviewResult.onFailure { t ->
-                    if (RusticClient.isRemoteConnectionFailure(t)) {
+                    if (BackendErrors.isConnectionLost(t)) {
                         AppLog.toastOnMain(
-                            t.message ?: RusticClient.REMOTE_INTERRUPTED_MESSAGE,
+                            t.message ?: BackendErrors.REMOTE_INTERRUPTED_MESSAGE,
                             longToast = true
                         )
                     }
                 }
                 val overview = overviewResult.getOrElse { emptyList() }
                 val installedNames = installed.mapTo(HashSet()) { it.packageName }
-                val merged = installed + RusticClient.backupApps(userId, overview)
+                val merged = installed + reader.backupApps(userId, overview)
                     .filter { it.packageName !in installedNames }
                 if (userId != currentUserId.value) return@launch
 
@@ -361,13 +380,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         val names = apps.associate { it.packageName to it.name }
         val summaries = if (overview != null) {
-            runCatching { RusticClient.backupOverview(names, overview) }
+            runCatching { reader.backupOverview(names, overview) }
                 .getOrDefault(emptyList())
         } else {
-            RusticClient.backupOverviewResult(names).onFailure { t ->
-                if (RusticClient.isRemoteConnectionFailure(t)) {
+            reader.backupOverviewResult(names).onFailure { t ->
+                if (BackendErrors.isConnectionLost(t)) {
                     AppLog.toastOnMain(
-                        t.message ?: RusticClient.REMOTE_INTERRUPTED_MESSAGE,
+                        t.message ?: BackendErrors.REMOTE_INTERRUPTED_MESSAGE,
                         longToast = true
                     )
                 }
@@ -409,9 +428,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 记住排序按钮的勾选情况。 */
     private fun persistSortOptions() {
-        AppPrefs.sortType = sortType.value.name
-        AppPrefs.sortReverse = isReverse.value
-        AppPrefs.showSystemApps = showSystemApps.value
+        viewPrefs.sortType = sortType.value.name
+        viewPrefs.sortReverse = isReverse.value
+        viewPrefs.showSystemApps = showSystemApps.value
     }
 
     private fun computeDisplay(source: List<AppInfo>): List<AppInfo> {
@@ -461,8 +480,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         /** 距上次加载不足这个时间就不再做前台刷新（进页面那一下的 ON_RESUME）。 */
         private const val FOREGROUND_SKIP_INTERVAL_MS = 1_000L
-
-        private fun loadSortType(): SortType =
-            runCatching { SortType.valueOf(AppPrefs.sortType) }.getOrDefault(SortType.NAME)
     }
+
+    /** 排序方式从配置读；读不到（旧版本存了别的名字）回落到按名称。 */
+    private fun loadSortType(): SortType =
+        runCatching { SortType.valueOf(viewPrefs.sortType) }.getOrDefault(SortType.NAME)
 }

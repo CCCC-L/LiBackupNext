@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
@@ -51,12 +50,12 @@ import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import com.cc.libackupnext.BuildConfig
 import com.cc.libackupnext.data.ReleaseInfo
-import com.cc.libackupnext.service.UpdateChecker
+import com.cc.libackupnext.service.update.UpdateChecker
 import com.cc.libackupnext.ui.AppTopBar
 import com.cc.libackupnext.ui.PageContentHorizontalPadding
-import com.cc.libackupnext.ui.dialog.UpdateDialog
 import com.cc.libackupnext.ui.component.CardGroup
 import com.cc.libackupnext.ui.component.SettingsCard
+import com.cc.libackupnext.ui.dialog.UpdateDialog
 import com.cc.libackupnext.util.AppLinks
 import com.cc.libackupnext.util.AppLog
 import kotlinx.coroutines.launch
@@ -345,7 +344,7 @@ private fun AboutChip(
 }
 
 @Composable
-private fun RowScope.LinkIcon(icon: ImageVector, description: String, onClick: () -> Unit) {
+private fun LinkIcon(icon: ImageVector, description: String, onClick: () -> Unit) {
     Icon(
         imageVector = icon,
         contentDescription = description,

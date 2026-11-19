@@ -27,7 +27,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.cc.libackupnext.data.BackupStep
 import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.BackupStepStatus
-import com.cc.libackupnext.service.RusticClient
+import com.cc.libackupnext.service.gateway.BackendErrors
 import com.cc.libackupnext.ui.component.AppSurfaceDialog
 import com.cc.libackupnext.util.AppLog
 
@@ -137,7 +137,7 @@ fun BackupProgressDialog(
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = if (connectionInterrupted) {
-                    RusticClient.REMOTE_INTERRUPTED_MESSAGE
+                    BackendErrors.REMOTE_INTERRUPTED_MESSAGE
                 } else {
                     error.orEmpty()
                 },

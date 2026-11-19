@@ -5,10 +5,10 @@ import com.cc.libackupnext.data.protocol.LocalProtocol
 /**
  * 已添加的仓库记录：本地和远程共用一份清单。
  *
- * 只存配置，不缓存仓库里的备份数据。[location] 与 AppPrefs.repoPath 的取值一致
+ * 只存配置，不缓存仓库里的备份数据。[location] 与 RepoPrefs.location 的取值一致
  * （本地是目录，远程是 `remote:<id>:<path>`），清单按它去重、判定「当前使用中」。
  * [password] 是 rustic 仓库密码：切换 / 编辑时要靠它重新校验；业务请求仍只从
- * AppPrefs.repoPassword 读，清单不是凭据真源。
+ * RepoPrefs.password 读，清单不是凭据真源。
  */
 data class SavedRepo(
     val id: String,

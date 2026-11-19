@@ -15,8 +15,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.cc.libackupnext.data.AppBackupSummary
+import com.cc.libackupnext.data.AppInfo
 import com.cc.libackupnext.data.BackupTarget
-import com.cc.libackupnext.entity.AppInfo
 import com.cc.libackupnext.ui.BottomBarContentSpace
 import com.cc.libackupnext.ui.PageContentHorizontalPadding
 import com.cc.libackupnext.ui.PageContentPadding
@@ -46,7 +46,7 @@ data class TargetRow(val target: BackupTarget, val item: AppInfo)
  * @param isRefreshing 刷新转圈的状态，同样由调用方维护
  * @param subtitleOf 副标题；不传就用目标自己的（包名 / 路径）。「其他」页用它显示条数
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun TargetListScreen(
     rows: List<TargetRow>,

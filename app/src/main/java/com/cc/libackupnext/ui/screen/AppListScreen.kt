@@ -1,5 +1,6 @@
 package com.cc.libackupnext.ui.screen
 
+import android.app.Application
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -44,20 +45,29 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.cc.libackupnext.data.AppPrefs
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import com.cc.libackupnext.data.AppInfo
+import com.cc.libackupnext.data.BackupBatchMode
 import com.cc.libackupnext.data.BackupTarget
+import com.cc.libackupnext.data.BatchOrigin
 import com.cc.libackupnext.data.FolderPickerLauncher
-import com.cc.libackupnext.entity.AppInfo
-import com.cc.libackupnext.entity.dirAppInfo
+import com.cc.libackupnext.data.dirAppInfo
 import com.cc.libackupnext.ui.AppBottomBar
 import com.cc.libackupnext.ui.AppTopBar
-import com.cc.libackupnext.ui.BatchOrigin
 import com.cc.libackupnext.ui.HomeTab
 import com.cc.libackupnext.ui.MainViewModel
 import com.cc.libackupnext.ui.SortMenuExtra
 import com.cc.libackupnext.ui.component.countText
+import com.cc.libackupnext.ui.di.LocalBackupPrefs
+import com.cc.libackupnext.ui.di.LocalDeviceGateway
+import com.cc.libackupnext.ui.di.LocalPendingBatchStore
+import com.cc.libackupnext.ui.di.LocalRepoDisplay
+import com.cc.libackupnext.ui.di.LocalRepoReader
+import com.cc.libackupnext.ui.di.LocalViewPrefs
 import com.cc.libackupnext.ui.dialog.PendingRetryDialog
 import com.cc.libackupnext.ui.theme.TabScrollDurationMs
 import com.cc.libackupnext.ui.theme.pageTransitionSpec
@@ -72,16 +82,40 @@ import kotlin.math.roundToInt
  */
 private const val SCROLL_DOWN_SIGN = -1f
 
+/**
+ * 列表页 ViewModel 的工厂：把只读仓库接口注入进去。
+ */
+@Composable
+private fun appListViewModel(): MainViewModel {
+    val reader = LocalRepoReader.current
+    val viewPrefs = LocalViewPrefs.current
+    val pendingBatch = LocalPendingBatchStore.current
+    val repoDisplay = LocalRepoDisplay.current
+    val device = LocalDeviceGateway.current
+    return viewModel(
+        factory = viewModelFactory {
+            initializer {
+                val application = this[APPLICATION_KEY] as Application
+                MainViewModel(application, reader, viewPrefs, pendingBatch, repoDisplay, device)
+            }
+        }
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun AppListScreen(
-    viewModel: MainViewModel = viewModel(),
+    viewModel: MainViewModel = appListViewModel(),
     /** 崩溃续命后重建时直接落到设置 tab，保证导出日志立刻可达。 */
     initialTab: HomeTab = HomeTab.APPS,
     /** 打开通用文件夹选择弹窗（窗口由 MainActivity 顶层持有）。 */
     onOpenFolderPicker: (FolderPickerLauncher) -> Unit = {}
 ) {
     val context = LocalContext.current
+    // 本地配置：仓库信息（不含密码）、界面偏好、备份行为
+    val repoDisplay = LocalRepoDisplay.current
+    val device = LocalDeviceGateway.current
+    val backupPrefs = LocalBackupPrefs.current
     val appName = remember {
         context.applicationInfo.loadLabel(context.packageManager).toString()
     }
@@ -103,12 +137,12 @@ fun AppListScreen(
 
     // ==================== 页面栈 ====================
     var route by rememberSaveable { mutableStateOf(AppRoute.LIST) }
-    // 仓库清单 / 当前仓库位置：初始化、切换、编辑、删除后自增，触发重读 AppPrefs
+    // 仓库清单 / 当前仓库位置：初始化、切换、编辑、删除后自增，触发重读 RepoDisplay
     var repoRevision by rememberSaveable { mutableStateOf(0) }
-    val savedRepos = remember(repoRevision) { AppPrefs.savedRepos }
+    val savedRepos = remember(repoRevision) { repoDisplay.savedRepos }
     // 业务比较用逻辑标识，展示 / 复制用真实地址，两者别混
-    val currentRepoLocation = remember(repoRevision) { AppPrefs.repoPath }
-    val currentRepoAddress = remember(repoRevision) { AppPrefs.currentRepoAddress }
+    val currentRepoLocation = remember(repoRevision) { repoDisplay.location }
+    val currentRepoAddress = remember(repoRevision) { repoDisplay.currentAddress }
     // 批量页的两个参数：模式 + 从哪个页签进来的（页签决定要列哪些目标）。
     // 以前是「一种组合一个布尔」，四种组合四个变量
     var batchMode by rememberSaveable { mutableStateOf(BackupBatchMode.CREATE) }
@@ -192,8 +226,8 @@ fun AppListScreen(
                 }
             }
     }
-    // 文件页要备份的目录：默认 4 个 + 用户自己加的，AppPrefs 读出来就是字母序
-    var extraDirs by remember { mutableStateOf(AppPrefs.extraDirs) }
+    // 文件页要备份的目录：默认 4 个 + 用户自己加的，BackupPrefs 读出来就是字母序
+    var extraDirs by remember { mutableStateOf(backupPrefs.extraDirs) }
     val fileDirs = extraDirs.toList()
     val fileListState = rememberLazyListState()
     val othersListState = rememberLazyListState()
@@ -282,7 +316,7 @@ fun AppListScreen(
     }
 
     // ==================== 导航 ====================
-    /** 仓库清单变化：重读 AppPrefs，并让备份列表按新仓库重新加载。 */
+    /** 仓库清单变化：重读仓库信息，并让备份列表按新仓库重新加载。 */
     fun onRepoChanged() {
         repoRevision++
         // 换了仓库，旧的 operationId / 快照 id 不通用，未完成批次直接作废
@@ -318,7 +352,9 @@ fun AppListScreen(
             when (batch.origin) {
                 BatchOrigin.BATCH -> {
                     batch.batchMode?.let { batchMode = it }
-                    batch.batchTab?.let { batchTab = it }
+                    batch.batchTab?.let { name ->
+                        HomeTab.entries.firstOrNull { it.name == name }?.let { batchTab = it }
+                    }
                     route = AppRoute.BATCH
                 }
 
@@ -409,9 +445,9 @@ fun AppListScreen(
                     // 默认目录也在 extraDirs 里，所以移除逻辑只有一种：从集合里删掉
                     onRemoveDir = if (BackupTarget.of(current) == BackupTarget.DIR) {
                         {
-                            AppPrefs.extraDirs = AppPrefs.extraDirs - current.packageName
+                            backupPrefs.extraDirs = backupPrefs.extraDirs - current.packageName
                             // 读回来是排好序的
-                            extraDirs = AppPrefs.extraDirs
+                            extraDirs = backupPrefs.extraDirs
                             closeDetail()
                         }
                     } else {
@@ -540,9 +576,9 @@ fun AppListScreen(
                                     openDetail(dirAppInfo(path), fromBatch = false)
                                 },
                                 onAdd = { path ->
-                                    AppPrefs.extraDirs = AppPrefs.extraDirs + path
+                                    backupPrefs.extraDirs = backupPrefs.extraDirs + path
                                     // 读回来是排好序的
-                                    extraDirs = AppPrefs.extraDirs
+                                    extraDirs = backupPrefs.extraDirs
                                 },
                                 onOpenFolderPicker = onOpenFolderPicker,
                                 modifier = Modifier.padding(paddingValues),
@@ -560,7 +596,9 @@ fun AppListScreen(
                                     target.targets(
                                         emptyList(),
                                         create = true,
-                                        hasBackup = { false })
+                                        hasBackup = { false },
+                                        extraDirs = backupPrefs.extraDirs
+                                    )
                                         .map { app -> TargetRow(target, app) }
                                 },
                                 summaries = backupSummaries,

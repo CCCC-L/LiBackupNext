@@ -10,16 +10,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.data.BackupTarget
-import com.cc.libackupnext.entity.AppInfo
+import com.cc.libackupnext.data.target.TargetSpecs
+import com.cc.libackupnext.data.target.TargetViewKind
+import com.cc.libackupnext.data.AppInfo
 import com.cc.libackupnext.ui.UserBadge
 import com.cc.libackupnext.ui.isNonPrimaryUser
-import java.io.File
 
 /**
  * 一个备份目标「长什么样」：列表行和详情页 header 共用这一份。
  *
- * 只管展示，不持有 UI 状态，也不碰「点了做什么」—— 那是
- * `com.cc.libackupnext.ui.screen.detail.DetailTarget` 的事。
  * 加新类型时：在 [BackupTarget] 加枚举值 → 这里加子类 → [targetViewOf] 补分支，
  * `when` 是穷尽的，漏了编译不过。
  */
@@ -146,29 +145,23 @@ class SystemView(
     override val isMissing: Boolean = false
 }
 
-/** 按目标类型造视图。 */
+/** 按目标类型造视图。骨架由 spec 的 [TargetViewKind] 决定，加类型不用改这里。 */
 fun targetViewOf(
     target: BackupTarget,
     app: AppInfo,
     isMissing: Boolean,
     subtitle: String? = null,
-): TargetView = when (target) {
-    BackupTarget.APP -> AppView(app, isMissing)
-    BackupTarget.DIR -> DirView(app, isMissing)
-    BackupTarget.WIFI, BackupTarget.CONTACTS,
-    BackupTarget.CALLS, BackupTarget.SMS -> SystemView(target, app, subtitle)
+): TargetView = when (TargetSpecs.of(target).viewKind) {
+    TargetViewKind.APP -> AppView(app, isMissing)
+    TargetViewKind.DIR -> DirView(app, isMissing)
+    TargetViewKind.SYSTEM -> SystemView(target, app, subtitle)
 }
 
 /**
  * 这个目标在列表里是不是已经不存在了。
  *
- * 应用看「是不是只在备份里」，文件夹直接看磁盘 —— 目录删了但还有备份时，
- * 行要划线置灰而不是消失。
+ * 判据在 [TargetSpecs] 里按类型声明：应用看「是不是只在备份里」，
+ * 文件夹直接看磁盘 —— 目录删了但还有备份时，行要划线置灰而不是消失。
  */
-fun BackupTarget.isMissing(app: AppInfo): Boolean = when (this) {
-    BackupTarget.APP -> app.onlyInBackup
-    BackupTarget.DIR -> !File(app.packageName).isDirectory
-    // 系统数据只要 provider 读得到就有；读不到时备份会自己跳过并给出说明
-    BackupTarget.WIFI, BackupTarget.CONTACTS,
-    BackupTarget.CALLS, BackupTarget.SMS -> false
-}
+fun BackupTarget.isMissing(app: AppInfo): Boolean =
+    TargetSpecs.of(this).isMissing(app)

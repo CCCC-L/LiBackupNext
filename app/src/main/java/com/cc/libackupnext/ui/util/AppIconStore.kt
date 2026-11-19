@@ -17,9 +17,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import com.cc.libackupnext.App
-import com.cc.libackupnext.data.AppPrefs
-import com.cc.libackupnext.service.AppManagerService
-import com.cc.libackupnext.service.RusticClient
+import com.cc.libackupnext.service.gateway.DeviceGateway
+import com.cc.libackupnext.service.gateway.RepoReader
+import com.cc.libackupnext.ui.di.LocalBackupPrefs
+import com.cc.libackupnext.ui.di.LocalDeviceGateway
+import com.cc.libackupnext.ui.di.LocalRepoReader
+import com.cc.libackupnext.ui.util.AppIconStore.missing
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -74,7 +77,7 @@ object AppIconStore {
     fun cached(packageName: String, userId: Int): Bitmap? = cache.get(keyOf(packageName, userId))
 
     /** 挂起加载；同一个图标只会真正加载一次。 */
-    suspend fun load(packageName: String, userId: Int): Bitmap? {
+    suspend fun load(packageName: String, userId: Int, device: DeviceGateway): Bitmap? {
         val key = keyOf(packageName, userId)
         cache.get(key)?.let { return it }
         if (missing.contains(key)) return null
@@ -82,7 +85,7 @@ object AppIconStore {
         val deferred = inflight.computeIfAbsent(key) {
             scope.async {
                 val bitmap = try {
-                    loadBitmap(packageName, userId)
+                    loadBitmap(packageName, userId, device)
                 } catch (t: Throwable) {
                     Log.w(TAG, "load failed: $key", t)
                     null
@@ -135,15 +138,23 @@ object AppIconStore {
 
     private fun backupKey(packageName: String) = "backup:$packageName"
 
-    fun cachedBackup(packageName: String): Bitmap? {
-        if (!AppPrefs.fetchIconFromRepo) return null
+    fun cachedBackup(packageName: String, fetchEnabled: Boolean): Bitmap? {
+        if (!fetchEnabled) return null
         return cache.get(backupKey(packageName))
     }
 
-    /** 从 rustic 的 `<包名>:icon` 快照里取图标（应用没装时用）。 */
-    suspend fun loadFromBackup(packageName: String): Bitmap? {
+    /**
+     * 从 rustic 的 `<包名>:icon` 快照里取图标（应用没装时用）。
+     *
+     * @param fetchEnabled 设置里「从仓库取图标」的开关；关掉就完全不查
+     */
+    suspend fun loadFromBackup(
+        packageName: String,
+        reader: RepoReader,
+        fetchEnabled: Boolean,
+    ): Bitmap? {
         // 设置里关掉之后就不再去仓库里取
-        if (!AppPrefs.fetchIconFromRepo) return null
+        if (!fetchEnabled) return null
 
         val key = backupKey(packageName)
         cache.get(key)?.let { return it }
@@ -153,7 +164,7 @@ object AppIconStore {
         val deferred = inflight.computeIfAbsent(key) {
             scope.async {
                 val bitmap = permits.withPermit {
-                    RusticClient.loadIcon(packageName)
+                    reader.loadIcon(packageName)
                         .getOrNull()?.let { bytes ->
                             BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                         }
@@ -174,7 +185,11 @@ object AppIconStore {
         }
     }
 
-    private suspend fun loadBitmap(packageName: String, userId: Int): Bitmap? {
+    private suspend fun loadBitmap(
+        packageName: String,
+        userId: Int,
+        device: DeviceGateway,
+    ): Bitmap? {
         val pm = App.application.packageManager
 
         if (userId == currentUserId) {
@@ -185,7 +200,7 @@ object AppIconStore {
 
         // 兜底：root 进程读取（跨用户、被 hide 的包）
         permits.withPermit {
-            val bytes = AppManagerService.getIcon(packageName, userId)
+            val bytes = device.getIcon(packageName, userId)
             if (bytes != null && bytes.isNotEmpty()) {
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.let { return it }
             }
@@ -222,13 +237,15 @@ object AppIconStore {
 /** 备份里的图标（应用未安装时用）。 */
 @Composable
 fun rememberBackupIcon(packageName: String): ImageBitmap? {
-    var bitmap by remember(packageName) {
-        mutableStateOf(AppIconStore.cachedBackup(packageName))
+    val reader = LocalRepoReader.current
+    val fetchEnabled = LocalBackupPrefs.current.fetchIconFromRepo
+    var bitmap by remember(packageName, fetchEnabled) {
+        mutableStateOf(AppIconStore.cachedBackup(packageName, fetchEnabled))
     }
 
     LaunchedEffect(packageName) {
         if (bitmap == null) {
-            bitmap = AppIconStore.loadFromBackup(packageName)
+            bitmap = AppIconStore.loadFromBackup(packageName, reader, fetchEnabled)
         }
     }
 
@@ -240,6 +257,7 @@ fun rememberBackupIcon(packageName: String): ImageBitmap? {
  */
 @Composable
 fun rememberAppIconWithBackup(packageName: String, userId: Int): ImageBitmap? {
+    val device = LocalDeviceGateway.current
     var appIcon by remember(packageName, userId) {
         mutableStateOf(AppIconStore.cached(packageName, userId))
     }
@@ -250,7 +268,7 @@ fun rememberAppIconWithBackup(packageName: String, userId: Int): ImageBitmap? {
 
     LaunchedEffect(packageName, userId) {
         if (!resolved) {
-            appIcon = AppIconStore.load(packageName, userId)
+            appIcon = AppIconStore.load(packageName, userId, device)
             resolved = true
         }
     }
@@ -262,13 +280,14 @@ fun rememberAppIconWithBackup(packageName: String, userId: Int): ImageBitmap? {
 
 @Composable
 fun rememberAppIcon(packageName: String, userId: Int): ImageBitmap? {
+    val device = LocalDeviceGateway.current
     var bitmap by remember(packageName, userId) {
         mutableStateOf(AppIconStore.cached(packageName, userId))
     }
 
     LaunchedEffect(packageName, userId) {
         if (bitmap == null) {
-            bitmap = AppIconStore.load(packageName, userId)
+            bitmap = AppIconStore.load(packageName, userId, device)
         }
     }
 

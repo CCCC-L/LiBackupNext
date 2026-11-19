@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -26,20 +27,30 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
-import com.cc.libackupnext.data.AppPrefs
 import com.cc.libackupnext.data.FolderPickerLauncher
-import com.cc.libackupnext.service.AppManagerService
-import com.cc.libackupnext.service.RootManager
 import com.cc.libackupnext.data.ReleaseInfo
-import com.cc.libackupnext.service.RusticClient
-import com.cc.libackupnext.service.UpdateChecker
-import com.cc.libackupnext.service.screenOnDecision
+import com.cc.libackupnext.service.display.screenOnDecision
+import com.cc.libackupnext.service.root.AppManagerService
+import com.cc.libackupnext.service.root.RootManager
+import com.cc.libackupnext.service.update.UpdateChecker
 import com.cc.libackupnext.ui.HomeTab
 import com.cc.libackupnext.ui.WelcomeScreen
 import com.cc.libackupnext.ui.component.keepScreenOnWhen
+import com.cc.libackupnext.ui.di.LocalBackupPrefs
+import com.cc.libackupnext.ui.di.LocalBackupUseCase
+import com.cc.libackupnext.ui.di.LocalDeviceGateway
+import com.cc.libackupnext.ui.di.LocalDirectoryBrowser
+import com.cc.libackupnext.ui.di.LocalOperationPlanner
+import com.cc.libackupnext.ui.di.LocalPendingBatchStore
+import com.cc.libackupnext.ui.di.LocalRepoAdmin
+import com.cc.libackupnext.ui.di.LocalRepoDisplay
+import com.cc.libackupnext.ui.di.LocalRepoReader
+import com.cc.libackupnext.ui.di.LocalRepoWriter
+import com.cc.libackupnext.ui.di.LocalRestoreUseCase
+import com.cc.libackupnext.ui.di.LocalViewPrefs
+import com.cc.libackupnext.ui.dialog.FolderPickerDialog
 import com.cc.libackupnext.ui.dialog.UpdateDialog
 import com.cc.libackupnext.ui.screen.AppListScreen
-import com.cc.libackupnext.ui.dialog.FolderPickerDialog
 import com.cc.libackupnext.ui.theme.AppManagerTheme
 import com.cc.libackupnext.util.AppLog
 import com.topjohnwu.superuser.Shell
@@ -60,12 +71,29 @@ class MainActivity : ComponentActivity() {
         val crashRecovery = intent?.getBooleanExtra(AppLog.EXTRA_CRASH_RECOVERY, false) == true
 
         setContent {
-            AppManagerTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    AppRoot(crashRecovery = crashRecovery)
+            // service 层能力从容器下发：页面只依赖接口，不认识具体实现
+            val container = (application as App).container
+            CompositionLocalProvider(
+                LocalRepoReader provides container.reader,
+                LocalRepoWriter provides container.writer,
+                LocalRepoAdmin provides container.admin,
+                LocalOperationPlanner provides container.planner,
+                LocalDeviceGateway provides container.device,
+                LocalDirectoryBrowser provides container.browser,
+                LocalBackupUseCase provides container.backup,
+                LocalRestoreUseCase provides container.restore,
+                LocalRepoDisplay provides container.repoDisplay,
+                LocalViewPrefs provides container.viewPrefs,
+                LocalBackupPrefs provides container.backupPrefs,
+                LocalPendingBatchStore provides container.pendingBatch,
+            ) {
+                AppManagerTheme {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        AppRoot(crashRecovery = crashRecovery)
+                    }
                 }
             }
         }
@@ -75,6 +103,10 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AppRoot(crashRecovery: Boolean) {
     val context = LocalContext.current
+    // 启动引导要读仓库配置 / 更新开关 / 暂停清单：都从容器拿
+    val container = (context.applicationContext as App).container
+    // 仓库初始化 / 切换走接口，不认识具体实现
+    val admin = LocalRepoAdmin.current
 
     // 屏幕常亮的判断在 service 层完成，页面只消费最终决策
     val shouldKeepScreenOn by screenOnDecision.shouldKeepOn.collectAsState(initial = false)
@@ -83,7 +115,7 @@ private fun AppRoot(crashRecovery: Boolean) {
     // 开关关掉 / 无网络 / GitHub 限流一律静默，只有确实查到新版本才弹窗。
     var updateInfo by remember { mutableStateOf<ReleaseInfo?>(null) }
     LaunchedEffect(Unit) {
-        if (AppPrefs.checkUpdateOnLaunch) {
+        if (container.viewPrefs.checkUpdateOnLaunch) {
             UpdateChecker.check().getOrNull()?.let { updateInfo = it }
         }
     }
@@ -116,8 +148,8 @@ private fun AppRoot(crashRecovery: Boolean) {
     DisposableEffect(Unit) {
         AppLog.recoveryHook = {
             scope.launch(Dispatchers.IO) {
-                runCatching { AppManagerService.resumeAllPaused() }
-                runCatching { AppPrefs.clearPausedApps() }
+                runCatching { AppManagerService.resumeAllPaused(container.backupPrefs) }
+                runCatching { container.backupPrefs.clearPausedApps() }
             }
         }
         onDispose { AppLog.recoveryHook = null }
@@ -136,14 +168,14 @@ private fun AppRoot(crashRecovery: Boolean) {
     val openFolderPicker: (FolderPickerLauncher) -> Unit = { folderPickerLauncher = it }
 
     // rustic 仓库是否已就绪（初始化过 / 校验过密码）
-    var isRepoReady by remember { mutableStateOf(AppPrefs.hasRepository()) }
+    var isRepoReady by remember { mutableStateOf(container.repoPrefs.hasRepository()) }
 
     // 远程仓库没有本地目录，切回本地页时别把逻辑标识当成路径显示
     var rusticPath by rememberSaveable {
-        mutableStateOf(if (AppPrefs.isRemote) "" else AppPrefs.repoPath)
+        mutableStateOf(if (container.repoPrefs.isRemote) "" else container.repoPrefs.location)
     }
     var rusticPassword by rememberSaveable {
-        mutableStateOf(AppPrefs.repoPassword)
+        mutableStateOf(container.repoPrefs.password)
     }
 
     val acquireRoot: suspend () -> Boolean = {
@@ -159,7 +191,7 @@ private fun AppRoot(crashRecovery: Boolean) {
             scope.launch(Dispatchers.IO) {
                 AppManagerService.warmUp()
                 // 上次备份如果被强杀，目标应用可能还停在 SIGSTOP 状态，这里恢复
-                runCatching { AppManagerService.resumeAllPaused() }
+                runCatching { AppManagerService.resumeAllPaused(container.backupPrefs) }
             }
         }
         granted
@@ -173,17 +205,17 @@ private fun AppRoot(crashRecovery: Boolean) {
     // 已有 Root 且仓库已就绪 → 直接进主页面，否则停在引导页
     LaunchedEffect(hasRoot, isChecking) {
         if (isChecking || !hasRoot) return@LaunchedEffect
-        if (!isRepoReady || !AppPrefs.hasRepository()) return@LaunchedEffect
+        if (!isRepoReady || !container.repoPrefs.hasRepository()) return@LaunchedEffect
 
         // 远程仓库没有本地目录可查，交给后续连接验证；本地才做目录自检
-        if (AppPrefs.isRemote) {
+        if (container.repoPrefs.isRemote) {
             AppLog.breadcrumb("启动", "远程仓库，跳过欢迎页，进入主页面")
             hasEnteredApp = true
             return@LaunchedEffect
         }
 
         // 仓库目录可能被删掉、或所在存储没挂载：跳过欢迎页前先确认它还在
-        val path = AppPrefs.repoPath
+        val path = container.repoPrefs.location
         val exists = withContext(Dispatchers.IO) {
             path.isNotBlank() && File(path).isDirectory
         }
@@ -222,7 +254,7 @@ private fun AppRoot(crashRecovery: Boolean) {
                 onRusticPathChange = { path ->
                     rusticPath = path
                     // 换目录后必须重新初始化并验证密码。只有初始化成功才会覆盖
-                    // AppPrefs 里保存的仓库地址和密码，失败时保留原来的配置
+                    // RepoPrefs 里保存的仓库地址和密码，失败时保留原来的配置
                     isRepoReady = false
                 },
                 rusticPassword = rusticPassword,
@@ -243,9 +275,9 @@ private fun AppRoot(crashRecovery: Boolean) {
                         scope.launch {
                             // 远程的位置与后端选项都由业务层派生；本地沿用用户选的目录
                             val result = if (remote != null) {
-                                RusticClient.initRemoteRepository(remote, password)
+                                admin.initRemoteRepository(remote, password)
                             } else {
-                                RusticClient.initRepository(path, password)
+                                admin.initRepository(path, password)
                             }
                             isInitializing = false
 

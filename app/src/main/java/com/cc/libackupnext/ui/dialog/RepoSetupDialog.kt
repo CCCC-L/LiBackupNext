@@ -9,11 +9,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -28,16 +26,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
-import com.cc.libackupnext.ui.component.LoadingRow
-import com.cc.libackupnext.data.AppPrefs
 import com.cc.libackupnext.data.FolderPickerLauncher
 import com.cc.libackupnext.data.FolderPickerMode
 import com.cc.libackupnext.data.RemoteRepo
 import com.cc.libackupnext.data.SavedRepo
-import com.cc.libackupnext.service.RcloneClient
-import com.cc.libackupnext.service.RusticClient
 import com.cc.libackupnext.ui.component.AppDialogTitleStyle
 import com.cc.libackupnext.ui.component.AppSurfaceDialog
+import com.cc.libackupnext.ui.component.LoadingRow
+import com.cc.libackupnext.ui.di.LocalRepoAdmin
+import com.cc.libackupnext.ui.di.LocalRepoDisplay
 import com.cc.libackupnext.ui.form.RepoSetupForm
 import com.cc.libackupnext.util.AppLog
 import kotlinx.coroutines.launch
@@ -45,7 +42,6 @@ import kotlinx.coroutines.launch
 /**
  * 配置 / 编辑 Rustic 仓库的弹窗：新增和编辑共用一份表单。
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun RepoSetupDialog(
     /** null = 新增仓库；非 null = 编辑这条记录（表单预填它的数据）。 */
@@ -56,10 +52,14 @@ fun RepoSetupDialog(
     onFinished: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    // 仓库生命周期走接口：弹窗不认识具体实现，也不直接摸 rclone 通道
+    val admin = LocalRepoAdmin.current
+    // 只读展示信息：判断「编辑的是不是当前仓库」，拿不到密码
+    val repoDisplay = LocalRepoDisplay.current
     // 复用批量页 / 详情页那套双击守卫：第一次点只提示，300ms 内再点才真删
     val deleteGuard = rememberDoubleClickGuard("双击删除仓库")
 
-    val isCurrent = editing != null && editing.location == AppPrefs.repoPath
+    val isCurrent = editing != null && editing.location == repoDisplay.location
     var visible by remember { mutableStateOf(true) }
     var dialogRepo by remember(editing) {
         mutableStateOf(editing?.toForm() ?: RemoteRepo())
@@ -104,7 +104,7 @@ fun RepoSetupDialog(
         )
     }
 
-    /** 新增、编辑都在这里落地：候选值先校验，成功才写 AppPrefs。 */
+    /** 新增、编辑都在这里落地：候选值先校验，成功才写 RepoPrefs。 */
     fun startInit() {
         if (isInitializing) return
         if (!dialogRepo.isComplete()) {
@@ -130,12 +130,12 @@ fun RepoSetupDialog(
             initError = null
             val result = when {
                 editing != null ->
-                    RusticClient.updateSavedRepo(editing, dialogRepo, dialogPassword)
+                    admin.updateSavedRepo(editing, dialogRepo, dialogPassword)
 
                 dialogRepo.protocol.isLocal ->
-                    RusticClient.initRepository(dialogRepo.path, dialogPassword)
+                    admin.initRepository(dialogRepo.path, dialogPassword)
 
-                else -> RusticClient.initRemoteRepository(dialogRepo, dialogPassword)
+                else -> admin.initRemoteRepository(dialogRepo, dialogPassword)
             }
             // 先收进度弹窗再回调：onFinished() 会把整个弹窗移出组合
             isInitializing = false
@@ -157,7 +157,7 @@ fun RepoSetupDialog(
         scope.launch {
             testing = true
             initError = null
-            val result = RcloneClient.testRemoteConnection(dialogRepo)
+            val result = admin.testConnection(dialogRepo)
             result
                 .onSuccess { AppLog.toastOnMain("连接成功") }
                 .onFailure { initError = it.message ?: "未知错误" }
@@ -297,7 +297,7 @@ fun RepoSetupDialog(
                                 AppLog.toastOnMain("当前仓库不可删除，请先切换到其它仓库")
                             } else if (deleteGuard.consume("delete-repo")) {
                                 // 双击才真删：第一次只弹提示，300ms 内第二次才移除记录
-                                AppPrefs.removeSavedRepo(editing.location)
+                                admin.removeSavedRepo(editing.location)
                                 AppLog.toastOnMain("已移除仓库记录（备份数据未动）")
                                 onFinished()
                             }

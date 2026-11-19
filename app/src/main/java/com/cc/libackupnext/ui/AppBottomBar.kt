@@ -15,11 +15,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Android
-import androidx.compose.material.icons.filled.Apps
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -32,63 +27,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.cc.libackupnext.data.BackupTarget
 import kotlin.math.abs
-
-/**
- * 主页面的页签。
- *
- * @param targets 这一页要列哪些备份目标。空 = 不是备份目标列表（设置页）。
- * @param searchHint / createLabel / manageLabel 顶栏文案；只有目标列表页用得到。
- */
-enum class HomeTab(
-    val label: String,
-    val icon: ImageVector,
-    val targets: List<BackupTarget>,
-    val searchHint: String = "",
-    val createLabel: String = "",
-    val manageLabel: String = ""
-) {
-    APPS(
-        "应用", Icons.Filled.Apps, listOf(BackupTarget.APP),
-        searchHint = "搜索应用名称或包名",
-        createLabel = "新建应用备份",
-        manageLabel = "管理应用备份"
-    ),
-
-    FILES(
-        "文件", Icons.Filled.Folder, listOf(BackupTarget.DIR),
-        searchHint = "搜索文件夹路径或名称",
-        createLabel = "新建文件备份",
-        manageLabel = "管理文件备份"
-    ),
-
-    /** Wi-Fi / 联系人 / 通话记录 / 短信：一页列多个固定目标。 */
-    OTHERS(
-        "系统", Icons.Filled.Android,
-        listOf(
-            BackupTarget.WIFI,
-            BackupTarget.CONTACTS,
-            BackupTarget.CALLS,
-            BackupTarget.SMS
-        ),
-        searchHint = "搜索",
-        createLabel = "新建系统数据备份",
-        manageLabel = "管理系统数据备份"
-    ),
-
-    /** 不是备份目标列表：内容由 [com.cc.libackupnext.ui.screen.SettingsContent] 自己管。 */
-    SETTINGS("设置", Icons.Filled.Settings, emptyList());
-
-    /** 这一页是不是「备份目标列表」。 */
-    val isTargetList: Boolean get() = targets.isNotEmpty()
-}
 
 /** 底栏外层：左右缩进、上、下间距。 */
 private val BOTTOM_BAR_HORIZONTAL_PADDING = 25.dp

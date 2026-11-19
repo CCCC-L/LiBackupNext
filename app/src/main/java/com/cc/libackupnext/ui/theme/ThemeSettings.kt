@@ -2,7 +2,7 @@ package com.cc.libackupnext.ui.theme
 
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.Color
-import com.cc.libackupnext.data.AppPrefs
+import com.cc.libackupnext.data.prefs.ViewPrefs
 import com.materialkolor.PaletteStyle
 import com.materialkolor.dynamiccolor.ColorSpec
 
@@ -39,36 +39,48 @@ val ColorSpecOptions: List<Pair<ColorSpec.SpecVersion, String>> = listOf(
  * 外观设置的运行时状态。
  *
  * 用 [mutableStateOf] 是为了让 [AppManagerTheme] 读到变化时立刻重组换色；
- * 持久化仍由 [AppPrefs] 负责。设置页只调这里的 setXxx，不要直接写 AppPrefs。
+ * 持久化由 [ViewPrefs] 负责。设置页只调这里的 setXxx，不要直接写存储。
+ *
+ * 保持 object 而不是做成实例：它是**应用级单例状态**（主题只有一个），
+ * 依赖在 [com.cc.libackupnext.App.onCreate] 里注入一次。
+ * 做成实例就得给每个读主题的地方配一个 CompositionLocal，
+ * 而它们本来就该看到同一份状态 —— 收益抵不过复杂度。
  */
 object ThemeSettings {
-    // 不用 `by`：delegate 会生成 setXxx()，和下面的公开方法 JVM 签名冲突
-    private val seedKeyState = mutableStateOf(AppPrefs.colorSeed)
-    private val styleState = mutableStateOf(
-        runCatching { PaletteStyle.valueOf(AppPrefs.colorStyle) }
+
+    private lateinit var prefs: ViewPrefs
+
+    /** 由 Application 在启动时注入；重复调用是幂等的。 */
+    fun install(prefs: ViewPrefs) {
+        this.prefs = prefs
+        seedKeyState.value = prefs.colorSeed
+        styleState.value = runCatching { PaletteStyle.valueOf(prefs.colorStyle) }
             .getOrDefault(PaletteStyle.TonalSpot)
-    )
-    private val specVersionState = mutableStateOf(
-        runCatching { ColorSpec.SpecVersion.valueOf(AppPrefs.colorSpec) }
+        specVersionState.value = runCatching { ColorSpec.SpecVersion.valueOf(prefs.colorSpec) }
             .getOrDefault(ColorSpec.SpecVersion.SPEC_2025)
-    )
+    }
+
+    // 不用 `by`：delegate 会生成 setXxx()，和下面的公开方法 JVM 签名冲突
+    private val seedKeyState = mutableStateOf("system")
+    private val styleState = mutableStateOf(PaletteStyle.TonalSpot)
+    private val specVersionState = mutableStateOf(ColorSpec.SpecVersion.SPEC_2025)
 
     val seedKey: String get() = seedKeyState.value
     val style: PaletteStyle get() = styleState.value
     val specVersion: ColorSpec.SpecVersion get() = specVersionState.value
 
     fun setSeedKey(value: String) {
-        AppPrefs.colorSeed = value
+        prefs.colorSeed = value
         seedKeyState.value = value
     }
 
     fun setStyle(value: PaletteStyle) {
-        AppPrefs.colorStyle = value.name
+        prefs.colorStyle = value.name
         styleState.value = value
     }
 
     fun setSpecVersion(value: ColorSpec.SpecVersion) {
-        AppPrefs.colorSpec = value.name
+        prefs.colorSpec = value.name
         specVersionState.value = value
     }
 

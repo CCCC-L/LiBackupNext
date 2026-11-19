@@ -17,3 +17,12 @@ local.properties
 # Rust
 /app/src/main/rust_bridge/target
 /app/src/main/jniLibs
+
+# AI 工作目录（会话记忆 / 截图，不进版本库）
+/.workbuddy-ai/
+
+# IDE 个人配置
+/.idea/
+
+# 构建产物
+/app/debug/

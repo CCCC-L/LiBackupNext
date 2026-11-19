@@ -50,15 +50,21 @@
 
     <!-- 实际绑定的是内嵌的 Service 类（Intent 里用的是 Service::class.java），
          这里沿用外部类名声明，lint 的 Instantiatable 检查对此报错，按现状忽略 -->
-    <service android:name=".service.AppManagerService" android:exported="false"
+    <service
+      android:exported="false"
+      android:name=".service.root.AppManagerService"
        android:process=":root"
        tools:ignore="Instantiatable"/>
 
-    <service android:name=".service.RusticServer" android:exported="false"
+    <service
+      android:exported="false"
+      android:name=".service.root.RusticServer"
        android:process=":root"
        tools:ignore="Instantiatable"/>
 
-    <service android:name=".service.RcloneServer" android:exported="false"
+    <service
+      android:exported="false"
+      android:name=".service.root.RcloneServer"
        android:process=":root"
        tools:ignore="Instantiatable"/>
   </application>

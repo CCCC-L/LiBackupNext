@@ -7,48 +7,29 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.cc.libackupnext.data.target.ItemAction
 
-/** 详情页操作菜单的菜单项。不同目标（应用 / 文件夹 / 以后的 Wi-Fi 等）用不同的子集。 */
-enum class ItemAction {
-    /** 应用 */
-    LAUNCH,
-    FORCE_STOP,
-    FREEZE,
-    UNFREEZE,
-    APP_SETTINGS,
-    CLEAR_DATA,
-    UNINSTALL,
-
-    /**目录 */
-    OPEN_DIR,
-    DELETE_DIR,
-
-    /** Wi-Fi */
-    WIFI_ON,
-    WIFI_OFF,
-    OPEN_WIFI_SETTINGS,
-
-    /** 联系人 */
-    OPEN_CONTACTS,
-    /** 通话记录 */
-    OPEN_CALL_LOG;
-
-    fun title(): String = when (this) {
-        LAUNCH -> "启动应用"
-        FORCE_STOP -> "强制停止"
-        FREEZE -> "冻结应用"
-        UNFREEZE -> "解冻应用"
-        APP_SETTINGS -> "系统设置"
-        CLEAR_DATA -> "清空数据"
-        UNINSTALL -> "卸载应用"
-        OPEN_DIR -> "打开文件夹"
-        DELETE_DIR -> "删除文件夹"
-        WIFI_ON -> "打开 Wi-Fi"
-        WIFI_OFF -> "关闭 Wi-Fi"
-        OPEN_WIFI_SETTINGS -> "Wi-Fi 设置"
-        OPEN_CONTACTS -> "打开联系人"
-        OPEN_CALL_LOG -> "打开通话记录"
-    }
+/**
+ * 菜单项文案。
+ *
+ * 动作本身是领域语义，定义在 `data/target/ItemAction.kt`；
+ * 这里只负责把它翻成中文 —— 换语言 / 改措辞不用碰数据层。
+ */
+fun ItemAction.title(): String = when (this) {
+    ItemAction.LAUNCH -> "启动应用"
+    ItemAction.FORCE_STOP -> "强制停止"
+    ItemAction.FREEZE -> "冻结应用"
+    ItemAction.UNFREEZE -> "解冻应用"
+    ItemAction.APP_SETTINGS -> "系统设置"
+    ItemAction.CLEAR_DATA -> "清空数据"
+    ItemAction.UNINSTALL -> "卸载应用"
+    ItemAction.OPEN_DIR -> "打开文件夹"
+    ItemAction.DELETE_DIR -> "删除文件夹"
+    ItemAction.WIFI_ON -> "打开 Wi-Fi"
+    ItemAction.WIFI_OFF -> "关闭 Wi-Fi"
+    ItemAction.OPEN_WIFI_SETTINGS -> "Wi-Fi 设置"
+    ItemAction.OPEN_CONTACTS -> "打开联系人"
+    ItemAction.OPEN_CALL_LOG -> "打开通话记录"
 }
 
 /** 菜单里标红的危险动作。加新动作时想一下要不要放进来。 */

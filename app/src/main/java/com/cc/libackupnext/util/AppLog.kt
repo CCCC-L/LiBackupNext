@@ -12,9 +12,9 @@ import android.os.Process
 import android.system.Os
 import android.util.Log
 import android.widget.Toast
-import androidx.compose.material3.Snackbar
 import com.cc.libackupnext.BuildConfig
-import com.cc.libackupnext.data.AppPrefs
+import com.cc.libackupnext.data.prefs.RepoDisplay
+import com.cc.libackupnext.util.AppLog.format
 import kotlinx.coroutines.CancellationException
 import java.io.File
 import java.io.FileOutputStream
@@ -110,6 +110,27 @@ object AppLog {
     fun install(app: Application) = install(app.applicationContext, app)
 
     /**
+     * 配置读取口：主进程在 [com.cc.libackupnext.App.onCreate] 里注入，
+     * `:root` 进程不注入（那边没有 Application，也不该读用户配置）。
+     *
+     * 用函数而不是直接持有对象：注入时机在 install 里，之后配置随时可变，
+     * 每次读都取最新值。
+     */
+    private var verboseProvider: () -> Boolean = { false }
+    private var repoProvider: () -> RepoDisplay? = { null }
+
+    fun install(
+        context: Context,
+        app: Application?,
+        verbose: () -> Boolean,
+        repo: () -> RepoDisplay?,
+    ) {
+        verboseProvider = verbose
+        repoProvider = repo
+        install(context, app)
+    }
+
+    /**
      * 主进程传 Application（要注册 Activity 生命周期回调）；
      * :root 进程只有 package Context，传 [context] 即可，活动栈回调用不上。
      */
@@ -131,7 +152,7 @@ object AppLog {
         makeSharedWritable(logDir, MODE_DIR)
         runCatching { ensureStream() }
         makeSharedWritable(logFile, MODE_FILE)
-        verbose = runCatching { AppPrefs.verboseLog }.getOrDefault(false)
+        verbose = runCatching { verboseProvider() }.getOrDefault(false)
 
         installed = true
         app?.registerActivityLifecycleCallbacks(activityCallbacks)
@@ -399,7 +420,10 @@ object AppLog {
     }
 
     // ==================== 全应用 Toast ====================
-    private val mainHandler = Handler(Looper.getMainLooper())
+
+    // lazy 而不是直接初始化：JVM 单测里没有 Looper，类加载时就建 Handler 会让
+    // 整个 AppLog 初始化失败（连带任何调用 AppLog 的纯逻辑都没法测）
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
     private var toast: Toast? = null   // 只在主线程读写
 
     /** 全应用共用的吐司提示：先关掉上一条，再显示新的一条。可从任意线程调用。 */
@@ -511,14 +535,7 @@ object AppLog {
         append("rustic_backend: ").append(BuildConfig.RUSTIC_BACKEND_VERSION).append('\n')
         // 远程 location 本身不含凭据，但也别把服务地址整条写进导出包
         append("仓库路径: ").append(
-            runCatching {
-                val location = AppPrefs.repoPath
-                if (AppPrefs.isRemote) {
-                    AppPrefs.remoteRepos
-                        .firstOrNull { location.startsWith("remote:${it.id}:") }
-                        ?.redacted() ?: "远程仓库"
-                } else location
-            }.getOrDefault("")
+            runCatching { repoProvider()?.redactedLocation.orEmpty() }.getOrDefault("")
         ).append('\n')
         append("详细日志: ").append(if (verbose) "开" else "关").append('\n')
 

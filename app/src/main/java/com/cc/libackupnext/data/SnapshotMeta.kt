@@ -7,9 +7,6 @@ package com.cc.libackupnext.data
  * - 键随目标而变：应用是包名（`com.foo:apk`），固定目标是 [BackupTarget.fixedId]
  *   （`messaging:sms`、`wifi:wifi`），目录是绝对路径（`/sdcard/DCIM:dir`）
  * - tag 只有一个，用 `|` 连接：`应用名|版本|用户名|时间戳`
- *
- * 之所以拼成一个 tag：rustic 的 tags 是 BTreeSet，多个 tag 会被排序，
- * 顺序信息丢失；拼成一个整体就不会被拆开。
  */
 object SnapshotMeta {
 

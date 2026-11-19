@@ -51,39 +51,33 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.data.AppBackupSummary
+import com.cc.libackupnext.data.AppInfo
+import com.cc.libackupnext.data.BackupBatchMode
 import com.cc.libackupnext.data.BackupEntry
 import com.cc.libackupnext.data.BackupGroup
+import com.cc.libackupnext.data.BackupProgress
 import com.cc.libackupnext.data.BackupStep
 import com.cc.libackupnext.data.BackupTarget
+import com.cc.libackupnext.data.BatchAction
+import com.cc.libackupnext.data.BatchItem
+import com.cc.libackupnext.data.BatchOrigin
+import com.cc.libackupnext.data.PendingBatch
+import com.cc.libackupnext.data.isVersionChangedFrom
 import com.cc.libackupnext.data.kind
-import com.cc.libackupnext.entity.AppInfo
-import com.cc.libackupnext.entity.isVersionChangedFrom
-import com.cc.libackupnext.service.BackupProgress
-import com.cc.libackupnext.service.RusticClient
+import com.cc.libackupnext.data.target.TargetSpecs
+import com.cc.libackupnext.service.gateway.BackendErrors
+import com.cc.libackupnext.service.progress.OperationOutcome
+import com.cc.libackupnext.service.progress.OperationRunner
 import com.cc.libackupnext.ui.AppTopBar
-import com.cc.libackupnext.ui.BatchAction
-import com.cc.libackupnext.ui.BatchItem
-import com.cc.libackupnext.ui.BatchOrigin
 import com.cc.libackupnext.ui.HomeTab
 import com.cc.libackupnext.ui.MainViewModel
-import com.cc.libackupnext.ui.PendingBatch
 import com.cc.libackupnext.ui.SortMenuExtra
 import com.cc.libackupnext.ui.SortType
-import com.cc.libackupnext.ui.dialog.BackupHelpDialog
-import com.cc.libackupnext.ui.dialog.BackupProgressDialog
-import com.cc.libackupnext.ui.dialog.ProgressSection
-import com.cc.libackupnext.ui.dialog.rememberDoubleClickGuard
-import com.cc.libackupnext.ui.theme.rememberRowSelectionColor
-import com.cc.libackupnext.ui.theme.rememberRowSwipeState
-import com.cc.libackupnext.ui.theme.rowSelectedBackground
-import com.cc.libackupnext.ui.theme.heighLightColor
-import com.cc.libackupnext.ui.util.AppIconStore
 import com.cc.libackupnext.ui.component.AppListContainer
 import com.cc.libackupnext.ui.component.RowTextBlock
 import com.cc.libackupnext.ui.component.RowTextDensity
@@ -91,14 +85,28 @@ import com.cc.libackupnext.ui.component.RowTextLine
 import com.cc.libackupnext.ui.component.RowTone
 import com.cc.libackupnext.ui.component.TargetIconBox
 import com.cc.libackupnext.ui.component.dimmedWhen
-import com.cc.libackupnext.ui.util.formatShortDateTime
 import com.cc.libackupnext.ui.component.isMissing
-import com.cc.libackupnext.ui.component.missingTitleColor
 import com.cc.libackupnext.ui.component.rowTitleColor
+import com.cc.libackupnext.ui.di.LocalBackupPrefs
+import com.cc.libackupnext.ui.di.LocalBackupUseCase
+import com.cc.libackupnext.ui.di.LocalOperationPlanner
+import com.cc.libackupnext.ui.di.LocalRepoReader
+import com.cc.libackupnext.ui.di.LocalRepoWriter
+import com.cc.libackupnext.ui.di.LocalRestoreUseCase
+import com.cc.libackupnext.ui.dialog.BackupHelpDialog
+import com.cc.libackupnext.ui.dialog.BackupProgressDialog
+import com.cc.libackupnext.ui.dialog.ProgressSection
+import com.cc.libackupnext.ui.dialog.rememberDoubleClickGuard
+import com.cc.libackupnext.ui.theme.heighLightColor
+import com.cc.libackupnext.ui.theme.rememberRowSelectionColor
+import com.cc.libackupnext.ui.theme.rememberRowSwipeState
+import com.cc.libackupnext.ui.theme.rowSelectedBackground
+import com.cc.libackupnext.ui.util.AppIconStore
+import com.cc.libackupnext.ui.util.formatShortDateTime
 import com.cc.libackupnext.ui.util.sortTimeLabel
-import com.cc.libackupnext.ui.component.systemAppTitleColor
-import com.cc.libackupnext.util.BackupNotifier
 import com.cc.libackupnext.util.AppLog
+import com.cc.libackupnext.util.BackupNotifier
+import com.cc.libackupnext.util.NotifierSession
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -111,14 +119,6 @@ private val KindColumnWidth = 34.dp
 private val KindCheckboxSize = 28.dp
 
 /** 这一页的两种用途。 */
-enum class BackupBatchMode {
-    /** 新建应用备份：列出所有已安装应用。 */
-    CREATE,
-
-    /** 管理应用备份：只列出仓库里有备份的应用，可批量删除 / 覆盖 / 恢复。 */
-    MANAGE
-}
-
 /**
  * 批量备份 / 批量管理页面。
  *
@@ -142,6 +142,17 @@ fun BackupBatchScreen(
     val targets = tab.targets
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    // service 层能力：只依赖接口，不认识具体实现
+    val reader = LocalRepoReader.current
+    val writer = LocalRepoWriter.current
+    val planner = LocalOperationPlanner.current
+    val backupPrefs = LocalBackupPrefs.current
+    // 备份 / 恢复走编排层：暂停应用、清理过期都在里面
+    val backupCase = LocalBackupUseCase.current
+    val restoreCase = LocalRestoreUseCase.current
+    // 一次操作的执行骨架：推进度、断连分类、失败标记。详情页共用同一份。
+    val runner = remember(planner) { OperationRunner(planner) }
     val displayApps by viewModel.displayApps.collectAsState()
     val allApps by viewModel.allApps.collectAsState()
     val users by viewModel.users.collectAsState()
@@ -221,10 +232,11 @@ fun BackupBatchScreen(
             val list = target.targets(
                 apps = displayApps,
                 create = mode == BackupBatchMode.CREATE,
-                hasBackup = { overview.containsKey(it) }
+                hasBackup = { overview.containsKey(it) },
+                extraDirs = backupPrefs.extraDirs
             ).map { TargetRow(target, it) }
             // 应用行来自 displayApps（已经按 sortType + 倒序排过）；
-            // 文件夹行直接读 AppPrefs.extraDirs，得在这里单独反转。
+            // 文件夹行来自 extraDirs（已按字母序），得在这里单独反转。
             if (isReverse && target == BackupTarget.DIR) list.asReversed() else list
         }
     }
@@ -269,11 +281,11 @@ fun BackupBatchScreen(
     // displayApps 为空时（应用列表还没加载完）也要重跑一次，否则默认全选选不到东西
     LaunchedEffect(reloadKey, displayApps.isEmpty()) {
         val names = allApps.associate { it.packageName to it.name }
-        val result = RusticClient.backupOverviewResult(names)
+        val result = reader.backupOverviewResult(names)
         result.onFailure { t ->
-            if (RusticClient.isRemoteConnectionFailure(t)) {
+            if (BackendErrors.isConnectionLost(t)) {
                 AppLog.toastOnMain(
-                    t.message ?: RusticClient.REMOTE_INTERRUPTED_MESSAGE,
+                    t.message ?: BackendErrors.REMOTE_INTERRUPTED_MESSAGE,
                     longToast = true
                 )
             }
@@ -299,7 +311,8 @@ fun BackupBatchScreen(
                 target.targets(
                     apps = displayApps,
                     create = true,
-                    hasBackup = { overview.containsKey(it) }
+                    hasBackup = { overview.containsKey(it) },
+                    extraDirs = backupPrefs.extraDirs
                 ).map { TargetRow(target, it) }
             }
             if (allRows.isEmpty()) return@LaunchedEffect
@@ -506,7 +519,7 @@ fun BackupBatchScreen(
                 operationId = operationId,
                 origin = BatchOrigin.BATCH,
                 batchMode = mode,
-                batchTab = tab
+                batchTab = tab.name
             )
         )
         return items to operationId
@@ -575,53 +588,55 @@ fun BackupBatchScreen(
                         title = app.name,
                         steps = appSteps
                     )
-                    BackupNotifier.update(
+                    // 通知会话绑定「本项 + 第几个 / 共几个」，进度上报只传进度本身
+                    val session = NotifierSession(
                         context = context,
                         action = actionLabel,
-                        appName = app.name,
-                        packageName = app.packageName,
-                        userId = app.userId,
+                        app = app,
                         appIndex = finished + 1,
-                        appTotal = total,
-                        stageLabel = "",
-                        stageIndex = 0,
-                        stageTotal = appSteps.size
+                        appTotal = total
                     )
+                    session.updateApp(appSteps.size)
 
-                    action(item) { progress ->
-                        val last = progressSections.last()
-                        progressSections = progressSections.dropLast(1) +
-                                last.copy(steps = RusticClient.applyProgress(last.steps, progress))
+                    // runner 负责推进度、断连分类、失败标记；这里只管每项的业务调用
+                    val outcome = runner.run(
+                        steps = appSteps,
+                        onSteps = { steps ->
+                            val last = progressSections.last()
+                            progressSections = progressSections.dropLast(1) +
+                                    last.copy(steps = steps)
+                        }
+                    ) { onProgress ->
+                        action(item) { progress ->
+                            onProgress(progress)
+                            session.update(
+                                progress,
+                                appSteps.indexOfFirst { it.kind.key == progress.stage },
+                                appSteps.size
+                            )
+                        }
+                    }
 
-                        val stepIndex = appSteps.indexOfFirst { it.kind.key == progress.stage }
-                        BackupNotifier.update(
-                            context = context,
-                            action = actionLabel,
-                            appName = app.name,
-                            packageName = app.packageName,
-                            userId = app.userId,
-                            appIndex = finished + 1,
-                            appTotal = total,
-                            stageLabel = progress.stage,
-                            stageIndex = if (stepIndex >= 0) stepIndex + 1 else 1,
-                            stageTotal = appSteps.size
-                        )
-                    }.onFailure { t ->
-                        failed++
-                        AppLog.e(progressTitle, "${app.name} 失败", t)
-                        if (RusticClient.isRemoteConnectionFailure(t)) {
+                    when (outcome) {
+                        OperationOutcome.Success -> {
+                            remaining.remove(item)
+                            viewModel.updatePendingItems(remaining.toList())
+                        }
+
+                        is OperationOutcome.Failed -> {
+                            failed++
+                            AppLog.e(progressTitle, "${app.name} 失败", outcome.error)
+                            progressError = outcome.error.message ?: "操作失败"
+                        }
+
+                        is OperationOutcome.Interrupted -> {
+                            // 断连：记一次失败并停批，后面的应用原样留在未完成清单里
+                            failed++
+                            AppLog.e(progressTitle, "${app.name} 失败", outcome.error)
                             connectionInterrupted = true
                             progressError = null
                             aborted = true
-                        } else {
-                            progressError = t.message ?: "操作失败"
                         }
-                        val last = progressSections.last()
-                        progressSections = progressSections.dropLast(1) +
-                                last.copy(steps = RusticClient.markFailed(last.steps))
-                    }.onSuccess {
-                        remaining.remove(item)
-                        viewModel.updatePendingItems(remaining.toList())
                     }
                     finished++
                     if (aborted) break
@@ -676,13 +691,13 @@ fun BackupBatchScreen(
             doneTitle = "备份成功",
             isRestore = false,
             list = items,
-            stepsOf = { item -> RusticClient.backupSteps(item.kinds) },
+            stepsOf = { item -> planner.backupSteps(item.kinds) },
             onFinished = { successCount ->
-                if (successCount > 0) RusticClient.exportSelfApk()
+                if (successCount > 0) writer.exportSelfApk()
             }
         ) { item, onProgress ->
             // 图标有没有备份过，概况里已经带了，不用每个应用再查一次仓库
-            RusticClient.backup(
+            backupCase.backup(
                 app = item.app,
                 groups = item.kinds,
                 onProgress = onProgress,
@@ -713,7 +728,7 @@ fun BackupBatchScreen(
             val entry = item.entry
                 ?: return@runBatch Result.failure(IllegalStateException("没有可删除的备份"))
 
-            RusticClient.deleteSelected(entry, item.kinds).onSuccess {
+            writer.deleteSelected(entry, item.kinds).onSuccess {
                 // 删掉的类型立刻取消勾选并禁止再勾：仓库里已经没有它们了
                 selected[item.app.packageName] = kindsOf(item.app.packageName) - item.kinds
                 deletedKinds = deletedKinds +
@@ -733,14 +748,14 @@ fun BackupBatchScreen(
             doneTitle = "覆盖成功",
             isRestore = false,
             list = items,
-            stepsOf = { item -> RusticClient.backupSteps(item.kinds) },
+            stepsOf = { item -> planner.backupSteps(item.kinds) },
             onFinished = { successCount ->
-                if (successCount > 0) RusticClient.exportSelfApk()
+                if (successCount > 0) writer.exportSelfApk()
             }
         ) { item, onProgress ->
             val entry = item.entry
                 ?: return@runBatch Result.failure(IllegalStateException("没有可覆盖的备份"))
-            RusticClient.overwrite(item.app, entry, item.kinds, onProgress, batchId, operationId)
+            backupCase.overwrite(item.app, entry, item.kinds, onProgress, batchId, operationId)
         }
     }
 
@@ -752,12 +767,12 @@ fun BackupBatchScreen(
             isRestore = true,
             list = items,
             stepsOf = { item ->
-                item.entry?.let { RusticClient.restoreSteps(it, item.kinds) } ?: emptyList()
+                item.entry?.let { planner.restoreSteps(it, item.kinds) } ?: emptyList()
             }
         ) { item, onProgress ->
             val entry = item.entry
                 ?: return@runBatch Result.failure(IllegalStateException("没有可恢复的备份"))
-            RusticClient.restore(
+            restoreCase.restore(
                 app = item.app,
                 entry = entry,
                 groups = item.kinds,
@@ -1022,7 +1037,7 @@ fun BackupBatchScreen(
                 "选项：点击图标反选整行",
                 "多选：右滑某个应用进入多选，再右滑另一个应用会选中两者之间的全部应用",
                 "多选模式下点应用只切换选中、不进详情，顶部的复选框、底部的按钮也只作用于选中的应用",
-            ) + targets.flatMap { it.helpLines }.distinct(),
+            ) + targets.flatMap { TargetSpecs.of(it).helpLines }.distinct(),
             onDismiss = { showHelp = false }
         )
     }

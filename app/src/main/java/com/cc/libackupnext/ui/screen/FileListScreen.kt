@@ -1,6 +1,5 @@
 package com.cc.libackupnext.ui.screen
 
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CreateNewFolder
@@ -10,14 +9,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.data.AppBackupSummary
 import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.data.FolderPickerLauncher
 import com.cc.libackupnext.data.FolderPickerMode
-import com.cc.libackupnext.entity.dirAppInfo
-import java.io.File
+import com.cc.libackupnext.data.dirAppInfo
 import com.cc.libackupnext.util.AppLog
+import java.io.File
 
 /**
  * 文件页：列出要备份的目录。

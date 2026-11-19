@@ -23,7 +23,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
@@ -33,9 +32,6 @@ import com.cc.libackupnext.ui.theme.dialogContainer
  * 弹窗标题的统一样式。
  *
  * 两套壳都用它：走 AlertDialog 的 [AppDialog] 和走自定义 Surface 的 [AppSurfaceDialog]。
- * 20sp 介于 titleLarge(22) 和 titleMedium(16) 之间 —— headlineSmall 的 24sp 在内容密集的
- * 弹窗里偏大；行高一起收到 26sp，否则 20sp 的字配 32sp 行高会显得松。
- * 字重显式加粗：AlertDialog 默认是 Normal，比标题该有的分量轻。
  */
 val AppDialogTitleStyle: TextStyle
     @Composable get() = MaterialTheme.typography.headlineSmall.copy(

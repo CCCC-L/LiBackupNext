@@ -9,7 +9,8 @@ fun BackupSnapshot.kind(): SnapshotKind? = SnapshotMeta.kind(label)
  * 备份页里的一行：同一次备份产生的多个快照（apk / obb / user / user_de / data）。
  *
  * 纯数据模型，UI 直接渲染；备份 / 恢复的编排在
- * [com.cc.libackupnext.service.RusticClient] 里。
+ * [com.cc.libackupnext.service.usecase.BackupUseCase] 与
+ * [com.cc.libackupnext.service.usecase.RestoreUseCase] 里。
  */
 @Serializable
 data class BackupEntry(

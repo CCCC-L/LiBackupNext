@@ -36,22 +36,23 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.cc.libackupnext.data.FolderPickerLauncher
 import com.cc.libackupnext.data.FolderPickerMode
 import com.cc.libackupnext.data.RemoteRepo
-import com.cc.libackupnext.service.RcloneClient
+import com.cc.libackupnext.ui.component.AppDialog
+import com.cc.libackupnext.ui.di.LocalRepoAdmin
+import com.cc.libackupnext.ui.form.RepoSetupForm
 import com.cc.libackupnext.ui.theme.WelcomeTransitionMs
 import com.cc.libackupnext.ui.theme.rootCardGrantedBackground
 import com.cc.libackupnext.ui.theme.rootCardGrantedTextColor
 import com.cc.libackupnext.ui.theme.rootCardGrantedTextVariant
 import com.cc.libackupnext.ui.theme.rootGrantedButtonBackground
 import com.cc.libackupnext.ui.theme.rootGrantedButtonContent
-import com.cc.libackupnext.ui.component.AppDialog
-import com.cc.libackupnext.ui.form.RepoSetupForm
 import com.cc.libackupnext.util.AppLog
 import kotlinx.coroutines.launch
 
@@ -77,7 +78,9 @@ fun WelcomeScreen(
 ) {
     val colors = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
-    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    val screenHeight = with(LocalDensity.current) {
+        LocalWindowInfo.current.containerSize.height.toDp()
+    }
 
     // 本地 / 远程共用一份配置，协议在服务协议下拉里切换，不再左右滑动分页
     var repo by remember {
@@ -111,13 +114,16 @@ fun WelcomeScreen(
     // 远程同样跑在 :root 进程里，Root 仍是硬前提
     val rusticEnabled = hasRoot
 
+    // 测连走接口：引导页不直接摸 rclone 通道
+    val admin = LocalRepoAdmin.current
+
     /** 远程路径浏览的前置门禁 / 手动测试连接：成功 Toast、失败原因内联显示。 */
     fun runWhenConnected(action: () -> Unit = {}) {
         if (testing || !repo.isComplete()) return
         scope.launch {
             testing = true
             testError = null
-            val result = RcloneClient.testRemoteConnection(repo)
+            val result = admin.testConnection(repo)
             result
                 .onSuccess { AppLog.toastOnMain("连接成功") }
                 .onFailure { testError = it.message ?: "未知错误" }
@@ -340,8 +346,9 @@ fun WelcomeScreen(
                 if (!hasRoot || !isRepoReady) {
                     Text(
                         text = when {
+                            // 远程仓库同样需要 root（跑在 :root 进程里），
+                            // 所以只有「本地 + 没 root」才提示权限，其余都提示建库
                             !hasRoot && isLocal -> "请先获取 Root 权限"
-                            !isLocal -> "请先初始化 rustic 仓库"
                             else -> "请先初始化 rustic 仓库"
                         },
                         style = MaterialTheme.typography.bodySmall,

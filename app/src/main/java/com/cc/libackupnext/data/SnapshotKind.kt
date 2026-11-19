@@ -34,6 +34,15 @@ enum class SnapshotKind(val key: String) {
     companion object {
         /** 容错解析：仓库里可能有本版本还不认识的类型，返回 null 而不是抛异常。 */
         fun of(key: String): SnapshotKind? = entries.firstOrNull { it.key == key }
+
+        /**
+         * 系统数据的类型集合：这几个不是文件快照，备份前要由 root 侧导出成 JSON。
+         *
+         * 定义放在这里（而不是从 Handler 注册表反推），是为了让**纯逻辑**也能判断
+         * 「这个快照是不是系统数据」，不必初始化一整套 Handler（那会拖进 Android 依赖，
+         * 让恢复前置判断没法单测）。Handler 注册表与这个列表的一致性由测试保证。
+         */
+        val SYSTEM_KINDS: List<SnapshotKind> = listOf(WIFI, CONTACTS, CALLS, SMS, MMS)
     }
 }
 

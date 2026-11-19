@@ -1,8 +1,8 @@
 package com.cc.libackupnext.data
 
-import com.cc.libackupnext.entity.AppInfo
-import com.cc.libackupnext.entity.dirAppInfo
-import com.cc.libackupnext.entity.isDirectory
+import com.cc.libackupnext.data.AppInfo
+import com.cc.libackupnext.data.dirAppInfo
+import com.cc.libackupnext.data.isDirectory
 import java.io.File
 
 /**
@@ -58,51 +58,6 @@ enum class BackupTarget(
     /** 内容固定、永远只有一行的目标（Wi-Fi / 联系人 / 通话记录 / 短彩信）。 */
     val isFixed: Boolean get() = fixedId != null
 
-    /** 详情页顶栏标题。 */
-    val detailTitle: String get() = when (this) {
-        APP -> "应用信息"
-        DIR -> "文件信息"
-        WIFI -> "Wi-Fi"
-        CONTACTS -> "联系人"
-        CALLS -> "通话记录"
-        SMS -> "短彩信"
-    }
-
-    /** 详情页「帮助」里显示的内容，一行一段。 */
-    val helpLines: List<String> get() = when (this) {
-        APP -> listOf(
-            "apk：应用安装包（含 obb），支持分包应用 (Split APK)",
-            "user：位于 /data/user/ 下的数据",
-            "data：位于共享存储 /Android/data/ 下的数据",
-            "权限：已授予的运行时权限随 apk 一起备份，恢复时重新授予：「仅本次允许」这类临时授权不备份"
-        )
-
-        DIR -> listOf(
-            "备份：跳过.thumbnails 文件夹及.trashed 开头的文件/文件夹",
-            "恢复：覆盖同名文件，保留新增文件"
-        )
-
-        WIFI -> listOf(
-            "恢复：同名Wi-Fi 已存在就跳过，不会覆盖现有密码",
-            "注：企业网络（802.1X）能备份，但恢复不了",
-            "注：备份时建议用其他软件也备份一次"
-        )
-
-        CONTACTS -> listOf(
-            "恢复：同名联系人的不同号会合并恢复",
-            "注：备份时建议用其他软件也备份一次"
-        )
-
-        CALLS -> listOf(
-            "注：备份时建议用其他软件也备份一次"
-        )
-
-        SMS -> listOf(
-            "短信、彩信：只备份标准字段，厂商私有字段（气泡、RCS 标记等）不备份",
-            "恢复：已存在的消息会跳过，不会重复写入"
-        )
-    }
-
     /**
      * 这次备份要产出的内容。
      *
@@ -122,11 +77,13 @@ enum class BackupTarget(
     fun targets(
         apps: List<AppInfo>,
         create: Boolean,
-        hasBackup: (String) -> Boolean
+        hasBackup: (String) -> Boolean,
+        /** 要备份的目录列表（来自 BackupPrefs.extraDirs） */
+        extraDirs: Set<String>,
     ): List<AppInfo> {
         val all = when (this) {
             APP -> apps.filterNot { create && it.onlyInBackup }
-            DIR -> AppPrefs.extraDirs
+            DIR -> extraDirs
                 .filterNot { create && !File(it).isDirectory }
                 .map { dirAppInfo(it) }
             // 固定目标永远只有一行，和系统里有没有数据无关

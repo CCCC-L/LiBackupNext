@@ -19,20 +19,25 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.data.BackupTarget
-import com.cc.libackupnext.entity.AppInfo
+import com.cc.libackupnext.data.target.TargetSpecs
+import com.cc.libackupnext.data.AppInfo
 import com.cc.libackupnext.ui.util.rememberAppIcon
 import com.cc.libackupnext.ui.util.rememberAppIconWithBackup
 
-/** 固定目标的矢量图标：Wi-Fi / 联系人 / 通话记录 / 短信。 */
-private val SystemDataIcons: Map<BackupTarget, ImageVector> = mapOf(
-    BackupTarget.WIFI to Icons.Filled.Wifi,
-    BackupTarget.CONTACTS to Icons.Filled.Contacts,
-    BackupTarget.CALLS to Icons.Filled.Phone,
-    BackupTarget.SMS to Icons.Filled.Sms
+/** 固定目标的矢量图标，按 spec 的语义名查。加类型时在这里补一行。 */
+private val VectorIcons: Map<String, ImageVector> = mapOf(
+    "folder" to Icons.Filled.Folder,
+    "wifi" to Icons.Filled.Wifi,
+    "contacts" to Icons.Filled.Contacts,
+    "calls" to Icons.Filled.Phone,
+    "sms" to Icons.Filled.Sms
 )
 
 /**
- * 备份目标的图标，五种目标共用这一个入口。
+ * 备份目标的图标，所有目标共用这一个入口。
+ *
+ * 用哪种图标由 [TargetSpecs] 的 `iconKey` 决定：应用用 AppInfo 自己的图标，
+ * 其余查 [VectorIcons]。加类型时只需在注册表里写 iconKey + 在这张表补一行。
  *
  * @param size 方块边长；矢量图标按它等比缩到 0.54（48 → 26、40 → 22）
  * @param useBackupIcon 应用图标拿不到时要不要去仓库里找；批量页用不到，传 false 省一次查询
@@ -45,8 +50,9 @@ fun TargetIconBox(
     modifier: Modifier = Modifier,
     useBackupIcon: Boolean = true,
 ) {
-    when (target) {
-        BackupTarget.APP -> AppIcon(
+    val spec = TargetSpecs.of(target)
+    if (spec.iconKey == TargetSpecs.APP_ICON_KEY) {
+        AppIcon(
             icon = if (useBackupIcon) {
                 rememberAppIconWithBackup(app.packageName, app.userId)
             } else {
@@ -55,17 +61,22 @@ fun TargetIconBox(
             name = app.name,
             modifier = modifier.size(size)
         )
-
-        BackupTarget.DIR -> VectorIconBox(Icons.Filled.Folder, size, modifier)
-
-        BackupTarget.WIFI, BackupTarget.CONTACTS,
-        BackupTarget.CALLS, BackupTarget.SMS -> VectorIconBox(
-            icon = SystemDataIcons.getValue(target),
-            size = size,
-            modifier = modifier,
-            description = target.displayName
-        )
+        return
     }
+
+    val icon = VectorIcons[spec.iconKey]
+    if (icon == null) {
+        // 注册表写了 iconKey 但 UI 忘了补图标：退化成占位，别让整页崩掉
+        VectorIconBox(Icons.Filled.Folder, size, modifier, description = spec.label)
+        return
+    }
+
+    VectorIconBox(
+        icon = icon,
+        size = size,
+        modifier = modifier,
+        description = spec.label
+    )
 }
 
 /**

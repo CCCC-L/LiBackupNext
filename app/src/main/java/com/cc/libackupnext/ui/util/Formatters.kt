@@ -1,6 +1,6 @@
 package com.cc.libackupnext.ui.util
 
-import com.cc.libackupnext.entity.AppInfo
+import com.cc.libackupnext.data.AppInfo
 import com.cc.libackupnext.ui.SortType
 import java.text.SimpleDateFormat
 import java.util.Date

@@ -5,11 +5,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -18,14 +18,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Deselect
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
-import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -42,7 +41,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.android.awaitFrame
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -59,8 +57,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.ui.component.CheckboxMenuItem
 import com.cc.libackupnext.ui.theme.IconSlotWidth
-import com.cc.libackupnext.ui.theme.actionGroupWidthContinuous
 import com.cc.libackupnext.ui.theme.SearchButtonHideMs
+import com.cc.libackupnext.ui.theme.actionGroupWidthContinuous
 import com.cc.libackupnext.ui.theme.collapseHorizontally
 import com.cc.libackupnext.ui.theme.eraseToRight
 import com.cc.libackupnext.ui.theme.rememberActionGroupWidth
@@ -68,8 +66,8 @@ import com.cc.libackupnext.ui.theme.rememberEraseProgress
 import com.cc.libackupnext.ui.theme.rememberMiddleButtonEndPadding
 import com.cc.libackupnext.ui.theme.rememberPendingRetryPulse
 import com.cc.libackupnext.ui.theme.rememberSearchBarProgress
+import kotlinx.coroutines.android.awaitFrame
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppTopBar(
     /** tab 页传 Activity 作用域的 ViewModel；文件夹选择弹窗传 null，自己接管搜索和动作区。 */
@@ -78,7 +76,7 @@ fun AppTopBar(
     pageBackground: Color,
     searchBarBackground: Color,
     navigationIcon: (@Composable () -> Unit)? = null,
-    middleIcon: ImageVector = Icons.Default.Sort,
+    middleIcon: ImageVector = Icons.AutoMirrored.Filled.Sort,
     onMiddleClick: () -> Unit = {
         viewModel?.let { it.isSortMenuExpanded.value = true }
     },
@@ -484,7 +482,7 @@ fun AppTopBar(
                     } else {
                         users.forEach { user ->
                             DropdownMenuItem(
-                                text = { Text(user.name ?: "用户 ${user.id}") },
+                                text = { Text(user.name) },
                                 onClick = {
                                     viewModel?.let { vm ->
                                         vm.currentUserId.value = user.id
