@@ -77,7 +77,7 @@ enum class FolderPickerMode { LOCAL, REMOTE }
  * [repo] 只有 [FolderPickerMode.REMOTE] 才需要。
  *
  * 弹窗不管是因为选中还是返回而关闭，都会调 [onClose]，让底层弹窗能恢复显示；
- * [onPick] 只在使用「使用此文件夹」时调用，用来回填路径。
+ * [onPick] 只在使用「选择此文件夹」时调用，用来回填路径。
  */
 data class FolderPickerLauncher(
     val mode: FolderPickerMode,

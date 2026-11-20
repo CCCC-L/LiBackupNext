@@ -544,7 +544,7 @@ fun FolderPickerDialog(
                     ),
                     contentPadding = PaddingValues(vertical = 14.dp)
                 ) {
-                    Text("使用此文件夹", style = MaterialTheme.typography.titleMedium)
+                    Text("选择此文件夹", style = MaterialTheme.typography.titleMedium)
                 }
             }
         }
