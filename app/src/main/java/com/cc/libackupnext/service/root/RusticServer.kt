@@ -86,9 +86,6 @@ object RusticServer {
     /** /data/media/0/Android/obb 的 gid（ext_obb_rw）。*/
     private const val EXT_OBB_RW_GID = 1079
 
-    /** 外部存储（/data/media）的 uid。外部存储的目录属于它，不是当前应用 uid。 */
-    private const val MEDIA_RW_UID = 1023
-
     /**
      * 初始化 / 校验 rustic 仓库。请求帧里带候选 path / password，只用于本次校验，
      * 不写 Rust 侧的全局凭据。
@@ -344,13 +341,15 @@ object RusticServer {
                     emit(SnapshotKind.DIR, "running")
 
                     // 和备份对称：写到 /data/media/0，而不是 FUSE 的 /sdcard。
-                    // 用户目录归 media_rw、权限 2770 —— 和系统自己建的一致。
+                    // 归属照系统自己写的来：模拟卷归 MediaProvider、SD 卡归 media_rw，属组一律 media_rw。
+                    val target = File(mediaPath(packageName))
+                    val (uid, gid) = externalStorageOwner(context, target.absolutePath)
                     val error = restoreSupport.restoreTree(
                         snapshotId = id,
-                        target = File(mediaPath(packageName)),
+                        target = target,
                         delete = false,
-                        uid = MEDIA_RW_UID,
-                        gid = MEDIA_RW_UID,
+                        uid = uid,
+                        gid = gid,
                         parentContext = true,
                         dirMode = "2770"
                     )

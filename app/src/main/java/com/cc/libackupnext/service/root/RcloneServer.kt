@@ -34,9 +34,6 @@ object RcloneServer {
     private const val BUFFER_SIZE = 576 * 1024
     private const val SHARED_MEMORY_NAME = "libackup-rclone"
 
-    /** 外部存储（/data/media）的 uid，目录属于它，不是当前应用 uid。 */
-    private const val MEDIA_RW_UID = 1023
-
     private external fun nativeListDirs(buffer: ByteBuffer): Int
     private external fun nativeEnsureServe(buffer: ByteBuffer): Int
     private external fun nativeStopServe(buffer: ByteBuffer): Int
@@ -133,12 +130,11 @@ object RcloneServer {
             val target = options.fixup?.takeIf { it.isNotBlank() } ?: return response
             val ok = runCatching { response.parseJson<OkResponse>().ok }.getOrDefault(false)
             if (ok) {
-                // rclone 在 uid 0 下建出来的目录：交还 media_rw，并刷成父目录的
-                // SELinux 上下文。只有本地外部存储的请求才带 fixup，远程不受影响。
-                fixupTree(
-                    File(target), MEDIA_RW_UID, MEDIA_RW_UID,
-                    parentContext = true, dirMode = "2770"
-                )
+                // 只有本地外部存储的请求才带 fixup。归属和 ctx 都按真身路径算：FUSE 路径的
+                // 父 ctx 是 fuse:s0，chcon 不生效，目录会留成带 MLS 类别（DocumentsUI 看不见）。
+                val dir = File(mediaPath(target))
+                val (uid, gid) = externalStorageOwner(context, dir.absolutePath)
+                fixupTree(dir, uid, gid, parentContext = true, dirMode = "2770")
             }
             return response
         }

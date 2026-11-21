@@ -34,7 +34,7 @@ fun FileListScreen(
     listState: LazyListState,
     onOpen: (AppInfo) -> Unit,
     onAdd: (String) -> Unit,
-    /** 打开通用文件夹选择弹窗；这里允许一路退到文件系统根 "/"。 */
+    /** 打开通用文件夹选择弹窗；这里不暴露文件系统根 "/"，只在存储卷里选。 */
     onOpenFolderPicker: (FolderPickerLauncher) -> Unit = {},
     modifier: Modifier = Modifier,
     /** 倒序：顶栏排序菜单里唯一对文件夹列表生效的开关。 */
@@ -43,12 +43,11 @@ fun FileListScreen(
     isRefreshing: Boolean = false,
     onRefresh: (() -> Unit)? = null,
 ) {
-    // 文件 tab 的 + 号允许一路退到 /：备份目标不一定是内部存储里的目录
+    // 文件 tab 的 + 号只在存储卷里选：要备份的目录都是用户能看见的那几个卷
     val pickFolder: () -> Unit = {
         onOpenFolderPicker(
             FolderPickerLauncher(
                 mode = FolderPickerMode.LOCAL,
-                allowRoot = true,
                 onPick = { path ->
                     val row = dirs.firstOrNull { it.packageName == path }
                     // 只剩备份的行（已移除备份目标）再选一次 = 重新加回目标

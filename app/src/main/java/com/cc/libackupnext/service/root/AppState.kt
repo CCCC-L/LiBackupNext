@@ -287,6 +287,28 @@ private fun runPm(command: String): String = try {
     "执行失败：${t.message ?: t.javaClass.simpleName}"
 }
 
+/** 外部存储（/data/media 与 SD 卡）的属组：media_rw。 */
+internal const val MEDIA_RW_GID = 1023
+
+/** MediaProvider 的包名 */
+private const val MEDIA_PROVIDER_PACKAGE = "com.android.providers.media.module"
+
+/** 模拟卷路径：`/storage/emulated/<userId>/…` 或 `/data/media/<userId>/…`。 */
+private val EMULATED_VOLUME = Regex("""^/(?:storage/emulated|data/media)/(\d+)(?:/|$)""")
+
+/**
+ * 外部存储里的路径该归谁：模拟卷是 MediaProvider 代写的，属主就是它；SD 卡属主 media_rw。
+ * 属组一律 media_rw。取不到 MediaProvider 就退回 media_rw —— 归属不完美，但不影响恢复成功。
+ */
+internal fun externalStorageOwner(context: Context, path: String): Pair<Int, Int> {
+    val userId = EMULATED_VOLUME.find(path)?.groupValues?.get(1)?.toIntOrNull()
+    val uid = userId?.let { packageUid(context, MEDIA_PROVIDER_PACKAGE, it) }
+    if (userId != null && uid == null) {
+        AppLog.w(TAG, "找不到 MediaProvider，外部存储归属退回 media_rw")
+    }
+    return (uid ?: MEDIA_RW_GID) to MEDIA_RW_GID
+}
+
 /**
  * 恢复后修正归属和 SELinux 上下文。
  *
