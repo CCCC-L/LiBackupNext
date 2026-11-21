@@ -9,11 +9,15 @@ import kotlinx.serialization.Serializable
  *
  * @param stage 当前步骤的类型名（apk / obb / user / data / permissions / wifi ...）
  * @param state running / done / skipped / finished
+ * @param files 这一步处理了多少文件
+ * @param errors 这一步有多少个源文件读不出来（rustic 只跳过它们、照样出快照，
+ *   所以必须单独报出来，否则「完成」会骗人）
  */
 @Serializable
 data class BackupProgress(
     val stage: String,
     val state: String,
     val files: Long = 0,
+    val errors: Long = 0,
     val reason: String = ""
 )

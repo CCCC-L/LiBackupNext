@@ -64,6 +64,9 @@ fun BackupProgressDialog(
     /** 远程仓库连接中断：弹窗内改标题 + 一行红色提示。 */
     connectionInterrupted: Boolean = false
 ) {
+    // 有文件读不出来就不能说「成功」：快照是建出来了，但里面少了东西
+    val unreadable = unreadableFiles(sections)
+
     AppSurfaceDialog(
         onDismissRequest = { /* 运行过程中不允许关闭 */ },
         properties = DialogProperties(
@@ -72,6 +75,8 @@ fun BackupProgressDialog(
         ),
         title = when {
             connectionInterrupted -> "远程仓库连接中断"
+            // 这里不猜动词（备份 / 覆盖 / 恢复），免得说错，只说事实
+            !running && error == null && unreadable > 0 -> "已完成，$unreadable 个文件未能读取"
             !running && error == null -> doneTitle
             else -> title
         }
@@ -117,7 +122,8 @@ fun BackupProgressDialog(
                     .forEach { step ->
                         Text(
                             text = "${backupStepTitle(step.kind, isRestore)}:" +
-                                    backupStepStatusText(step),
+                                    backupStepStatusText(step) +
+                                    unreadableSuffix(step),
                             style = MaterialTheme.typography.bodySmall
                         )
                         if (step.status == BackupStepStatus.SKIPPED &&
@@ -169,6 +175,14 @@ private fun backupStepStatusText(step: BackupStep): String = when (step.status) 
     BackupStepStatus.SKIPPED -> "跳过"
     BackupStepStatus.FAILED -> "失败"
 }
+
+/** 这一步有文件读不出来时在UI中显示。 */
+private fun unreadableSuffix(step: BackupStep): String =
+    if (step.errors > 0) "（${step.errors} 个文件未能读取）" else ""
+
+/** 所有步骤加起来的未读取文件数，用来判断这次操作能不能叫「成功」。 */
+private fun unreadableFiles(sections: List<ProgressSection>): Long =
+    sections.sumOf { section -> section.steps.sumOf { it.errors } }
 
 /**
  * 双击确认守卫：同一个动作 1 秒内点两次才算确认。

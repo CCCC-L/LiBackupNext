@@ -34,7 +34,12 @@ internal class RusticBackupSupport(private val context: Context) {
                 dir.deleteRecursively()
                 return@map item.copy(skipReason = "导出失败")
             }
-            item.copy(sources = listOf(dir.absolutePath), asPath = "/")
+            item.copy(
+                sources = listOf(dir.absolutePath),
+                asPath = "/",
+                // 源换了就得按新路径重新判定，别让复制前的值漏过来
+                ignoreInode = ignoreInodeFor(listOf(dir.absolutePath))
+            )
         }
         return request.copy(items = items)
     }

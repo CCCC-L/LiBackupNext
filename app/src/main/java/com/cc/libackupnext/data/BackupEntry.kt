@@ -49,6 +49,8 @@ data class BackupStep(
     val kind: SnapshotKind,
     val status: BackupStepStatus,
     val files: Long = 0,
+    /** 这一步有多少个源文件读不出来（0 表示全读到了）。 */
+    val errors: Long = 0,
     val reason: String = ""
 )
 

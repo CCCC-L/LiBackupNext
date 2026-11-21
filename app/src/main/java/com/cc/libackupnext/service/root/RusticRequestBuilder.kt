@@ -29,6 +29,16 @@ internal fun mediaPath(path: String): String = when {
     else -> path
 }
 
+/**
+ * 这批源要不要关掉 inode 比较。
+ *
+ * 例外是 FUSE 视图：SD 卡、非主用户这些路径的 inode 编号由用户态分配，重挂载后
+ * 可能整体变一遍，全量重读没有任何收益。对它们关掉比较也不损失正确性 ——
+ * 真改过内容时 ctime 一定会变，靠 ctime 仍然能发现。
+ */
+internal fun ignoreInodeFor(sources: List<String>): Boolean =
+    sources.isNotEmpty() && sources.all { !it.startsWith("/data/") }
+
 /** 备份源目录的绝对前缀（`*` 对应 userId / 包名）。 */
 private val BACKUP_ROOTS = listOf(
     "/data/user/*/*",
@@ -303,7 +313,9 @@ internal class RusticRequestBuilder(
         asPath: String?,
         skipReason: String? = null,
         description: String? = null,
-        excludes: List<String>? = null
+        excludes: List<String>? = null,
+        // 默认按源的路径可信度决定，见 [ignoreInodeFor]
+        ignoreInode: Boolean = ignoreInodeFor(sources)
     ): BackupItemDto = BackupItemDto(
         stage = stage,
         label = label,
@@ -312,14 +324,17 @@ internal class RusticRequestBuilder(
         asPath = asPath,
         skipReason = skipReason,
         description = description,
-        excludes = excludes.orEmpty()
+        excludes = excludes.orEmpty(),
+        ignoreInode = ignoreInode
     )
 
     /**
      * 把应用图标导出成 PNG，作为 icon 快照的源文件。
      *
-     * 每次都重写，但把 mtime 归零，配合 ignore_ctime / ignore_inode，
-     * rustic 会认为内容和上次一致，从而跳过重复快照。
+     * 每次都在同一个路径上原地重写（inode 不变），并把 mtime 归零，所以只要图标
+     * 内容没变，size / mtime / inode 三项都对得上。ctime 每次写都会变（内核维护，
+     * 设不了），rustic 会因此重读这一个小文件 —— 代价可以忽略；而且「要不要再建
+     * 一个 icon 快照」由调用方的 includeIcon 决定，本来也不靠这里的跳过。
      */
     private fun writeIcon(packageName: String): String? = runCatching {
         val drawable = context.packageManager.getApplicationIcon(packageName)

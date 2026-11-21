@@ -35,7 +35,7 @@ use rustic_core::repofile::NodeType;
 use rustic_core::{LimitOption, PruneOptions};
 use serde::{Deserialize, Serialize};
 
-use std::ffi::{c_char, c_int, c_void, CString};
+use std::ffi::c_void;
 use std::io::Write;
 use std::panic;
 use std::sync::OnceLock;
@@ -103,7 +103,11 @@ fn install_panic_hook() {
     }));
 }
 
+/// 真机走 liblog，panic 信息进 logcat（导出包会抓）。
+#[cfg(target_os = "android")]
 fn android_log_fatal(text: &str) {
+    use std::ffi::{c_char, c_int, CString};
+
     extern "C" {
         fn __android_log_print(prio: c_int, tag: *const c_char, fmt: *const c_char, ...) -> c_int;
     }
@@ -117,6 +121,13 @@ fn android_log_fatal(text: &str) {
             __android_log_print(6, tag.as_ptr(), fmt.as_ptr(), msg.as_ptr());
         }
     }
+}
+
+/// 桌面（跑 `cargo test`）没有 liblog，链接不到 `__android_log_print`，
+/// 测试二进制会因为一个符号直接链接失败。桌面只需要看得到这句话。
+#[cfg(not(target_os = "android"))]
+fn android_log_fatal(text: &str) {
+    eprint!("{text}");
 }
 
 /// 库加载时安装 panic hook，不改动任何现有 JNI 函数名。
@@ -179,6 +190,9 @@ struct BackupItem {
     // 过滤规则glab
     #[serde(default)]
     excludes: Vec<String>,
+
+    #[serde(default)]
+    ignore_inode: bool,
 }
 
 /// 初始化 / 校验仓库用的**候选**凭据：只跟着这一次请求走，不写全局配置。
@@ -640,8 +654,11 @@ fn repository_backends(
             .entry("retry".to_string())
             .or_insert_with(|| "off".to_string());
         backend_options
-            .entry("timeout".to_string())
-            .or_insert_with(|| "120s".to_string());
+            .entry("http-connect-timeout".to_string())
+            .or_insert_with(|| "5s".to_string());
+        backend_options
+            .entry("http-read-timeout".to_string())
+            .or_insert_with(|| "60s".to_string());
     }
 
     BackendOptions::default()
@@ -860,6 +877,33 @@ fn write_list_response(ptr: *mut u8, capacity: usize, response: ListResponse) {
     if let Ok(json) = serde_json::to_vec(&response) {
         write_frame_at(ptr, capacity, 0, &json);
     }
+}
+
+// ==================== 仓库写访问闸门 ====================
+
+/// 仓库内容的**写**访问闸门。
+///
+/// 这是 DAO 对自己持有的资源（仓库句柄、索引 / 仓库实例这几个 static 缓存）做的
+/// 并发保护，**不是业务策略**：谁该写、写什么、要不要拦下并提示用户，仍然由
+/// service 层决定。放在这里的原因是这些资源只有这里持有，任何调用方都绕不过去。
+///
+/// 为什么必须有：`:root` 里的每个 JNI 入口都跑在自己的 binder 线程上，两笔写调用
+/// 会同时进 rustic。整理仓库用的是 `instant_delete`，它会把「还没进索引的新包」
+/// 当成无引用数据直接删掉——此时若有一笔备份刚写完包还没写索引，那个包就没了，
+/// 仓库直接损坏。上游 0.14.0 修的是「并发 prune 之间」的问题，它没法替调用方
+/// 保证「同一时刻只有一笔写」。
+///
+/// 只挡写：列表 / 概览 / 估算这类只读调用不进闸门，备份跑几分钟也不会把界面卡住。
+static REPO_WRITE_GATE: Mutex<()> = Mutex::new(());
+
+/// 进入写闸门，离开作用域时（guard drop）自动放行。
+///
+/// 中毒（持锁线程 panic）也照样放行：release 是 `panic = "abort"`，进程会直接
+/// 退出，不可能留下一个中毒的锁；真出现了也只该继续用，不该让后续写操作永久失败。
+fn enter_write_gate() -> std::sync::MutexGuard<'static, ()> {
+    REPO_WRITE_GATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 // ==================== 备份概况 ====================
@@ -1117,6 +1161,8 @@ fn handle_update_description(ptr: *mut u8, capacity: usize) -> jint {
 }
 
 fn update_descriptions(request: &UpdateDescriptionRequest) -> Result<(), String> {
+    let _gate = enter_write_gate();
+
     if request.ids.is_empty() {
         return Ok(());
     }
@@ -1208,6 +1254,8 @@ pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_native
 }
 
 fn delete_snapshots(request: &DeleteRequest) -> Result<(), String> {
+    let _gate = enter_write_gate();
+
     if request.ids.is_empty() {
         return Ok(());
     }
@@ -1249,6 +1297,8 @@ struct CleanupResponse {
 /// 图标快照不属于任何一次备份（它没有时间戳分组），所以按备份删的时候碰不到它；
 /// 应用的所有备份都删光之后，这个图标就变成了仓库里的垃圾，需要单独回收。
 fn clean_orphan_icons() -> Result<u32, String> {
+    let _gate = enter_write_gate();
+
     let repository = open_repo_cached()?;
 
     let snapshots = repository
@@ -1368,9 +1418,9 @@ pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_native
 /// 直接拷贝 blob（不重新加密压缩），比默认 repack 快很多。
 fn prune_options() -> PruneOptions {
     let mut options = PruneOptions::default();
-    // 立刻回收：不标记等待，也不保留 23 小时
+    // 立刻回收：不标记等待，也不保留 23 小时。
     options.instant_delete = true;
-    options.keep_delete = jiff::Span::new();
+    options.keep_marked = jiff::Span::new();
     options.fast_repack = true;
     options.max_repack = LimitOption::Unlimited;
     options.max_unused = LimitOption::Percentage(0);
@@ -1378,6 +1428,8 @@ fn prune_options() -> PruneOptions {
 }
 
 fn prune_repo() -> Result<(), String> {
+    let _gate = enter_write_gate();
+
     // 整理会重写 pack 和索引，缓存必须作废
     invalidate_indexed_repo();
     invalidate_backup_repo();
@@ -1503,6 +1555,9 @@ pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_native
 }
 
 fn restore_snapshots(request: &RestoreRequest) -> Result<(), String> {
+    // 恢复只读仓库，但它要读的包可能正被整理仓库删掉，所以和写操作互斥
+    let _gate = enter_write_gate();
+
     if request.items.is_empty() {
         return Ok(());
     }
@@ -1694,6 +1749,37 @@ fn restore_mtime(path: &std::path::Path, secs: i64, nanos: u32) {
     let _ = handle.set_times(times);
 }
 
+/// 把快照里的相对路径安全地拼到恢复目标目录下。
+///
+/// 快照里的节点名是**仓库内容**，不能当可信输入：一个被篡改或损坏的仓库里放一个
+/// 名为 `..` 的节点，`dest.join("..")` 就跑到目标目录外面去了。`:root` 是 uid 0，
+/// 出界等于任意位置写文件，而且 [restore_file] 第一步是 [remove_existing] —— 先删再写。
+///
+/// 上游 0.14.0 在 `LocalDestination::path()` 里补了同样的逐组件校验（拒绝 RootDir /
+/// ParentDir / Prefix）；本项目自己实现了恢复循环、没走那个类型，所以这里得自己挡。
+fn join_inside_dest(
+    dest: &std::path::Path,
+    rel: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    use std::path::Component;
+
+    let mut target = dest.to_path_buf();
+    for component in rel.components() {
+        match component {
+            Component::Normal(part) => target.push(part),
+            // 快照路径理论上不会出现 `.`，出现了也不算越界，直接跳过
+            Component::CurDir => {}
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir => {
+                return Err(format!(
+                    "快照里的路径不合法（越出恢复目标）：{}",
+                    rel.display()
+                ));
+            }
+        }
+    }
+    Ok(target)
+}
+
 /// 把快照内容展开到 dest（快照里的路径都是相对路径）。
 ///
 /// 目录先建好，文件内容用固定线程池并行写、每块 1 MiB，避免大文件整个读进内存。
@@ -1733,8 +1819,13 @@ fn restore_snapshot<S: rustic_core::IndexedFull + Sync>(
             continue;
         }
 
+        // 路径先过闸。不合法就整次恢复失败，而不是跳过这一条：跳过等于告诉用户
+        // 「恢复成功」，实际少了一部分数据，比直接报错更糟。
+        let target = join_inside_dest(dest, &path)?;
+
+        // written 里存的是快照内的相对路径，[remove_extras] 会拿它的首段拼目标目录，
+        // 所以必须先过闸再记录
         written.insert(path.clone());
-        let target = dest.join(&path);
 
         // 有 subtree 的就是目录
         if node.subtree.is_some() {
@@ -1883,7 +1974,8 @@ fn remove_extras(
 ) -> Result<(), String> {
     let mut roots: Vec<std::path::PathBuf> = Vec::new();
     for path in written {
-        if let Some(first) = path.components().next() {
+        // 只认普通组件：这一步会真的删文件，不能给 `..` / 绝对路径任何机会
+        if let Some(std::path::Component::Normal(first)) = path.components().next() {
             let root = dest.join(first);
             if !roots.contains(&root) {
                 roots.push(root);
@@ -2004,6 +2096,10 @@ fn handle_backup(ptr: *mut u8, capacity: usize) -> jint {
 }
 
 fn backup_repo(request: &BackupRequest, progress: Arc<ProgressCtx>) -> Result<(), String> {
+    // 整批备份占住写闸门：批量备份期间任何一笔 prune / 删除都要排队，
+    // 否则刚写完还没进索引的包会被当成无引用数据回收掉
+    let _gate = enter_write_gate();
+
     // 备份会写入新的 pack 和索引，恢复用的索引缓存必须作废
     invalidate_indexed_repo();
 
@@ -2082,18 +2178,38 @@ fn backup_items(
             backup_options.parent_opts.parents = vec![parent.clone()];
         }
 
+        // inode 比较：0.13.0 里 `is_parent` 把条件写反了（`!ignore_inode`），所以
+        // 默认**从不**比较 inode；0.14.0 修正后默认比较。
+        //
+        // 本项目的备份源几乎都落在真实文件系统（/data/user、/data/user_de、
+        // /data/media、/data/app），inode 跨备份、跨重启稳定，比较它只会更准
+        // （比如被「复制替换」的文件：mtime 被保留、inode 变了，以前会漏判）。
+        // 唯一例外是 SD 卡 / 非主用户这类 FUSE 视图 —— 那里的 inode 编号由用户态
+        // 分配，重挂载后可能整体变一遍。对它们由客户端传 ignore_inode 关掉比较：
+        // 真改过内容时 ctime 一定会变，靠 ctime 仍然能发现，不损失正确性。
+        backup_options.parent_opts.ignore_inode = item.ignore_inode;
+
         let paths: PathList = sources.into_iter().collect();
 
         let snapshot = repository
             .backup(&backup_options, &paths, snapshot)
             .map_err(|e| format!("backup {} failed: {}", item.stage, describe_error(&e)))?;
 
-        let files = snapshot
+        // 0.14.0 起快照摘要带 error_count：源文件读不出来（SELinux 拒绝、权限不够、
+        // 文件正在被写）时 rustic 只打日志、照样出快照、照样返回成功。不把这个数
+        // 报上去，用户看到的就是「备份成功」，实际少了一部分数据。
+        let (files, errors) = snapshot
             .summary
             .as_ref()
-            .map(|summary| summary.total_files_processed);
+            .map(|summary| {
+                (
+                    Some(summary.total_files_processed),
+                    summary.error_count,
+                )
+            })
+            .unwrap_or((None, 0));
 
-        progress.emit_with_files(&item.stage, "done", files);
+        progress.emit_done(&item.stage, files, errors);
     }
 
     Ok(())
@@ -2128,17 +2244,20 @@ impl ProgressCtx {
         }
     }
 
-    /// 写入一条状态：`{"stage":"apk","state":"done","files":12,"reason":"..."}`
+    /// 写入一条状态：`{"stage":"apk","state":"done","files":12,"errors":3,"reason":"..."}`
+    ///
+    /// `errors` 是这次快照里**读不出来的源文件个数**（0 就不写这个字段）。
     fn emit(&self, stage: &str, state: &str) {
-        self.write_event(stage, state, None, None);
+        self.write_event(stage, state, None, None, None);
     }
 
-    fn emit_with_files(&self, stage: &str, state: &str, files: Option<u64>) {
-        self.write_event(stage, state, files, None);
+    /// 一个步骤备份完成：带上文件数和读取失败数。
+    fn emit_done(&self, stage: &str, files: Option<u64>, errors: u64) {
+        self.write_event(stage, "done", files, (errors > 0).then_some(errors), None);
     }
 
     fn emit_skipped(&self, stage: &str, reason: &str) {
-        self.write_event(stage, "skipped", None, Some(reason));
+        self.write_event(stage, "skipped", None, None, Some(reason));
     }
 
     fn write_event(
@@ -2146,6 +2265,7 @@ impl ProgressCtx {
         stage: &str,
         state: &str,
         files: Option<u64>,
+        errors: Option<u64>,
         reason: Option<&str>,
     ) {
         let _guard = self.write_lock.lock();
@@ -2156,6 +2276,9 @@ impl ProgressCtx {
         );
         if let Some(files) = files {
             json.push_str(&format!(r#","files":{files}"#));
+        }
+        if let Some(errors) = errors {
+            json.push_str(&format!(r#","errors":{errors}"#));
         }
         if let Some(reason) = reason {
             json.push_str(&format!(r#","reason":"{}""#, escape_json(reason)));
@@ -2409,7 +2532,7 @@ fn describe_error(error: &rustic_core::RusticError) -> String {
 mod tests {
     use super::{
         backup_repo, describe_error, init_repo, read_frame_at, set_repo, BackupItem, BackupRequest,
-        ProgressCtx,
+        ProgressCtx, PROGRESS_COUNTER_SIZE, PROGRESS_OFFSET, PROGRESS_SLOT_SIZE,
     };
     use std::sync::{Arc, Mutex};
 
@@ -2466,6 +2589,7 @@ mod tests {
                 description: None,
                 parent: None,
                 excludes: Vec::new(),
+                ignore_inode: false,
             }],
             excludes: Vec::new(),
             batch: None,
@@ -2528,6 +2652,7 @@ mod tests {
                 description: None,
                 parent: None,
                 excludes: Vec::new(),
+                ignore_inode: false,
             }],
             excludes: Vec::new(),
             batch: None,
@@ -2586,6 +2711,7 @@ mod tests {
                     description: None,
                     parent: None,
                     excludes: Vec::new(),
+                    ignore_inode: false,
                 },
                 BackupItem {
                     stage: "apk".to_string(),
@@ -2597,6 +2723,7 @@ mod tests {
                     description: None,
                     parent: None,
                     excludes: Vec::new(),
+                    ignore_inode: false,
                 },
             ],
             excludes: Vec::new(),
@@ -2647,6 +2774,7 @@ mod tests {
                     description: None,
                     parent: None,
                     excludes: Vec::new(),
+                    ignore_inode: false,
                 },
                 BackupItem {
                     stage: "icon".to_string(),
@@ -2658,6 +2786,7 @@ mod tests {
                     description: None,
                     parent: None,
                     excludes: Vec::new(),
+                    ignore_inode: false,
                 },
             ],
             excludes: Vec::new(),
@@ -2719,6 +2848,7 @@ mod tests {
             description: None,
             parent: None,
             excludes: Vec::new(),
+            ignore_inode: false,
         };
 
         let request = BackupRequest {
@@ -2802,6 +2932,7 @@ mod tests {
                 description: None,
                 parent: None,
                 excludes: Vec::new(),
+                ignore_inode: false,
             }],
             excludes: Vec::new(),
             batch: None,
@@ -2874,6 +3005,7 @@ mod tests {
                 description: None,
                 parent: None,
                 excludes: Vec::new(),
+                ignore_inode: false,
             }],
             excludes: Vec::new(),
             batch: None,
@@ -2915,5 +3047,35 @@ mod tests {
 
         let bytes = read_frame_at(ptr, capacity, 0).expect("读取帧失败");
         assert_eq!(bytes, json);
+    }
+
+    /// 进度帧是**跨进程协议**：字段名必须和 Kotlin 侧 `BackupProgress` 对得上，
+    /// 否则「有几个文件没读到」这条信息会静默丢掉，界面又变回「备份成功」。
+    #[test]
+    fn progress_frame_carries_error_count() {
+        let mut buffer = vec![0u8; PROGRESS_OFFSET + 64 * 1024];
+        let ptr = buffer.as_mut_ptr();
+        let capacity = buffer.len();
+        let progress = ProgressCtx::new(ptr, capacity);
+
+        progress.emit_done("data", Some(12), 3);
+        let first = read_frame_at(ptr, capacity, PROGRESS_OFFSET + PROGRESS_COUNTER_SIZE)
+            .expect("读取进度帧失败");
+        let first = String::from_utf8(first).unwrap();
+        assert_eq!(
+            first,
+            r#"{"stage":"data","state":"done","files":12,"errors":3}"#
+        );
+
+        // 0 不写这个字段：没出错时帧和以前完全一样，老客户端也不受影响
+        progress.emit_done("apk", Some(1), 0);
+        let second = read_frame_at(
+            ptr,
+            capacity,
+            PROGRESS_OFFSET + PROGRESS_COUNTER_SIZE + PROGRESS_SLOT_SIZE,
+        )
+        .expect("读取进度帧失败");
+        let second = String::from_utf8(second).unwrap();
+        assert_eq!(second, r#"{"stage":"apk","state":"done","files":1}"#);
     }
 }

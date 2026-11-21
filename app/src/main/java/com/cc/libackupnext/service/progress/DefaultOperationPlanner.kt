@@ -56,6 +56,7 @@ object DefaultOperationPlanner : OperationPlanner {
                 step.copy(
                     status = statusOf(progress.state, step.status),
                     files = progress.files,
+                    errors = progress.errors,
                     reason = progress.reason
                 )
             }

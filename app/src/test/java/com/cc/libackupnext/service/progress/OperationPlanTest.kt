@@ -206,4 +206,35 @@ class OperationPlanTest {
         assertTrue(DefaultOperationPlanner.canOverwrite(installed = true))
         assertTrue(!DefaultOperationPlanner.canOverwrite(installed = false))
     }
+
+    // ==================== 读取失败数 ====================
+
+    /**
+     * root 侧会把「这一步有几个文件读不出来」放进进度帧。它必须一路传到步骤上，
+     * 否则弹窗只能说「完成」——而实际上快照里少了一部分文件。
+     */
+    @Test
+    fun `进度里的读取失败数要落到对应步骤上`() {
+        val steps = DefaultOperationPlanner.backupSteps(setOf(BackupGroup.DATA))
+        val updated = DefaultOperationPlanner.applyProgress(
+            steps,
+            BackupProgress(stage = SnapshotKind.DATA.key, state = "done", files = 120, errors = 3)
+        )
+
+        val data = updated.single { it.kind == SnapshotKind.DATA }
+        assertEquals(BackupStepStatus.DONE, data.status)
+        assertEquals(120L, data.files)
+        assertEquals(3L, data.errors)
+    }
+
+    @Test
+    fun `没有读取失败时步骤上就是 0`() {
+        val steps = DefaultOperationPlanner.backupSteps(setOf(BackupGroup.DATA))
+        val updated = DefaultOperationPlanner.applyProgress(
+            steps,
+            BackupProgress(stage = SnapshotKind.DATA.key, state = "done", files = 120)
+        )
+
+        assertEquals(0L, updated.single { it.kind == SnapshotKind.DATA }.errors)
+    }
 }

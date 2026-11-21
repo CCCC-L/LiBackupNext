@@ -117,6 +117,13 @@ data class BackupItemDto(
     val description: String? = null,
     val parent: String? = null,
     val excludes: List<String> = emptyList(),
+    /**
+     * 判断文件有没有变时不比较 inode。
+     *
+     * 只对 inode 不可信的源打开（SD 卡 / 非主用户这类 FUSE 视图），
+     * 规则见 [com.cc.libackupnext.service.root.ignoreInodeFor]。
+     */
+    @SerialName("ignore_inode") val ignoreInode: Boolean = false,
     /** Rust 的 BackupItem 没有这个字段（serde 忽略未知键），只给 Kotlin 侧标记用。 */
     val system: Boolean? = null
 )

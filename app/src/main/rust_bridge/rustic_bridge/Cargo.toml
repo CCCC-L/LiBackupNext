@@ -10,8 +10,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 jni = "0.22.4"
-rustic_core = "0.13.0"
-rustic_backend = { version = "0.7.0", default-features = false, features = ["rest"] }
+rustic_core = "0.14.0"
+rustic_backend = { version = "0.8.0", default-features = false, features = ["rest"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rayon = "1"
