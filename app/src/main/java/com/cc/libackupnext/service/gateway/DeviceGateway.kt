@@ -34,6 +34,16 @@ interface DeviceGateway {
     /** 应用图标（PNG 字节）；跨用户或被隐藏的包只有 root 侧读得到。 */
     suspend fun getIcon(packageName: String, userId: Int): ByteArray?
 
+    // ==================== 目录查询 ====================
+
+    /**
+     * 批量判断目录是否存在，**传物理路径**（`/data/media/<userId>/…`）。
+     *
+     * 普通应用进程只看得见自己用户的空间，别的用户的目录只能问 root。
+     * 失败返回 failure —— 调用方别把「问不到」当成「不存在」，否则整页行会一起变灰。
+     */
+    suspend fun existingDirs(paths: List<String>): Result<Set<String>>
+
     // ==================== 应用操作 ====================
 
     suspend fun forceStop(packageName: String, userId: Int)

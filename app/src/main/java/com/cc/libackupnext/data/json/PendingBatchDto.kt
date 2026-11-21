@@ -22,6 +22,8 @@ data class PendingBatchDto(
     val batchTab: String = "",
     val detailFromBatch: Boolean = false,
     val detailApp: AppInfo? = null,
+    /** 发起时顶栏选中的用户；老数据没有 → null。 */
+    val userId: Int? = null,
     val items: List<BatchItemDto> = emptyList()
 )
 

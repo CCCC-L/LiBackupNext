@@ -75,6 +75,9 @@ enum class FolderPickerMode { LOCAL, REMOTE }
  * [initialPath] 为空时由弹窗向业务层取默认起点：本地是内部存储根目录，远程是服务根。
  * [allowRoot] 只影响本地模式：true 能一路退到文件系统根 "/"，false 停在内部存储根。
  * [repo] 只有 [FolderPickerMode.REMOTE] 才需要。
+ * [userId] 本地浏览看哪个用户的空间：非 0 时「内部存储」的落点是 `/data/media/<userId>`
+ *   （该用户没启动时 FUSE 视图不存在，只有物理路径读得到），选中的路径会翻译回
+ *   `/storage/emulated/<userId>/…` 交给上层。
  *
  * 弹窗不管是因为选中还是返回而关闭，都会调 [onClose]，让底层弹窗能恢复显示；
  * [onPick] 只在使用「选择此文件夹」时调用，用来回填路径。
@@ -84,6 +87,7 @@ data class FolderPickerLauncher(
     val repo: RemoteRepo? = null,
     val initialPath: String = "",
     val allowRoot: Boolean = false,
+    val userId: Int = MediaPath.PRIMARY_USER_ID,
     val onPick: (String) -> Unit,
     val onClose: () -> Unit = {}
 )

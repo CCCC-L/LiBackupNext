@@ -210,3 +210,17 @@ data class SystemDataCountsResponse(
     val counts: Map<String, Int> = emptyMap(),
     val error: String? = null
 )
+
+/**
+ * 批量判断目录是否存在。路径必须是**物理路径**（`/data/media/<userId>/…`）：
+ * root 在 `/storage/emulated/<userId>` 这种 FUSE 视图上会被权限挡住。
+ */
+@Serializable
+data class StatDirsRequest(val paths: List<String> = emptyList())
+
+@Serializable
+data class StatDirsResponse(
+    val ok: Boolean = false,
+    val existing: List<String> = emptyList(),
+    val error: String? = null
+)

@@ -1,5 +1,6 @@
 package com.cc.libackupnext.service.rclone
 
+import com.cc.libackupnext.data.MediaPath
 import com.cc.libackupnext.data.RemoteRepo
 import com.cc.libackupnext.data.json.EnsureServeRequest
 import com.cc.libackupnext.data.json.EnsureServeResponse
@@ -127,7 +128,9 @@ object RcloneClient : DirectoryBrowser {
     private fun fixupTarget(path: String, name: String?): String? {
         if (name == null) return null
         if (name.isBlank() || name == ".." || name.contains('/') || name.contains('\\')) return null
-        val inVolume = LocalVolumes.read(false, false).any { vol ->
+        // 模拟卷也算「卷」：看别的用户的空间时浏览走的是 /data/media/<id>，
+        // 它不在挂载表里，但归属照样要按该用户的 MediaProvider 修
+        val inVolume = MediaPath.userOf(path) != null || LocalVolumes.read(false, false).any { vol ->
             vol.path != "/" && (path == vol.path || path.startsWith("${vol.path}/"))
         }
         if (!inVolume) return null

@@ -26,6 +26,7 @@ internal fun encodePendingBatch(batch: PendingBatch, repoLocation: String): Stri
     batchTab = batch.batchTab.orEmpty(),
     detailFromBatch = batch.detailFromBatch,
     detailApp = batch.detailApp,
+    userId = batch.userId,
     items = batch.items.map { item ->
         BatchItemDto(
             app = item.app,
@@ -72,6 +73,7 @@ private fun PendingBatchDto.toModel(repoLocation: String): PendingBatch? {
             ?.let { runCatching { BackupBatchMode.valueOf(it) }.getOrNull() },
         batchTab = batchTab.takeIf { it.isNotBlank() },
         detailApp = detailApp,
-        detailFromBatch = detailFromBatch
+        detailFromBatch = detailFromBatch,
+        userId = userId
     )
 }

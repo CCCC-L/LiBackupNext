@@ -14,6 +14,7 @@ import com.cc.libackupnext.data.AppInfo
 import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.data.FolderPickerLauncher
 import com.cc.libackupnext.data.FolderPickerMode
+import com.cc.libackupnext.data.MediaPath
 import com.cc.libackupnext.util.AppLog
 
 /**
@@ -42,12 +43,17 @@ fun FileListScreen(
     /** 下拉刷新：重算目录存在性 + 刷新备份数，具体动作由调用方给 */
     isRefreshing: Boolean = false,
     onRefresh: (() -> Unit)? = null,
+    /** 目录现在还在不在（按当前用户算）；行是否划线由它决定 */
+    exists: (String) -> Boolean = { true },
+    /** 顶栏选中的用户：+ 号打开的文件夹选择器看他的空间 */
+    currentUserId: Int = MediaPath.PRIMARY_USER_ID,
 ) {
     // 文件 tab 的 + 号只在存储卷里选：要备份的目录都是用户能看见的那几个卷
     val pickFolder: () -> Unit = {
         onOpenFolderPicker(
             FolderPickerLauncher(
                 mode = FolderPickerMode.LOCAL,
+                userId = currentUserId,
                 onPick = { path ->
                     val row = dirs.firstOrNull { it.packageName == path }
                     // 只剩备份的行（已移除备份目标）再选一次 = 重新加回目标
@@ -87,6 +93,7 @@ fun FileListScreen(
         modifier = modifier,
         isRefreshing = isRefreshing,
         onRefresh = onRefresh,
+        exists = exists,
         // 右下角圆形按钮：打开全屏文件夹选择弹窗
         extraAction = {
             FloatingActionButton(

@@ -200,8 +200,9 @@ internal class DefaultBackupUseCase(
      * 万一进程被杀，下次启动会把残留的暂停恢复掉。
      */
     private suspend fun <T> withAppPaused(app: AppInfo, block: suspend () -> T): T {
-        // 系统数据不是应用，没有进程可停
-        if (BackupTarget.of(app).isFixed) return block()
+        // 只有应用有进程可停：固定目标（Wi-Fi / 联系人 / 通话记录 / 短信）和文件夹都没有。
+        // 别拿文件夹的绝对路径去调 pause —— 那是一次注定失败的 IPC。
+        if (BackupTarget.of(app) != BackupTarget.APP) return block()
 
         val key = "${app.packageName}|${app.userId}"
         val paused = device.pause(app.packageName, app.userId)

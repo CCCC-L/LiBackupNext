@@ -3,7 +3,6 @@ package com.cc.libackupnext.data.target
 import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.AppInfo
-import java.io.File
 
 /** 底部导航把目标分成哪几组。加新类型时选一个，底栏会自动出现它。 */
 enum class TargetNavGroup { APP, DIR, OTHER }
@@ -103,8 +102,9 @@ object TargetSpecs {
                 "恢复：覆盖同名文件，保留新增文件"
             ),
             actions = { listOf(ItemAction.OPEN_DIR, ItemAction.DELETE_DIR) },
-            // 两种「不在备份目标里」都算置灰：目录已被删，或已从备份目标里移除（备份还在）
-            isMissing = { app -> app.onlyInBackup || !File(app.packageName).isDirectory }
+            // 「已移除备份目标」才划线；磁盘存在性由界面的 exists 注入判（要按当前用户算，
+            // 这里拿不到），见 TargetListing.dirRows
+            isMissing = { app -> app.onlyInBackup }
         ),
 
         TargetSpec(

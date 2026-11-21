@@ -86,7 +86,7 @@ class TargetListingTest {
     }
 
     @Test
-    fun `目录被删但还有备份时，行仍然出现并划线`() {
+    fun `目录被删但还有备份时，行仍然出现`() {
         val gone = missingDir("gone")
 
         val rows = TargetListing.dirRows(
@@ -96,7 +96,79 @@ class TargetListingTest {
         )
 
         assertEquals(listOf(gone), rows.map { it.packageName })
-        assertTrue(TargetSpecs.of(BackupTarget.DIR).isMissing(rows.single()))
+    }
+
+    // ==================== 多用户 ====================
+
+    @Test
+    fun `配置里的路径按当前用户展开`() {
+        val config = "/storage/emulated/0/DCIM"
+
+        val rows = TargetListing.dirRows(
+            extraDirs = setOf(config),
+            currentUserId = 10,
+            exists = { true }
+        )
+
+        assertEquals(listOf("/storage/emulated/10/DCIM"), rows.map { it.packageName })
+        assertEquals(10, rows.single().userId)
+    }
+
+    @Test
+    fun `同一个配置在不同用户下展开成不同路径`() {
+        val config = "/storage/emulated/10/DCIM"
+
+        val asPrimary = TargetListing.dirRows(extraDirs = setOf(config), exists = { true })
+        val asTen = TargetListing.dirRows(
+            extraDirs = setOf(config),
+            currentUserId = 10,
+            exists = { true }
+        )
+
+        assertEquals(listOf("/storage/emulated/0/DCIM"), asPrimary.map { it.packageName })
+        assertEquals(listOf("/storage/emulated/10/DCIM"), asTen.map { it.packageName })
+    }
+
+    @Test
+    fun `存在性是按展开后的路径问的`() {
+        val asked = mutableListOf<String>()
+
+        TargetListing.dirRows(
+            extraDirs = setOf("/storage/emulated/0/DCIM"),
+            currentUserId = 10,
+            exists = { path ->
+                asked += path
+                false
+            }
+        )
+
+        assertEquals(listOf("/storage/emulated/10/DCIM"), asked)
+    }
+
+    @Test
+    fun `SD 卡不展开，任何用户视角下都是同一条`() {
+        val sd = "/storage/1A2B-3C4D/Music"
+
+        val rows = TargetListing.dirRows(
+            extraDirs = setOf(sd),
+            currentUserId = 10,
+            exists = { true }
+        )
+
+        assertEquals(listOf(sd), rows.map { it.packageName })
+        assertEquals("SD 卡不归属任何用户", 0, rows.single().userId)
+    }
+
+    @Test
+    fun `划线只看「已移除备份目标」，磁盘存在性由界面注入`() {
+        val kept = dir("kept")
+        val removed = dir("removed")
+
+        val rows = TargetListing.dirRows(extraDirs = setOf(kept), backedUpDirs = setOf(removed))
+        val spec = TargetSpecs.of(BackupTarget.DIR)
+
+        assertFalse(spec.isMissing(rows.first { it.packageName == kept }))
+        assertTrue(spec.isMissing(rows.first { it.packageName == removed }))
     }
 
     // ==================== 一页的行（批量页） ====================
@@ -215,5 +287,38 @@ class TargetListingTest {
             setOf("/storage/emulated/0/DCIM"),
             TargetListing.backedUpDirs(summaries)
         )
+    }
+
+    @Test
+    fun `备份概况里的目录归一成用户无关的身份`() {
+        val keys = listOf(
+            "/storage/emulated/0/DCIM",
+            "/storage/emulated/10/DCIM",
+            "/storage/1A2B-3C4D/Music",
+            "com.app",
+            "wifi"
+        )
+        val summaries = keys.associateWith { key ->
+            AppBackupSummary(packageName = key, count = 1, latest = BackupEntry())
+        }
+
+        assertEquals(
+            "两个用户的 DCIM 是同一个身份；SD 卡归一不动它",
+            setOf("/storage/emulated/0/DCIM", "/storage/1A2B-3C4D/Music"),
+            TargetListing.backedUpDirs(summaries)
+        )
+    }
+
+    @Test
+    fun `别的用户备份过的目录，在当前用户视角下也出一行`() {
+        val rows = TargetListing.dirRows(
+            extraDirs = emptySet(),
+            backedUpDirs = setOf("/storage/emulated/0/test"),
+            currentUserId = 10,
+            exists = { false }
+        )
+
+        assertEquals(listOf("/storage/emulated/10/test"), rows.map { it.packageName })
+        assertTrue("只在备份里（当前用户的空间里没有）", rows.single().onlyInBackup)
     }
 }

@@ -127,6 +127,32 @@ class DirView(
 
     override val title: String = normalized.substringAfterLast('/').ifBlank { normalized }
     override val subtitle: String = path
+
+    /**
+     * 和 [AppView] 同一句判据：主用户的行不加装饰，其他用户的行标出归属。
+     *
+     * 文件夹的「属于谁」跟着路径走，所以换用户后同一个配置项会带上不同的徽标 ——
+     * 这正是要传达的：同一个名字，不同用户空间里是不同的东西。
+     */
+    @Composable
+    override fun BoxScope.IconOverlay() {
+        if (isNonPrimaryUser(app.userId)) {
+            UserBadge(
+                userId = app.userId,
+                compact = true,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(2.dp)
+            )
+        }
+    }
+
+    override fun trailing(): (@Composable () -> Unit)? =
+        if (isNonPrimaryUser(app.userId)) {
+            { UserBadge(userId = app.userId) }
+        } else {
+            null
+        }
 }
 
 /**

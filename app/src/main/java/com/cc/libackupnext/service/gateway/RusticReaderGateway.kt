@@ -5,6 +5,7 @@ import com.cc.libackupnext.data.AppBackupSummary
 import com.cc.libackupnext.data.prefs.RepoPrefs
 import com.cc.libackupnext.data.BackupEntry
 import com.cc.libackupnext.data.BackupSnapshot
+import com.cc.libackupnext.data.MediaPath
 import com.cc.libackupnext.data.RepoOverview
 import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.SnapshotMeta
@@ -94,7 +95,10 @@ internal class RusticReaderGateway(
         packageName: String?
     ): Result<List<BackupSnapshot>> = withContext(Dispatchers.IO) {
         try {
-            val request = ListSnapshotsRequest(packageName = packageName.orEmpty())
+            // 目录的备份列表跨用户共享（和应用按包名共享是同一条规则），所以查仓库
+            // 一律用归一后的身份，而不是当前用户空间里的绝对路径。应用 / 固定目标原样。
+            val key = packageName?.let { MediaPath.normalize(it) }
+            val request = ListSnapshotsRequest(packageName = key.orEmpty())
             val response = session.remote.call(retryOnDeath = true) {
                 session.service().listSnapshots(request.toJsonText())
             }.parseJson<ListSnapshotsResponse>()

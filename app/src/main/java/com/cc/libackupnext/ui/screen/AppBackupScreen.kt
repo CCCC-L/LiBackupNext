@@ -44,6 +44,7 @@ import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.data.BatchAction
 import com.cc.libackupnext.data.BatchItem
 import com.cc.libackupnext.data.BatchOrigin
+import com.cc.libackupnext.data.MediaPath
 import com.cc.libackupnext.data.PendingBatch
 import com.cc.libackupnext.data.isVersionChangedFrom
 import com.cc.libackupnext.data.target.ItemAction
@@ -146,7 +147,19 @@ fun AppBackupScreen(
     // 页面展示的应用：优先当前用户下的同名应用，切换用户后名称/版本/图标都会跟着变。
     // 当前用户没装这个应用时退回原数据，但 userId 必须用当前选中的用户，
     // 否则安装/恢复会继续作用在切换前的那个用户上。
-    val displayApp = (appForCurrentUser ?: app).copy(userId = currentUserId)
+    //
+    // 文件夹：身份是「用户无关的路径」，换用户 = 换到那个空间里的同一个文件夹，
+    // 所以路径也要跟着重算 —— 备份源和恢复落点都靠它。
+    val displayApp = if (target == BackupTarget.DIR) {
+        val path = MediaPath.forUser(app.packageName, currentUserId)
+        // 归属跟着路径走：SD 卡不归属任何用户，别给它挂上当前用户的徽标
+        app.copy(
+            packageName = path,
+            userId = MediaPath.userOf(path) ?: MediaPath.PRIMARY_USER_ID
+        )
+    } else {
+        (appForCurrentUser ?: app).copy(userId = currentUserId)
+    }
 
     // 冻结状态直接来自列表数据（ApplicationInfo.enabled），不再单独查询
     var isFrozen by remember(displayApp.packageName, displayApp.userId) {
@@ -172,8 +185,13 @@ fun AppBackupScreen(
         dirLifecycleOwner.lifecycle.addObserver(observer)
         onDispose { dirLifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    val dirExists = remember(dirExistsTick, displayApp.packageName) {
-        java.io.File(displayApp.packageName).isDirectory
+    // 目录还在不在：判据和列表页同一个出口（按当前用户算，别的用户的空间要 root 判）
+    val dirExistsMap by viewModel.dirExistsMap.collectAsState()
+    LaunchedEffect(displayApp.packageName, dirExistsTick) {
+        viewModel.probeDirs(listOf(displayApp.packageName))
+    }
+    val dirExists = remember(dirExistsTick, displayApp.packageName, dirExistsMap) {
+        viewModel.dirExists(displayApp.packageName)
     }
 
     // 目录的「已不存在」直接看磁盘（恢复成功后 dirExistsTick 会重算）；应用看安装状态；
@@ -339,7 +357,8 @@ fun AppBackupScreen(
                     operationId = operationId,
                     origin = BatchOrigin.DETAIL,
                     detailApp = displayApp,
-                    detailFromBatch = fromBatch
+                    detailFromBatch = fromBatch,
+                    userId = currentUserId
                 )
             )
         }
@@ -503,7 +522,8 @@ fun AppBackupScreen(
                     operationId = System.currentTimeMillis(),
                     origin = BatchOrigin.DETAIL,
                     detailApp = displayApp,
-                    detailFromBatch = fromBatch
+                    detailFromBatch = fromBatch,
+                    userId = currentUserId
                 )
             )
         }
@@ -675,8 +695,13 @@ fun AppBackupScreen(
                 showSortMenu = false,
                 // 详情页不排序，但帮助按钮要留着
                 showMiddleButton = true,
-                // 用户切换只跟应用有关，文件详情页不显示
-                showUserButton = target.isApp,
+                // 用户切换：应用和文件夹都「属于某个用户」，换了他就是换到那个空间里的同一个目标
+                showUserButton = target.isApp || target == BackupTarget.DIR,
+                onUserSelected = { user ->
+                    viewModel.currentUserId.value = user.id
+                    // 应用页要换一批包；文件夹的路径由 displayApp 跟着重算
+                    if (target.isApp) viewModel.loadList()
+                },
                 searchPlaceholder = "搜索备注",
                 searchOpen = detailSearchOpen,
                 searchQueryText = detailQuery,

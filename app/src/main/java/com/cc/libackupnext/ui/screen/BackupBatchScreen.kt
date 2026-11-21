@@ -66,6 +66,7 @@ import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.data.BatchAction
 import com.cc.libackupnext.data.BatchItem
 import com.cc.libackupnext.data.BatchOrigin
+import com.cc.libackupnext.data.MediaPath
 import com.cc.libackupnext.data.PendingBatch
 import com.cc.libackupnext.data.isVersionChangedFrom
 import com.cc.libackupnext.data.kind
@@ -162,6 +163,8 @@ fun BackupBatchScreen(
     val extraDirs by backupTargets.dirs.collectAsState()
     val users by viewModel.users.collectAsState()
     val currentUserId by viewModel.currentUserId.collectAsState()
+    // 别的用户空间里的目录存在性（root 探的）；表变了行要重算
+    val dirExistsMap by viewModel.dirExistsMap.collectAsState()
 
     // 当前用户名字，找不到就用「用户 id」
     val currentUserName = remember(users, currentUserId) {
@@ -230,17 +233,29 @@ fun BackupBatchScreen(
     // 倒序：应用行已经由 displayApps 排好，文件夹行要在这里单独反转
     val isReverse by viewModel.isReverse.collectAsState()
 
+    // 这一页的候选路径：备份目标展开到当前用户的空间 + 当前用户备份过的目录。
+    // 只探别的用户空间的路径，主用户的空间和 SD 卡同步就判准了。
+    val dirCandidates = remember(extraDirs, backedUpDirs, currentUserId) {
+        (extraDirs.map { MediaPath.forUser(it, currentUserId) } + backedUpDirs).distinct()
+    }
+    LaunchedEffect(dirCandidates) { viewModel.probeDirs(dirCandidates) }
+
     // 这一页的行：目标 + 展示数据。多目标页就是几个目标各自的行拼起来。
     // 管理页只显示仓库里有备份的。
-    val rows = remember(displayApps, overview, mode, targets, isReverse, backedUpDirs, extraDirs) {
+    val rows = remember(
+        displayApps, overview, mode, targets, isReverse, backedUpDirs, extraDirs,
+        currentUserId, dirExistsMap
+    ) {
         targets.flatMap { target ->
             val list = TargetListing.rows(
                 target = target,
                 apps = displayApps,
                 create = mode == BackupBatchMode.CREATE,
-                hasBackup = { overview.containsKey(it) },
+                hasBackup = { overview.containsKey(MediaPath.backupKey(it)) },
                 extraDirs = extraDirs,
-                backedUpDirs = backedUpDirs
+                backedUpDirs = backedUpDirs,
+                currentUserId = currentUserId,
+                exists = viewModel::dirExists
             ).map { TargetRow(target, it) }
             // 应用行来自 displayApps（已经按 sortType + 倒序排过）；
             // 文件夹行来自「目标和有备份的并集」，已按路径排好，得在这里单独反转。
@@ -319,9 +334,11 @@ fun BackupBatchScreen(
                     target = target,
                     apps = displayApps,
                     create = true,
-                    hasBackup = { overview.containsKey(it) },
+                    hasBackup = { overview.containsKey(MediaPath.backupKey(it)) },
                     extraDirs = extraDirs,
-                    backedUpDirs = backedUpDirs
+                    backedUpDirs = backedUpDirs,
+                    currentUserId = currentUserId,
+                    exists = viewModel::dirExists
                 ).map { TargetRow(target, it) }
             }
             if (allRows.isEmpty()) return@LaunchedEffect
@@ -348,7 +365,8 @@ fun BackupBatchScreen(
 
     /** 这个应用要操作的那条备份：详情页里明确选过的优先，否则用最新的。 */
     fun entryOf(packageName: String): BackupEntry? =
-        viewModel.selectedEntries[packageName] ?: overview[packageName]?.latest
+        viewModel.selectedEntries[packageName]
+            ?: overview[MediaPath.backupKey(packageName)]?.latest
 
     /** 这一行属于哪个目标。行是从 [rows] 来的，一定查得到。 */
     fun targetOfRow(packageName: String): BackupTarget =
@@ -528,7 +546,8 @@ fun BackupBatchScreen(
                 operationId = operationId,
                 origin = BatchOrigin.BATCH,
                 batchMode = mode,
-                batchTab = tab.name
+                batchTab = tab.name,
+                userId = currentUserId
             )
         )
         return items to operationId
@@ -706,19 +725,20 @@ fun BackupBatchScreen(
             }
         ) { item, onProgress ->
             // 图标有没有备份过，概况里已经带了，不用每个应用再查一次仓库
+            val summary = overview[MediaPath.backupKey(item.app.packageName)]
             backupCase.backup(
                 app = item.app,
                 groups = item.kinds,
                 onProgress = onProgress,
                 operationId = operationId,
                 batchId = batchId,
-                iconAlreadyBackedUp = overview[item.app.packageName]?.hasIcon,
+                iconAlreadyBackedUp = summary?.hasIcon,
                 // 同类型最新快照的 id：给 rustic 当 parent，省掉它自己列一遍全部快照
-                parentIds = overview[item.app.packageName]?.latest?.snapshots
+                parentIds = summary?.latest?.snapshots
                     ?.mapNotNull { snapshot -> snapshot.kind()?.let { it to snapshot.id } }
                     ?.toMap(),
                 // 概况里已经有备份次数：没到保留上限就不用为清理再查一次仓库
-                knownBackupCount = overview[item.app.packageName]?.count
+                knownBackupCount = summary?.count
             ).map { cleaned ->
                 cleanedBackups += cleaned
             }
@@ -850,9 +870,13 @@ fun BackupBatchScreen(
             AppTopBar(
                 viewModel = viewModel,
                 title = if (mode == BackupBatchMode.CREATE) "新建备份" else "管理备份",
-                // 用户切换只跟应用有关，文件批量页不显示
-                // 只有应用页需要切用户
-                showUserButton = targets.any { it.isApp },
+                // 应用和文件夹都「属于某个用户」；这一页的行是按当前用户展开的，切用户有意义
+                showUserButton = targets.any { it.isApp || it == BackupTarget.DIR },
+                // 切用户：这一页的行按新用户重新展开；应用页才需要重拉包列表
+                onUserSelected = { user ->
+                    viewModel.currentUserId.value = user.id
+                    if (targets.any { it.isApp }) viewModel.loadList()
+                },
                 // 系统数据页是固定三行，没有可排序的内容
                 showSortMenu = tab != HomeTab.OTHERS,
                 // 文件夹页只留「倒序」；只有应用页需要四种排序方式
@@ -991,7 +1015,7 @@ fun BackupBatchScreen(
                 BackupSelectRow(
                     app = app,
                     target = targetOfRow(app.packageName),
-                    summary = overview[app.packageName],
+                    summary = overview[MediaPath.backupKey(app.packageName)],
                     entry = entryOf(app.packageName),
                     showBackupTime = mode == BackupBatchMode.MANAGE,
                     sortType = sortType,
@@ -1007,7 +1031,8 @@ fun BackupBatchScreen(
                     onToggleApp = { if (multiSelect) toggleInMultiSelect(app) else toggleApp(app) },
                     // 多选模式下这一列不再可点，点击交给整行（只切换选中）
                     onOpenDetail = { onOpenAppDetail(app) },
-                    onSwipeSelect = { onRowSwiped(app) }
+                    onSwipeSelect = { onRowSwiped(app) },
+                    exists = viewModel.dirExists(app.packageName)
                 )
             }
 
@@ -1185,12 +1210,14 @@ private fun BackupSelectRow(
     onToggleKind: (BackupGroup) -> Unit,
     onToggleApp: () -> Unit,
     onOpenDetail: () -> Unit,
-    onSwipeSelect: () -> Unit
+    onSwipeSelect: () -> Unit,
+    /** 文件夹目标：目录现在还在不在（按当前用户算）；应用 / 固定目标传 true。 */
+    exists: Boolean = true
 ) {
     val colors = MaterialTheme.colorScheme
 
     // 应用没装 / 文件夹被删 / 文件夹已移除备份目标：和列表页一样，图标置灰 + 标题划线
-    val missing = target.isMissing(app)
+    val missing = target.isMissing(app) || (target == BackupTarget.DIR && !exists)
 
     // 备份版本只取一次：下面判变化、显示「> 备份版本」都用它
     val backupVersion = summary?.latest?.version

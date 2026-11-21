@@ -1,5 +1,6 @@
 package com.cc.libackupnext.service.target
 
+import com.cc.libackupnext.data.MediaPath
 import com.cc.libackupnext.data.prefs.BackupPrefs
 import kotlinx.coroutines.flow.StateFlow
 
@@ -33,10 +34,11 @@ internal class PrefsBackupTargets(private val prefs: BackupPrefs) : BackupTarget
     override val dirs: StateFlow<Set<String>> = prefs.extraDirsFlow
 
     override fun addDir(path: String) {
-        prefs.extraDirs = prefs.extraDirs + path
+        // 存「用户无关」的路径：同一个 DCIM 在哪个用户视角下加进来都是同一条配置
+        prefs.extraDirs = prefs.extraDirs + MediaPath.normalize(path)
     }
 
     override fun removeDir(path: String) {
-        prefs.extraDirs = prefs.extraDirs - path
+        prefs.extraDirs = prefs.extraDirs - MediaPath.normalize(path)
     }
 }

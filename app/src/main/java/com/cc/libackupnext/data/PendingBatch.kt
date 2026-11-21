@@ -24,6 +24,8 @@ enum class BatchOrigin { BATCH, DETAIL }
  *
  * @param operationId 一次逻辑操作的标识，备份时写进所有快照的 tag；重试沿用，
  *   主动发起新操作时换新值。
+ * @param userId 发起时顶栏选中的用户。续跑前要先切回它 —— 执行用的是 [items] 里
+ *   冻结的条目（和当前顶栏无关），但界面得和实际对齐，否则用户看到的是另一个用户的行。
  */
 data class PendingBatch(
     val action: BatchAction,
@@ -34,5 +36,7 @@ data class PendingBatch(
     /** 发起时在哪个 tab（[com.cc.libackupnext.ui.HomeTab] 的 name）；UI 自己转回枚举。 */
     val batchTab: String? = null,
     val detailApp: AppInfo? = null,
-    val detailFromBatch: Boolean = false
+    val detailFromBatch: Boolean = false,
+    /** 老数据没有这个字段 → null，续跑时不动当前用户。 */
+    val userId: Int? = null
 )

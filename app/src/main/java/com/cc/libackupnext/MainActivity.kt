@@ -318,6 +318,7 @@ private fun AppRoot(crashRecovery: Boolean) {
             repo = launcher.repo,
             initialPath = launcher.initialPath,
             allowRoot = launcher.allowRoot,
+            userId = launcher.userId,
             onPick = { path ->
                 launcher.onPick(path)
                 folderPickerLauncher = null

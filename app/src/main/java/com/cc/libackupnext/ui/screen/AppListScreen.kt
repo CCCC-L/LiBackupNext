@@ -55,6 +55,8 @@ import com.cc.libackupnext.data.BackupBatchMode
 import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.data.BatchOrigin
 import com.cc.libackupnext.data.FolderPickerLauncher
+import com.cc.libackupnext.data.MediaPath
+import com.cc.libackupnext.data.isDirectory
 import com.cc.libackupnext.service.target.TargetListing
 import com.cc.libackupnext.ui.AppBottomBar
 import com.cc.libackupnext.ui.AppTopBar
@@ -186,9 +188,6 @@ fun AppListScreen(
     val settingsWeight: () -> Float = {
         (1f - abs(pagerPosition - HomeTab.SETTINGS.ordinal)).coerceIn(0f, 1f)
     }
-    val appWeight: () -> Float = {
-        (1f - abs(pagerPosition - HomeTab.APPS.ordinal)).coerceIn(0f, 1f)
-    }
     // 系统数据页也没有排序按钮：和设置页一样，中间按钮跟着手指收起
     val othersWeight: () -> Float = {
         (1f - abs(pagerPosition - HomeTab.OTHERS.ordinal)).coerceIn(0f, 1f)
@@ -229,20 +228,31 @@ fun AppListScreen(
     }
     // 文件页要备份的目录：订阅 service 层的备份目标，界面不再自己缓存一份
     val extraDirs by backupTargets.dirs.collectAsState()
-    // 仓库里有备份的目录
+    // 仓库里有备份的目录（已按当前用户筛过）
     val backedUpDirs by viewModel.backedUpDirs.collectAsState()
     val fileListState = rememberLazyListState()
     val othersListState = rememberLazyListState()
     // 文件页的刷新信号：回到前台 / 主动刷新时递增，让它重新判断哪些目录还在硬盘上
     val dirRefreshTick by viewModel.dirRefreshTick.collectAsState()
-    // 行 = 备份目标和有备份的目录的并集，再去掉「磁盘上没了、也没备份」的
-    val fileRows = remember(extraDirs, backedUpDirs, dirRefreshTick) {
-        TargetListing.dirRows(extraDirs, backedUpDirs)
-    }
-
 
     val allApps by viewModel.allApps.collectAsState()
     val currentUserId by viewModel.currentUserId.collectAsState()
+
+    // 别的用户空间里的目录存在性（root 探的）；表变了行要重算
+    val dirExistsMap by viewModel.dirExistsMap.collectAsState()
+
+    // 文件页的候选路径：备份目标和备份过的目录都展开到当前用户的空间
+    val dirCandidates = remember(extraDirs, backedUpDirs, currentUserId) {
+        (extraDirs.map { MediaPath.forUser(it, currentUserId) } +
+                backedUpDirs.map { MediaPath.forUser(it, currentUserId) }).distinct()
+    }
+    // 只探别的用户空间的路径：主用户的空间和 SD 卡普通进程同步就判准了
+    LaunchedEffect(dirCandidates, dirRefreshTick) { viewModel.probeDirs(dirCandidates) }
+
+    // 行 = 备份目标和有备份的目录的并集，再去掉「不存在、也没备份」的
+    val fileRows = remember(dirCandidates, dirRefreshTick, dirExistsMap) {
+        TargetListing.dirRows(extraDirs, backedUpDirs, currentUserId, viewModel::dirExists)
+    }
     val systemCounts by viewModel.systemDataCounts.collectAsState()
 
     // 切换用户 / 进程恢复时，保持当前打开的页面，只把 userId 换成新用户
@@ -253,7 +263,21 @@ fun AppListScreen(
         }
 
         val found = allApps.firstOrNull { it.packageName == pkg && it.userId == currentUserId }
-        selectedApp = found ?: selectedApp?.takeIf { it.packageName == pkg }?.copy(userId = currentUserId)
+        val next = found ?: selectedApp?.takeIf { it.packageName == pkg }?.let { current ->
+            // 文件夹的身份是「用户无关的路径」：换用户 = 换到那个空间里的同一个文件夹，
+            // 所以路径要跟着重算，否则备份 / 恢复会落到切换前的那个用户
+            if (BackupTarget.of(current) == BackupTarget.DIR) {
+                current.copy(
+                    packageName = MediaPath.forUser(current.packageName, currentUserId),
+                    userId = currentUserId
+                )
+            } else {
+                current.copy(userId = currentUserId)
+            }
+        }
+        selectedApp = next
+        // 文件夹的路径变了，比对用的 key 也要跟着换，否则下次进来永远对不上
+        next?.let { if (it.packageName != pkg) selectedPackage = it.packageName }
     }
 
     /**
@@ -355,6 +379,19 @@ fun AppListScreen(
     fun resumePending() {
         viewModel.pendingBatch.value?.let { batch ->
             if (isSearching) viewModel.toggleSearch()
+
+            // 批次冻的是发起时的用户：先切回去，界面才和实际要执行的内容对齐。
+            // 执行本身用的是 batch.items（已经冻结），和顶栏无关 —— 这里只是别让用户看错行。
+            batch.userId?.let { userId ->
+                if (viewModel.currentUserId.value != userId) {
+                    viewModel.currentUserId.value = userId
+                    // 应用批次需要那个用户的包列表；纯文件夹批次的行会按新用户重新展开
+                    if (batch.items.any { !it.app.isDirectory }) {
+                        viewModel.loadList(scrollToTop = false, silent = true)
+                    }
+                }
+            }
+
             when (batch.origin) {
                 BatchOrigin.BATCH -> {
                     batch.batchMode?.let { batchMode = it }
@@ -493,8 +530,13 @@ fun AppListScreen(
                             ((settingsWeight() - 0.35f) / 0.65f).coerceIn(0f, 1f)
                         },
                         titleAlpha = { ((0.5f - settingsWeight()) / 0.5f).coerceIn(0f, 1f) },
-                        // 用户切换只跟应用有关
-                        showUserButton = tab == HomeTab.APPS,
+                        // 用户切换和应用、文件夹有关（系统数据 / 设置没有「属于谁」）
+                        showUserButton = tab == HomeTab.APPS || tab == HomeTab.FILES,
+                        // 应用页切用户 = 换一批包；文件页的行按新用户重新展开，不需要额外动作
+                        onUserSelected = { user ->
+                            viewModel.currentUserId.value = user.id
+                            if (tab == HomeTab.APPS) viewModel.loadList()
+                        },
                         // 设置页没有可搜的东西；系统数据页是固定三行，没有可排序的内容
                         showSearch = tab != HomeTab.SETTINGS,
                         showSortMenu = tab != HomeTab.SETTINGS && tab != HomeTab.OTHERS,
@@ -507,7 +549,7 @@ fun AppListScreen(
                         },
                         // 连续权重：拖动时按钮宽度跟着手指走，而不是过半才补一段动画
                         searchWeight = { 1f - settingsWeight() },
-                        userWeight = appWeight,
+                        userWeight = { (HomeTab.OTHERS.ordinal - pagerPosition).coerceIn(0f, 1f) },
                         middleWeight = { 1f - (settingsWeight() + othersWeight()).coerceIn(0f, 1f) },
                         moreWeight = { 1f - settingsWeight() },
                         searchPlaceholder = tab.searchHint,
@@ -591,7 +633,11 @@ fun AppListScreen(
                                     // 目录可能在别处被删了：重算一遍存在性，再刷新备份数
                                     viewModel.refreshDirs()
                                     viewModel.refresh()
-                                }
+                                },
+                                // 存在性要按当前用户算：别的用户的目录只有 root 判得准
+                                exists = viewModel::dirExists,
+                                // + 号打开的文件夹选择器也跟着看当前用户的空间
+                                currentUserId = currentUserId
                             )
 
                             HomeTab.OTHERS -> TargetListScreen(

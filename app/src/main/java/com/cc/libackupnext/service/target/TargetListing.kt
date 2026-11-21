@@ -3,6 +3,7 @@ package com.cc.libackupnext.service.target
 import com.cc.libackupnext.data.AppBackupSummary
 import com.cc.libackupnext.data.AppInfo
 import com.cc.libackupnext.data.BackupTarget
+import com.cc.libackupnext.data.MediaPath
 import com.cc.libackupnext.data.dirAppInfo
 import java.io.File
 
@@ -22,9 +23,10 @@ object TargetListing {
      * @param apps 应用列表（[BackupTarget.APP] 用）
      * @param create true = 新建备份页，false = 管理页（只留有备份的）
      * @param hasBackup 这个包名 / 路径在仓库里有没有备份
-     * @param extraDirs 当前备份目标里的目录
-     * @param backedUpDirs 仓库里有备份的目录
-     * @param exists 目录是否还在磁盘上
+     * @param extraDirs 当前备份目标里的目录（配置层：user 段已归一）
+     * @param backedUpDirs 仓库里有备份的目录（已按当前用户筛过）
+     * @param currentUserId 顶栏选中的用户：目录要展开到他的空间
+     * @param exists 目录是否还在当前用户的空间里
      */
     fun rows(
         target: BackupTarget,
@@ -33,6 +35,7 @@ object TargetListing {
         hasBackup: (String) -> Boolean,
         extraDirs: Set<String> = emptySet(),
         backedUpDirs: Set<String> = emptySet(),
+        currentUserId: Int = MediaPath.PRIMARY_USER_ID,
         exists: (String) -> Boolean = { File(it).isDirectory },
     ): List<AppInfo> {
         val all = when (target) {
@@ -42,6 +45,7 @@ object TargetListing {
             BackupTarget.DIR -> dirRows(
                 extraDirs = extraDirs,
                 backedUpDirs = if (create) emptySet() else backedUpDirs,
+                currentUserId = currentUserId,
                 exists = exists
             )
             // 固定目标永远只有一行，和系统里有没有数据无关
@@ -51,30 +55,48 @@ object TargetListing {
     }
 
     /**
-     * 文件夹的行：**备份目标 ∪ 仓库里有备份的目录**，再去掉「磁盘上没了、也没备份」的。
+     * 文件夹的行：**备份目标 ∪ 仓库里有备份的目录**，再去掉「不存在、也没备份」的。
      *
-     * - 在 [extraDirs] 里 = 当前是备份目标，正常显示；
-     * - 只在 [backedUpDirs] 里 = 已移除备份目标，备份还在 → 标 `onlyInBackup`，
-     *   行会被 `TargetSpecs` 的 `isMissing` 划线置灰，仍可恢复；
-     * - 两边都没有、磁盘上也没了 → 不显示：它既不能备份也没法恢复，留着只是噪音。
+     * 备份目标存的是「用户无关」的路径（[MediaPath.normalize] 过），这里按
+     * [currentUserId] 展开 —— 同一个「DCIM」配置，在用户 10 视角下就是
+     * `/storage/emulated/10/DCIM`，备份也落到 `/data/media/10/DCIM`。
      *
-     * 注：目录被删了但**还有备份**时仍然显示（划线）—— 那是唯一能恢复它的入口。
+     * - 在当前用户空间里存在 → 正常显示；
+     * - 不存在但有备份 → 仍然显示（划线），那是唯一能恢复它的入口；
+     * - 不存在也没有备份 → 不显示：既不能备份也没法恢复，留着只是噪音。
      */
     fun dirRows(
         extraDirs: Set<String>,
         backedUpDirs: Set<String> = emptySet(),
+        currentUserId: Int = MediaPath.PRIMARY_USER_ID,
         exists: (String) -> Boolean = { File(it).isDirectory },
-    ): List<AppInfo> = (extraDirs + backedUpDirs)
-        .filter { exists(it) || it in backedUpDirs }
-        .sorted()
-        .map { dirAppInfo(it, onlyInBackup = it !in extraDirs) }
+    ): List<AppInfo> {
+        val targets = extraDirs.mapTo(LinkedHashSet()) { MediaPath.forUser(it, currentUserId) }
+        // 备份身份是「用户无关」的路径，和配置同一套 key：备份过的文件夹在哪个用户视角下
+        // 都是同一行，只是指向各自空间里的那份
+        val backedUp = backedUpDirs.mapTo(LinkedHashSet()) { MediaPath.forUser(it, currentUserId) }
+        return (targets + backedUp)
+            .filter { exists(it) || it in backedUp }
+            .sorted()
+            .map {
+                dirAppInfo(
+                    path = it,
+                    userId = MediaPath.userOf(it) ?: MediaPath.PRIMARY_USER_ID,
+                    onlyInBackup = it !in targets
+                )
+            }
+    }
 
     /**
-     * 备份概况里哪些 key 是目录。
+     * 备份概况里哪些 key 是目录（归一后的路径）。
      *
-     * 目录目标的「包名」就是绝对路径（`/storage/...`），应用包名不会以 `/` 开头 ——
-     * 这个约定只在这里出现一次，界面不用知道。
+     * 目录目标的「包名」就是绝对路径，应用包名不会以 `/` 开头 —— 这个约定只在这里
+     * 出现一次，界面不用知道。归一是因为**目录的备份列表跨用户共享**：在用户 0 里
+     * 备份过的 test，切到用户 10 也要能看到那一行（灰的，因为 10 的空间里没有）。
+     * SD 卡本来就不归属用户，归一不动它。
      */
     fun backedUpDirs(summaries: Map<String, AppBackupSummary>): Set<String> =
-        summaries.keys.filterTo(LinkedHashSet()) { it.startsWith('/') }
+        summaries.keys.filterTo(LinkedHashSet()) { path ->
+            path.startsWith('/')
+        }.mapTo(LinkedHashSet()) { MediaPath.normalize(it) }
 }

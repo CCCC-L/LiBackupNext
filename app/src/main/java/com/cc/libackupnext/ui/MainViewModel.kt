@@ -12,6 +12,7 @@ import com.cc.libackupnext.data.AppInfo
 import com.cc.libackupnext.data.BackupBatchMode
 import com.cc.libackupnext.data.BackupGroup
 import com.cc.libackupnext.data.BatchItem
+import com.cc.libackupnext.data.MediaPath
 import com.cc.libackupnext.data.PendingBatch
 import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.UserAccount
@@ -37,6 +38,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 enum class SortType { NAME, INSTALL_TIME, UPDATE_TIME, BACKUP_TIME }
 
@@ -193,6 +195,54 @@ class MainViewModel(
     /** 文件页的目录存在性：tick 变了，列表就重新判断哪些目录还在硬盘上。 */
     fun refreshDirs() {
         _dirRefreshTick.update { it + 1 }
+    }
+
+    // ==================== 目录存在性 ====================
+
+    /**
+     * 别的用户空间里的目录存在性：物理路径 -> 是否存在。
+     *
+     * 主进程只看得见自己用户的空间，别的用户的目录只能由 root 判
+     * （[DeviceGateway.existingDirs]）。表里没有 = 还没探到，[dirExists] 按「存在」处理 ——
+     * 灰是「确认没了」的强信号，不能因为一次没探到就把整页行刷成灰的。
+     */
+    private val _dirExistsMap = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val dirExistsMap: StateFlow<Map<String, Boolean>> = _dirExistsMap.asStateFlow()
+
+    /**
+     * 这个目录现在还在不在。传可见路径（`/storage/emulated/<n>/…`）或 SD 卡路径。
+     *
+     * 自己用户的空间和 SD 卡普通进程同步就能判准，不用等 IPC；别的用户才查缓存。
+     */
+    fun dirExists(path: String): Boolean {
+        val owner = MediaPath.userOf(path)
+        if (owner == null || owner == MediaPath.PRIMARY_USER_ID) return File(path).isDirectory
+        return _dirExistsMap.value[MediaPath.physical(path)] ?: true
+    }
+
+    /**
+     * 探一批目录（传可见路径）。
+     *
+     * 只问别的用户空间的路径，同一个路径重复调用无副作用 —— 界面按「候选路径集合」
+     * 触发即可，不用自己记探过哪些。
+     */
+    fun probeDirs(paths: Collection<String>) {
+        val foreign = paths
+            .map { MediaPath.physical(it) }
+            .filter { path -> MediaPath.userOf(path)?.let { it != MediaPath.PRIMARY_USER_ID } == true }
+            .distinct()
+        if (foreign.isEmpty()) return
+
+        viewModelScope.launch {
+            device.existingDirs(foreign)
+                .onSuccess { existing ->
+                    // 合并而不是整体替换：详情页和列表页可能各探一批，谁也覆盖不了谁
+                    _dirExistsMap.update { current ->
+                        current + foreign.associateWith { it in existing }
+                    }
+                }
+                .onFailure { AppLog.w(TAG, "探测目录存在性失败", it) }
+        }
     }
 
     /** 「其他」页条数：这几个数是别的应用随时会改的，不能只信进应用时那次。 */
@@ -403,15 +453,17 @@ class MainViewModel(
             }.getOrElse { emptyList() }
         }.associateBy { it.packageName }
 
-        if (summaries == _backupSummaries.value) return
-        _backupSummaries.value = summaries
-        // 「哪些 key 是目录」的判据在 service 层，界面只拿结果
-        _backedUpDirs.value = TargetListing.backedUpDirs(summaries)
-
-        // 正在按备份时间排序时，数据到了要重排一次
-        if (sortType.value == SortType.BACKUP_TIME) {
-            _displayApps.value = withContext(Dispatchers.Default) { computeDisplay(_allApps.value) }
+        if (summaries != _backupSummaries.value) {
+            _backupSummaries.value = summaries
+            // 正在按备份时间排序时，数据到了要重排一次
+            if (sortType.value == SortType.BACKUP_TIME) {
+                _displayApps.value =
+                    withContext(Dispatchers.Default) { computeDisplay(_allApps.value) }
+            }
         }
+        // 「哪些 key 是目录」的判据在 service 层，界面只拿结果。
+        // 目录的备份列表跨用户共享，所以这里和当前用户无关 —— 展开发生在列行的时候
+        _backedUpDirs.value = TargetListing.backedUpDirs(summaries)
     }
 
     /**

@@ -108,6 +108,15 @@ interface IRusticService {
   String systemDataCounts();
 
   /**
+   * 批量判断目录是否存在。**传物理路径**（`/data/media/<userId>/…`）——
+   * 主进程只看得见自己用户的空间，别的用户的目录只能由 root 判。
+   *
+   * @param request JSON：{paths:["/data/media/10/DCIM", ...]}
+   * @return JSON：{ok:true, existing:[确实存在的那些]}
+   */
+  String statDirs(String request);
+
+  /**
    * 打开 / 关闭 Wi-Fi。普通应用从 Android 10 起就没这个权限了，只能由 root 侧代劳。
    *
    * @return 成功返回空字符串；失败返回具体原因

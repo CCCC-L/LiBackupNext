@@ -5,46 +5,28 @@ import android.content.Intent
 import android.net.wifi.WifiManager
 import android.os.IBinder
 import android.os.SharedMemory
-import com.cc.libackupnext.service.root.RUSTIC_BUFFER_SIZE
-import com.cc.libackupnext.service.root.RUSTIC_SHARED_MEMORY_NAME
-import com.cc.libackupnext.service.root.RusticBackupSupport
-import com.cc.libackupnext.service.root.RusticProgressPoller
-import com.cc.libackupnext.service.root.RusticRestoreSupport
-import com.cc.libackupnext.service.root.opOf
-import com.cc.libackupnext.service.root.readFrameAt
-import com.cc.libackupnext.service.root.runQueryNative
-import com.cc.libackupnext.service.root.runSimpleNative
-import com.cc.libackupnext.service.root.writeFrameAt
 import android.util.Log
 import com.cc.libackupnext.data.BackupProgress
+import com.cc.libackupnext.data.MediaPath
 import com.cc.libackupnext.data.SnapshotKind
-import com.cc.libackupnext.data.json.BackupItemDto
 import com.cc.libackupnext.data.json.BackupOptions
 import com.cc.libackupnext.data.json.ExportSnapshotRequest
 import com.cc.libackupnext.data.json.InitRepoRequest
 import com.cc.libackupnext.data.json.OkResponse
-import com.cc.libackupnext.data.json.OperationEnvelope
 import com.cc.libackupnext.data.json.RestoreSnapshotsRequest
-import com.cc.libackupnext.data.json.RestoreTreeItem
-import com.cc.libackupnext.data.json.RestoreTreeRequest
-import com.cc.libackupnext.data.json.RusticBackupRequest
+import com.cc.libackupnext.data.json.StatDirsRequest
+import com.cc.libackupnext.data.json.StatDirsResponse
 import com.cc.libackupnext.data.json.SystemDataCountsResponse
-import com.cc.libackupnext.service.json.AppJson
+import com.cc.libackupnext.service.IBackupProgressCallback
+import com.cc.libackupnext.service.IRusticService
 import com.cc.libackupnext.service.json.parseJson
 import com.cc.libackupnext.service.json.toJsonText
-import com.cc.libackupnext.service.root.AppState
-import com.cc.libackupnext.service.root.RusticRequestBuilder
 import com.cc.libackupnext.service.root.sysdata.SystemDataExporter
 import com.cc.libackupnext.service.root.sysdata.SystemDataRestorer
 import com.cc.libackupnext.util.AppLog
 import com.topjohnwu.superuser.ipc.RootService
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.jsonObject
 import java.io.File
 import java.nio.ByteBuffer
-import com.cc.libackupnext.service.root.loadRusticBridge
-import com.cc.libackupnext.service.IBackupProgressCallback
-import com.cc.libackupnext.service.IRusticService
 
 /**
  * 恢复时要落到「应用数据目录」的那几种快照。
@@ -292,6 +274,21 @@ object RusticServer {
             OkResponse(ok = false, error = t.message ?: "统计失败").toJsonText()
         }
 
+        /**
+         * 批量判断目录是否存在。
+         *
+         * 主进程（普通 uid）只看得到自己用户的空间，别的用户的目录只能由 root 判；
+         * 传进来的路径是物理路径，`File.isDirectory` 直接读 /data/media/<userId>/…。
+         */
+        override fun statDirs(request: String): String = try {
+            val paths = request.parseJson<StatDirsRequest>().paths
+            val existing = paths.filter { it.isNotBlank() && File(it).isDirectory }
+            StatDirsResponse(ok = true, existing = existing).toJsonText()
+        } catch (t: Throwable) {
+            AppLog.e(TAG, "判断目录是否存在失败", t)
+            OkResponse(ok = false, error = t.message ?: "判断目录是否存在失败").toJsonText()
+        }
+
         @Suppress("DEPRECATION")
         override fun setWifiEnabled(enabled: Boolean): String = try {
             val manager = context.getSystemService(Context.WIFI_SERVICE) as? WifiManager
@@ -342,7 +339,7 @@ object RusticServer {
 
                     // 和备份对称：写到 /data/media/0，而不是 FUSE 的 /sdcard。
                     // 归属照系统自己写的来：模拟卷归 MediaProvider、SD 卡归 media_rw，属组一律 media_rw。
-                    val target = File(mediaPath(packageName))
+                    val target = File(MediaPath.physical(packageName))
                     val (uid, gid) = externalStorageOwner(context, target.absolutePath)
                     val error = restoreSupport.restoreTree(
                         snapshotId = id,

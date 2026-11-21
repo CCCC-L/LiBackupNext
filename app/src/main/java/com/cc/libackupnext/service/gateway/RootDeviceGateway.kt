@@ -2,6 +2,10 @@ package com.cc.libackupnext.service.gateway
 
 import com.cc.libackupnext.data.AppInfo
 import com.cc.libackupnext.data.UserAccount
+import com.cc.libackupnext.data.json.StatDirsRequest
+import com.cc.libackupnext.data.json.StatDirsResponse
+import com.cc.libackupnext.service.json.parseJson
+import com.cc.libackupnext.service.json.toJsonText
 import com.cc.libackupnext.service.root.AppManagerService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -39,6 +43,24 @@ internal class RootDeviceGateway(
 
     override suspend fun getIcon(packageName: String, userId: Int): ByteArray? =
         AppManagerService.getIcon(packageName, userId)
+
+    override suspend fun existingDirs(paths: List<String>): Result<Set<String>> =
+        withContext(Dispatchers.IO) {
+            if (paths.isEmpty()) return@withContext Result.success(emptySet())
+            try {
+                val raw = session.binder().statDirs(StatDirsRequest(paths).toJsonText())
+                val response = raw.parseJson<StatDirsResponse>()
+                if (!response.ok) {
+                    Result.failure(
+                        session.remote.backendFailure("statDirs", response.error.orEmpty())
+                    )
+                } else {
+                    Result.success(response.existing.toSet())
+                }
+            } catch (t: Throwable) {
+                Result.failure(t)
+            }
+        }
 
     override suspend fun forceStop(packageName: String, userId: Int) =
         AppManagerService.forceStop(packageName, userId)

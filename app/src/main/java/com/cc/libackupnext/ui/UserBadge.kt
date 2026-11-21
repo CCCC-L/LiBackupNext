@@ -10,9 +10,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.cc.libackupnext.data.MediaPath
 
 /** 主用户（user 0）的应用不显示用户标记。 */
-const val PRIMARY_USER_ID = 0
+const val PRIMARY_USER_ID = MediaPath.PRIMARY_USER_ID
 
 fun isNonPrimaryUser(userId: Int): Boolean = userId != PRIMARY_USER_ID
 

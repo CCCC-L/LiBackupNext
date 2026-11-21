@@ -57,6 +57,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.WindowCompat
 import com.cc.libackupnext.data.FolderPickerMode
+import com.cc.libackupnext.data.MediaPath
+import com.cc.libackupnext.data.PathSegment
 import com.cc.libackupnext.data.RemoteRepo
 import com.cc.libackupnext.service.browse.LocalVolumes
 import com.cc.libackupnext.ui.AppTopBar
@@ -111,9 +113,18 @@ fun FolderPickerDialog(
     initialPath: String,
     allowRoot: Boolean,
     onPick: (String) -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    /** 本地浏览看哪个用户的空间；非 0 时「内部存储」走 /data/media/<userId>。 */
+    userId: Int = MediaPath.PRIMARY_USER_ID
 ) {
     val isLocal = mode == FolderPickerMode.LOCAL
+    // 非主用户：内部存储的物理落点。那个用户的 FUSE 视图只有他启动着才挂得上，
+    // 而 /data/media/<id> 在 :root 里永远读得到 —— 浏览和落点都走它，选完再翻译回去。
+    val userRoot = if (isLocal && userId != MediaPath.PRIMARY_USER_ID) {
+        "/data/media/$userId"
+    } else {
+        null
+    }
     // 目录浏览走接口：弹窗不认识 rclone 后端怎么连
     val browser = LocalDirectoryBrowser.current
     // 当前选中卷的根（路径段）；选「根目录」时是空列表
@@ -186,6 +197,32 @@ fun FolderPickerDialog(
         return path == r || path.startsWith("$r/")
     }
 
+    /**
+     * 面包屑：别的用户的空间在业务层眼里不是「卷」（它不在挂载表里），
+     * 但用户看到的应该和主用户一样 —— 第一段是「内部存储」。
+     */
+    fun segmentsOf(path: String): List<PathSegment> {
+        val root = userRoot ?: return LocalVolumes.pathSegments(path, allowRoot)
+        if (!isUnder(path, root)) return LocalVolumes.pathSegments(path, allowRoot)
+        return buildList {
+            add(PathSegment("内部存储", root))
+            var current = root
+            path.removePrefix(root).trim('/').split('/')
+                .filter { it.isNotEmpty() }
+                .forEach { segment ->
+                    current = "$current/$segment"
+                    add(PathSegment(segment, current))
+                }
+        }
+    }
+
+    /** 选中的物理路径翻译回用户可见路径：仓库里存的永远是 /storage/emulated/<id>/…。 */
+    fun visiblePath(path: String): String {
+        val root = userRoot ?: return path
+        if (!isUnder(path, root)) return path
+        return "/storage/emulated/$userId" + path.removePrefix(root)
+    }
+
     val canGoUp = parentTarget(page) != null
 
     // Dialog 是独立窗口，返回键 / 点外部 / 顶栏返回箭头都走这里；BackHandler 在这里不可靠
@@ -210,7 +247,7 @@ fun FolderPickerDialog(
         val result: Result<List<PickerRow>> = when {
             // 本地第一屏：只向业务层要卷列表，UI 不分类、不排序、不拼路径
             isLocal && targetPath == VOLUME_PAGE -> runCatching {
-                LocalVolumes.list(allowRoot).map { vol ->
+                LocalVolumes.list(allowRoot, userRoot).map { vol ->
                     PickerRow(
                         name = vol.label,
                         target = vol.path,
@@ -326,9 +363,9 @@ fun FolderPickerDialog(
         ) { path ->
             // 本地把绝对路径拆成可点面包屑：卷根段显示别名，其余段逐层可跳。
             // 按本页 path 算，旧页滑出期间不会串成新路径
-            val segments = remember(path, allowRoot, isLocal) {
+            val segments = remember(path, allowRoot, isLocal, userRoot) {
                 if (isLocal && path != VOLUME_PAGE) {
-                    LocalVolumes.pathSegments(path, allowRoot)
+                    segmentsOf(path)
                 } else {
                     emptyList()
                 }
@@ -532,7 +569,7 @@ fun FolderPickerDialog(
             // 卷列表页还不是一个可选目录，不显示
             if (page.path != VOLUME_PAGE) {
                 Button(
-                    onClick = { onPick(page.path) },
+                    onClick = { onPick(visiblePath(page.path)) },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth(0.6f)

@@ -136,15 +136,14 @@ class TargetSpecsTest {
     }
 
     @Test
-    fun `目录不存在时标记为不存在`() {
+    fun `目录的划线只看「已移除备份目标」，磁盘存在性由调用方注入`() {
         val spec = TargetSpecs.of(BackupTarget.DIR)
-        assertTrue(spec.isMissing(app(packageName = "/definitely/not/here")))
-    }
 
-    @Test
-    fun `目录只剩备份时也标记为不存在`() {
-        val spec = TargetSpecs.of(BackupTarget.DIR)
-        // 目录还在磁盘上（"/" 一定存在），但已经从备份目标里移除 → 行要划线置灰
+        // 路径在不在磁盘上要按当前用户算（别的用户的空间只有 root 判得准），
+        // spec 拿不到那个视角，所以这里一律不判 —— 见 TargetListing.dirRows
+        assertFalse(spec.isMissing(app(packageName = "/definitely/not/here")))
+
+        // 已经从备份目标里移除（备份还在）→ 行要划线置灰
         assertTrue(spec.isMissing(app(packageName = "/", onlyInBackup = true)))
         assertFalse(spec.isMissing(app(packageName = "/", onlyInBackup = false)))
     }

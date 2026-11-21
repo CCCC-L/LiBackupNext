@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.os.UserManagerHidden
 import androidx.core.graphics.drawable.toBitmap
 import com.cc.libackupnext.data.BackupTarget
+import com.cc.libackupnext.data.MediaPath
 import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.json.BackupItemDto
 import com.cc.libackupnext.data.json.BackupOptions
@@ -19,15 +20,6 @@ import java.io.File
  * 顺便把要进快照的源文件写好：图标、权限 / appops / 白名单、apk 路径。
  * 真正序列化成 JSON 交给 Rust 的动作在 [com.cc.libackupnext.service.RusticServer]。
  */
-
-/** 外部存储路径换成 /data/media 视角（root 进程里读得到）。 */
-internal fun mediaPath(path: String): String = when {
-    path == "/storage/emulated/0" -> "/data/media/0"
-    path.startsWith("/storage/emulated/0/") ->
-        "/data/media/0/" + path.removePrefix("/storage/emulated/0/")
-
-    else -> path
-}
 
 /**
  * 这批源要不要关掉 inode 比较。
@@ -111,15 +103,22 @@ internal class RusticRequestBuilder(
         // 快照里顶层目录名用文件夹名（as_path），恢复时落到父目录即可还原。
         if (packageName.startsWith('/')) {
             val dir = File(packageName)
+            // 备份走物理路径：/storage/emulated/<n> 是 FUSE 视图，root 读写会被权限限制。
+            // 判存在性也用同一份物理路径 —— 否则非主用户永远「目录不存在」，而且不报错。
+            val source = MediaPath.physical(packageName)
             val dirItem = item(
                 stage = SnapshotKind.DIR.key,
-                label = "$packageName:${SnapshotKind.DIR.key}",
+                // label 用归一后的路径：目录的备份列表跨用户共享（和应用按包名共享是同一条
+                // 规则），「哪个用户备份的」记在 tag 里，不进 label
+                label = "${MediaPath.normalize(packageName)}:${SnapshotKind.DIR.key}",
                 tags = tags,
-                // 备份走真实路径：/sdcard 是 FUSE 视图，root 读写会被权限限制
-                sources = listOf(mediaPath(packageName)),
+                sources = listOf(source),
                 asPath = dir.name,
-                skipReason = if (dir.isDirectory) null else "目录不存在",
+                skipReason = if (File(source).isDirectory) null else "目录不存在",
                 description = descriptionOf(SnapshotKind.DIR.key)
+            ).copy(
+                // 目录也要显式 parent：否则每次备份都要全量扫一遍仓库找同类最新快照
+                parent = parents?.get(SnapshotKind.DIR.key)?.takeIf { it.isNotBlank() }
             )
             return RusticBackupRequest(
                 items = listOf(dirItem),

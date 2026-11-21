@@ -17,6 +17,9 @@ import androidx.compose.ui.Modifier
 import com.cc.libackupnext.data.AppBackupSummary
 import com.cc.libackupnext.data.AppInfo
 import com.cc.libackupnext.data.BackupTarget
+import com.cc.libackupnext.data.MediaPath
+import com.cc.libackupnext.data.target.TargetSpecs
+import com.cc.libackupnext.data.target.TargetViewKind
 import com.cc.libackupnext.ui.BottomBarContentSpace
 import com.cc.libackupnext.ui.PageContentHorizontalPadding
 import com.cc.libackupnext.ui.PageContentPadding
@@ -60,11 +63,18 @@ fun TargetListScreen(
     isRefreshing: Boolean = false,
     onRefresh: (() -> Unit)? = null,
     subtitleOf: ((TargetRow) -> String?)? = null,
+    /**
+     * 文件夹目标：这个目录现在还在不在。
+     *
+     * 判据要按当前用户算（别的用户的目录只有 root 判得准），所以由调用方注入；
+     * 应用和固定目标不看这个。
+     */
+    exists: (String) -> Boolean = { true },
 ) {
     Box(modifier = modifier.fillMaxSize()) {
         if (onRefresh == null) {
             ListContent(
-                rows, summaries, listState, onOpen, contentPadding, extraBottomText, subtitleOf
+                rows, summaries, listState, onOpen, contentPadding, extraBottomText, subtitleOf, exists
             )
         } else {
             // 下拉刷新：手势只作用于列表，刷新时不显示全屏 loading
@@ -87,7 +97,7 @@ fun TargetListScreen(
                 }
             ) {
                 ListContent(
-                    rows, summaries, listState, onOpen, contentPadding, extraBottomText, subtitleOf
+                    rows, summaries, listState, onOpen, contentPadding, extraBottomText, subtitleOf, exists
                 )
             }
         }
@@ -117,6 +127,7 @@ private fun ListContent(
     contentPadding: PaddingValues,
     extraBottomText: (AppInfo) -> String?,
     subtitleOf: ((TargetRow) -> String?)?,
+    exists: (String) -> Boolean,
 ) {
     AppListContainer(
         items = rows,
@@ -129,7 +140,9 @@ private fun ListContent(
         val view = targetViewOf(
             target = row.target,
             app = row.item,
-            isMissing = row.target.isMissing(row.item),
+            isMissing = row.target.isMissing(row.item) ||
+                    (TargetSpecs.of(row.target).viewKind == TargetViewKind.DIR &&
+                            !exists(row.item.packageName)),
             subtitle = subtitleOf?.invoke(row)
         )
 
@@ -140,7 +153,8 @@ private fun ListContent(
             tone = view.tone,
             title = view.title,
             subtitle = view.subtitle,
-            bottomText = "${summaries[row.item.packageName]?.count ?: 0}个备份",
+            // 目录的备份列表跨用户共享，查概况要用归一后的身份
+            bottomText = "${summaries[MediaPath.backupKey(row.item.packageName)]?.count ?: 0}个备份",
             extraBottomText = extraBottomText(row.item),
             shape = shape,
             trailingContent = view.trailing(),

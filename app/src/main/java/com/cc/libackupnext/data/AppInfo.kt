@@ -49,9 +49,15 @@ fun AppInfo.isVersionChangedFrom(
 /**
  * 把一个目录包装成 [AppInfo]，好复用应用详情页 / 批量页。
  *
+ * @param userId 这个目录属于哪个用户（从路径解析）。界面的用户徽标、备份 tag 里的
+ *   用户名都靠它；SD 卡这类不归属用户的传主用户 0。
  * @param onlyInBackup 只在 rustic 备份里存在。
  */
-fun dirAppInfo(path: String, onlyInBackup: Boolean = false): AppInfo {
+fun dirAppInfo(
+    path: String,
+    userId: Int = 0,
+    onlyInBackup: Boolean = false
+): AppInfo {
     val normalized = path.trimEnd('/').ifBlank { path }
     return AppInfo(
         name = normalized.substringAfterLast('/').ifBlank { normalized },
@@ -60,7 +66,7 @@ fun dirAppInfo(path: String, onlyInBackup: Boolean = false): AppInfo {
         versionCode = 0,
         installTime = 0,
         updateTime = 0,
-        userId = 0,
+        userId = userId,
         isSystem = false,
         isFrozen = false,
         onlyInBackup = onlyInBackup

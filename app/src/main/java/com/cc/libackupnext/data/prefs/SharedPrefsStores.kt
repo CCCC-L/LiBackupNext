@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
 import com.cc.libackupnext.data.DefaultBackupDirs
+import com.cc.libackupnext.data.MediaPath
 import com.cc.libackupnext.data.RemoteRepo
 import com.cc.libackupnext.data.SavedRepo
 import com.cc.libackupnext.data.json.RemoteRepoDto
@@ -225,6 +226,9 @@ internal class SharedBackupPrefs(context: Context) : BackupPrefs {
 
     private fun readExtraDirs(): Set<String> =
         (prefs.getStringSet(Keys.EXTRA_DIRS, null) ?: DefaultBackupDirs.toSet())
+            // 老版本可能存着 /storage/emulated/10/… 这种带真实用户的路径，读的时候归一，
+            // 下次写入自然就落成规范形式了
+            .map { MediaPath.normalize(it) }
             .sorted()
             .toSet()
 

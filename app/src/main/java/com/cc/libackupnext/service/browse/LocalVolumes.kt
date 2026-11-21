@@ -33,9 +33,13 @@ object LocalVolumes {
      * 第一屏入口：主卷是「内部存储」，已挂载的可移除卷按系统描述分成
      * 「SD卡」/「外置存储」，/mnt 下的共享挂载按挂载表补到最后，allowRoot 时在
      * 内部存储之后补「根目录」("/")。未挂载或拿不到目录的卷跳过。
+     *
+     * @param internalRoot 覆盖「内部存储」的落点。看别的用户的空间时传
+     *   `/data/media/<userId>`：那个用户的 FUSE 视图（`/storage/emulated/<id>`）
+     *   只有他启动着才挂得上，物理路径才总是读得到。
      */
-    suspend fun list(allowRoot: Boolean): List<LocalVolume> =
-        withContext(Dispatchers.IO) { read(allowRoot, true) }
+    suspend fun list(allowRoot: Boolean, internalRoot: String? = null): List<LocalVolume> =
+        withContext(Dispatchers.IO) { read(allowRoot, true, internalRoot) }
 
     /** 系统卷枚举：只认已挂载、能拿到挂载点的卷，别把其它用户的模拟卷列出来。 */
     private fun systemVolumes(): List<Pair<LocalVolume, VolumeKind>> = runCatching {
@@ -116,7 +120,11 @@ object LocalVolumes {
      * [includeShares] 只给展示用；修正新建目录归属时传 false，避免把共享目录
      * 当成 FUSE 外部存储去 chown，那里未必是 media_rw 的语义。
      */
-    internal fun read(allowRoot: Boolean, includeShares: Boolean): List<LocalVolume> {
+    internal fun read(
+        allowRoot: Boolean,
+        includeShares: Boolean,
+        internalRoot: String? = null
+    ): List<LocalVolume> {
         val volumes = systemVolumes()
             .distinctBy { it.first.path }
             .sortedWith(
@@ -138,7 +146,14 @@ object LocalVolumes {
                 .sortedBy { it.path }
                 .forEach { volumes.add(it) }
         }
-        return volumes
+        // 换落点放在最后：前面所有判断（去重、共享挂载排重）都按真实挂载点算
+        return if (internalRoot == null) {
+            volumes
+        } else {
+            volumes.map { vol ->
+                if (vol.label == VolumeKind.INTERNAL.label) vol.copy(path = internalRoot) else vol
+            }
+        }
     }
 
     /**

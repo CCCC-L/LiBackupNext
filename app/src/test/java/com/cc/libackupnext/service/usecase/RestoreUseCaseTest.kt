@@ -106,6 +106,7 @@ class RestoreUseCaseTest {
         override suspend fun getUsers(): List<UserAccount> = TODO()
         override suspend fun getInstalledApps(userId: Int): List<AppInfo> = TODO()
         override suspend fun getIcon(packageName: String, userId: Int): ByteArray? = TODO()
+        override suspend fun existingDirs(paths: List<String>): Result<Set<String>> = TODO()
         override suspend fun forceStop(packageName: String, userId: Int) = TODO()
         override suspend fun freeze(packageName: String, userId: Int) = TODO()
         override suspend fun unfreeze(packageName: String, userId: Int) = TODO()

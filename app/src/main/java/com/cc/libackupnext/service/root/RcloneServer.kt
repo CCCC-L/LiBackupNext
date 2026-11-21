@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.IBinder
 import android.os.SharedMemory
+import com.cc.libackupnext.data.MediaPath
 import com.cc.libackupnext.data.json.ListDirsRequest
 import com.cc.libackupnext.data.json.OkResponse
 import com.cc.libackupnext.service.json.parseJson
@@ -132,7 +133,7 @@ object RcloneServer {
             if (ok) {
                 // 只有本地外部存储的请求才带 fixup。归属和 ctx 都按真身路径算：FUSE 路径的
                 // 父 ctx 是 fuse:s0，chcon 不生效，目录会留成带 MLS 类别（DocumentsUI 看不见）。
-                val dir = File(mediaPath(target))
+                val dir = File(MediaPath.physical(target))
                 val (uid, gid) = externalStorageOwner(context, dir.absolutePath)
                 fixupTree(dir, uid, gid, parentContext = true, dirMode = "2770")
             }
