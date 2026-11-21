@@ -55,14 +55,14 @@ import com.cc.libackupnext.data.BackupBatchMode
 import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.data.BatchOrigin
 import com.cc.libackupnext.data.FolderPickerLauncher
-import com.cc.libackupnext.data.dirAppInfo
+import com.cc.libackupnext.service.target.TargetListing
 import com.cc.libackupnext.ui.AppBottomBar
 import com.cc.libackupnext.ui.AppTopBar
 import com.cc.libackupnext.ui.HomeTab
 import com.cc.libackupnext.ui.MainViewModel
 import com.cc.libackupnext.ui.SortMenuExtra
 import com.cc.libackupnext.ui.component.countText
-import com.cc.libackupnext.ui.di.LocalBackupPrefs
+import com.cc.libackupnext.ui.di.LocalBackupTargets
 import com.cc.libackupnext.ui.di.LocalDeviceGateway
 import com.cc.libackupnext.ui.di.LocalPendingBatchStore
 import com.cc.libackupnext.ui.di.LocalRepoDisplay
@@ -72,6 +72,7 @@ import com.cc.libackupnext.ui.dialog.PendingRetryDialog
 import com.cc.libackupnext.ui.theme.TabScrollDurationMs
 import com.cc.libackupnext.ui.theme.pageTransitionSpec
 import com.cc.libackupnext.ui.util.sortTimeLabel
+import com.cc.libackupnext.util.AppLog
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -112,10 +113,10 @@ fun AppListScreen(
     onOpenFolderPicker: (FolderPickerLauncher) -> Unit = {}
 ) {
     val context = LocalContext.current
-    // 本地配置：仓库信息（不含密码）、界面偏好、备份行为
+    // 本地配置：仓库信息（不含密码）、界面偏好、备份目标
     val repoDisplay = LocalRepoDisplay.current
     val device = LocalDeviceGateway.current
-    val backupPrefs = LocalBackupPrefs.current
+    val backupTargets = LocalBackupTargets.current
     val appName = remember {
         context.applicationInfo.loadLabel(context.packageManager).toString()
     }
@@ -226,13 +227,18 @@ fun AppListScreen(
                 }
             }
     }
-    // 文件页要备份的目录：默认 4 个 + 用户自己加的，BackupPrefs 读出来就是字母序
-    var extraDirs by remember { mutableStateOf(backupPrefs.extraDirs) }
-    val fileDirs = extraDirs.toList()
+    // 文件页要备份的目录：订阅 service 层的备份目标，界面不再自己缓存一份
+    val extraDirs by backupTargets.dirs.collectAsState()
+    // 仓库里有备份的目录
+    val backedUpDirs by viewModel.backedUpDirs.collectAsState()
     val fileListState = rememberLazyListState()
     val othersListState = rememberLazyListState()
     // 文件页的刷新信号：回到前台 / 主动刷新时递增，让它重新判断哪些目录还在硬盘上
     val dirRefreshTick by viewModel.dirRefreshTick.collectAsState()
+    // 行 = 备份目标和有备份的目录的并集，再去掉「磁盘上没了、也没备份」的
+    val fileRows = remember(extraDirs, backedUpDirs, dirRefreshTick) {
+        TargetListing.dirRows(extraDirs, backedUpDirs)
+    }
 
 
     val allApps by viewModel.allApps.collectAsState()
@@ -442,13 +448,16 @@ fun AppListScreen(
                     viewModel = viewModel,
                     app = current,
                     target = BackupTarget.of(current),
-                    // 默认目录也在 extraDirs 里，所以移除逻辑只有一种：从集合里删掉
-                    onRemoveDir = if (BackupTarget.of(current) == BackupTarget.DIR) {
+                    // 移除 = 只退出备份目标：仓库里的备份保留，列表行继续显示（划线置灰）。
+                    // 已经移除过的目录不再给这个入口，再点一次没有任何意义。
+                    onRemoveDir = if (BackupTarget.of(current) == BackupTarget.DIR &&
+                        !current.onlyInBackup
+                    ) {
                         {
-                            backupPrefs.extraDirs = backupPrefs.extraDirs - current.packageName
-                            // 读回来是排好序的
-                            extraDirs = backupPrefs.extraDirs
+                            // 语义在 service 层；这里只发起 + 提示
+                            backupTargets.removeDir(current.packageName)
                             closeDetail()
+                            AppLog.toastOnMain("已移除「${current.name}」，备份已保留")
                         }
                     } else {
                         null
@@ -566,20 +575,15 @@ fun AppListScreen(
                         val pageTab = HomeTab.entries[page]
                         when (pageTab) {
                             HomeTab.FILES -> FileListScreen(
-                                dirs = fileDirs,
+                                dirs = fileRows,
                                 reverse = isReverse,
                                 refreshTick = dirRefreshTick,
                                 query = searchQueryText,
                                 summaries = backupSummaries,
                                 listState = fileListState,
-                                onOpen = { path ->
-                                    openDetail(dirAppInfo(path), fromBatch = false)
-                                },
-                                onAdd = { path ->
-                                    backupPrefs.extraDirs = backupPrefs.extraDirs + path
-                                    // 读回来是排好序的
-                                    extraDirs = backupPrefs.extraDirs
-                                },
+                                // 行本身就带着 onlyInBackup，详情页据此决定要不要给「移除」/「备份」
+                                onOpen = { app -> openDetail(app, fromBatch = false) },
+                                onAdd = { path -> backupTargets.addDir(path) },
                                 onOpenFolderPicker = onOpenFolderPicker,
                                 modifier = Modifier.padding(paddingValues),
                                 isRefreshing = isRefreshing,
@@ -593,13 +597,13 @@ fun AppListScreen(
                             HomeTab.OTHERS -> TargetListScreen(
                                 // 固定目标永远各出一行，和系统里有没有数据无关
                                 rows = pageTab.targets.flatMap { target ->
-                                    target.targets(
-                                        emptyList(),
+                                    TargetListing.rows(
+                                        target = target,
+                                        apps = emptyList(),
                                         create = true,
                                         hasBackup = { false },
-                                        extraDirs = backupPrefs.extraDirs
-                                    )
-                                        .map { app -> TargetRow(target, app) }
+                                        extraDirs = extraDirs
+                                    ).map { app -> TargetRow(target, app) }
                                 },
                                 summaries = backupSummaries,
                                 listState = othersListState,

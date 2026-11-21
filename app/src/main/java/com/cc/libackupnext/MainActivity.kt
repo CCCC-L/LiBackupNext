@@ -37,6 +37,7 @@ import com.cc.libackupnext.ui.HomeTab
 import com.cc.libackupnext.ui.WelcomeScreen
 import com.cc.libackupnext.ui.component.keepScreenOnWhen
 import com.cc.libackupnext.ui.di.LocalBackupPrefs
+import com.cc.libackupnext.ui.di.LocalBackupTargets
 import com.cc.libackupnext.ui.di.LocalBackupUseCase
 import com.cc.libackupnext.ui.di.LocalDeviceGateway
 import com.cc.libackupnext.ui.di.LocalDirectoryBrowser
@@ -82,6 +83,7 @@ class MainActivity : ComponentActivity() {
                 LocalDirectoryBrowser provides container.browser,
                 LocalBackupUseCase provides container.backup,
                 LocalRestoreUseCase provides container.restore,
+                LocalBackupTargets provides container.backupTargets,
                 LocalRepoDisplay provides container.repoDisplay,
                 LocalViewPrefs provides container.viewPrefs,
                 LocalBackupPrefs provides container.backupPrefs,

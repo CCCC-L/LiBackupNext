@@ -1,13 +1,14 @@
 package com.cc.libackupnext.service.usecase
 
+import com.cc.libackupnext.data.AppInfo
 import com.cc.libackupnext.data.BackupEntry
 import com.cc.libackupnext.data.BackupGroup
-import com.cc.libackupnext.data.BackupTarget
-import com.cc.libackupnext.data.AppInfo
-import com.cc.libackupnext.service.gateway.DeviceGateway
 import com.cc.libackupnext.data.BackupProgress
+import com.cc.libackupnext.data.BackupTarget
+import com.cc.libackupnext.service.gateway.DeviceGateway
 import com.cc.libackupnext.service.gateway.RepoWriter
 import com.cc.libackupnext.service.progress.OperationPlanner
+import com.cc.libackupnext.service.target.BackupTargets
 
 /**
  * 恢复的业务编排：判断能不能恢复、停掉应用、再交给仓库执行。
@@ -39,13 +40,14 @@ interface RestoreUseCase {
 /**
  * [RestoreUseCase] 的默认实现。
  *
- * 依赖 [RepoWriter]（执行）和 [OperationPlanner]（判断），
- * 两者都是接口，所以这层可以用假的 writer + 真的 planner 直接测。
+ * 依赖四个接口：执行（[RepoWriter]）、判断（[OperationPlanner]）、停应用（[DeviceGateway]）、
+ * 备份目标（[BackupTargets]）。全是抽象，所以这层可以用假实现 + 真的 planner 直接测。
  */
 internal class DefaultRestoreUseCase(
     private val writer: RepoWriter,
     private val planner: OperationPlanner,
     private val device: DeviceGateway,
+    private val targets: BackupTargets,
 ) : RestoreUseCase {
 
     override suspend fun restore(
@@ -66,6 +68,14 @@ internal class DefaultRestoreUseCase(
             device.stop(app.packageName, app.userId)
         }
 
-        return writer.restoreSnapshots(app, selected, onProgress)
+        val result = writer.restoreSnapshots(app, selected, onProgress)
+
+        // 目录恢复成功后它又回到磁盘上了，顺手加回备份目标：否则这一行会一直是
+        // 「已移除 / 只剩备份」的划线状态，用户还得手动用 + 号再加一次。
+        if (result.isSuccess && BackupTarget.of(app) == BackupTarget.DIR) {
+            targets.addDir(app.packageName)
+        }
+
+        return result
     }
 }

@@ -2,6 +2,7 @@ package com.cc.libackupnext.data.prefs
 
 import com.cc.libackupnext.data.RemoteRepo
 import com.cc.libackupnext.data.SavedRepo
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * 本地配置的四个面。
@@ -133,6 +134,14 @@ interface BackupPrefs {
 
     /** 备份目录（绝对路径），默认的几个也在里面；读出来已按字母序排好。 */
     var extraDirs: Set<String>
+
+    /**
+     * [extraDirs] 的可观察版本。
+     *
+     * 界面 collect 它就够了，不要再自己缓存一份 —— 恢复成功后 usecase 会把目录加回来，
+     * 缓存的那份不会跟着变。
+     */
+    val extraDirsFlow: StateFlow<Set<String>>
 
     /**
      * 记下被 SIGSTOP 暂停的应用（`包名|userId`）。

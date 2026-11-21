@@ -10,29 +10,29 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import com.cc.libackupnext.data.AppBackupSummary
+import com.cc.libackupnext.data.AppInfo
 import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.data.FolderPickerLauncher
 import com.cc.libackupnext.data.FolderPickerMode
-import com.cc.libackupnext.data.dirAppInfo
 import com.cc.libackupnext.util.AppLog
-import java.io.File
 
 /**
  * 文件页：列出要备份的目录。
  *
- * 默认 4 个（DCIM / Download / Music / Pictures），右下角的圆形按钮打开全屏文件夹选择
- * 弹窗再挑别的目录。点一行进这个目录的「文件信息」页，快照 label 是 `<绝对路径>:dir`。
+ * 行由 [com.cc.libackupnext.data.dirRows] 算好（备份目标 ∪ 仓库里有备份的目录），
+ * 这里只负责搜索、倒序和画。点一行进这个目录的「文件信息」页，快照 label 是 `<绝对路径>:dir`。
  */
 @Composable
 fun FileListScreen(
-    dirs: List<String>,
+    /** 已经算好的行：带 `onlyInBackup`（已移除备份目标），目录在不在由渲染时判 */
+    dirs: List<AppInfo>,
     summaries: Map<String, AppBackupSummary>,
-    /** 每次从后台回到前台递增，用来重算哪些目录还在硬盘上 */
+    /** 每次从后台回到前台递增：让行重新算一遍「目录还在不在」（划线判据在渲染时算） */
     refreshTick: Int,
     /** 搜索词：按完整路径或文件夹名匹配，空串不过滤 */
     query: String,
     listState: LazyListState,
-    onOpen: (String) -> Unit,
+    onOpen: (AppInfo) -> Unit,
     onAdd: (String) -> Unit,
     /** 打开通用文件夹选择弹窗；这里允许一路退到文件系统根 "/"。 */
     onOpenFolderPicker: (FolderPickerLauncher) -> Unit = {},
@@ -50,41 +50,41 @@ fun FileListScreen(
                 mode = FolderPickerMode.LOCAL,
                 allowRoot = true,
                 onPick = { path ->
-                    when {
-                        path in dirs -> if (File(path).isDirectory) {
-                            AppLog.toastOnMain("已经在列表里了")
-                        } else {
-                            onAdd(path)
-                        }
-
-                        else -> onAdd(path)
+                    val row = dirs.firstOrNull { it.packageName == path }
+                    // 只剩备份的行（已移除备份目标）再选一次 = 重新加回目标
+                    if (row != null && !row.onlyInBackup) {
+                        AppLog.toastOnMain("已经在列表里了")
+                    } else {
+                        onAdd(path)
                     }
                 }
             )
         )
     }
 
-    // 目录被删掉之后：还有备份就留着（划线置灰提示「已不存在」），
-    // 一个备份都没有就直接从列表消失 —— 和应用列表「只在备份里存在」的处理一致
-    val visibleDirs = remember(dirs, summaries, refreshTick, query, reverse) {
+    // 列表就是并集，不再按「磁盘上还在不在」筛行：目录被删了也要露出来（划线置灰），
+    // 否则它一直留在备份目标里，界面上却够不着。
+    // refreshTick 进 key 是为了让行重新算一次存在性 —— 划线判据在渲染时才读磁盘。
+    val visible = remember(dirs, refreshTick, query, reverse) {
         val keyword = query.trim()
-        val filtered = dirs.filter { path ->
-            val exists = File(path).isDirectory
-            if (!exists && summaries[path] == null) return@filter false
-            if (keyword.isEmpty()) return@filter true
+        val filtered = if (keyword.isEmpty()) {
+            dirs
+        } else {
             // 完整路径或文件夹名任一命中即可
-            path.contains(keyword, ignoreCase = true) ||
-                path.trimEnd('/').substringAfterLast('/').contains(keyword, ignoreCase = true)
+            dirs.filter {
+                it.packageName.contains(keyword, ignoreCase = true) ||
+                        it.name.contains(keyword, ignoreCase = true)
+            }
         }
         // 先过滤再反转：搜索命中的那几条也要按倒序展示
         if (reverse) filtered.asReversed() else filtered
     }
 
     TargetListScreen(
-        rows = visibleDirs.map { TargetRow(BackupTarget.DIR, dirAppInfo(it)) },
+        rows = remember(visible) { visible.map { TargetRow(BackupTarget.DIR, it) } },
         summaries = summaries,
         listState = listState,
-        onOpen = { onOpen(it.packageName) },
+        onOpen = onOpen,
         modifier = modifier,
         isRefreshing = isRefreshing,
         onRefresh = onRefresh,

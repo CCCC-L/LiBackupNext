@@ -176,8 +176,8 @@ fun AppBackupScreen(
         java.io.File(displayApp.packageName).isDirectory
     }
 
-    // 目录的「已不存在」直接看磁盘；应用看安装状态；系统数据没有「装没装」这回事。
-    // 按视图形态分派而不是逐个枚举：加一种新类型只要选对 viewKind，这里自动覆盖。
+    // 目录的「已不存在」直接看磁盘（恢复成功后 dirExistsTick 会重算）；应用看安装状态；
+    // 系统数据没有「装没装」这回事。按视图形态分派而不是逐个枚举：加一种新类型只要选对 viewKind。
     val isUninstalled = when (TargetSpecs.of(target).viewKind) {
         TargetViewKind.DIR -> !dirExists
         TargetViewKind.APP -> !restoredInstalled &&
@@ -229,7 +229,7 @@ fun AppBackupScreen(
     var managingEntry by remember { mutableStateOf<BackupEntry?>(null) }
     var managingKinds by remember { mutableStateOf<Set<BackupGroup>>(emptySet()) }
     var confirmDeleteAll by remember { mutableStateOf(false) }
-    // 移除文件夹前的确认（会连它的备份一起删）
+    // 移除文件夹前的确认
     var confirmRemoveDir by remember { mutableStateOf(false) }
 
     // 覆盖备份 / 删除需要双击确认
@@ -688,9 +688,7 @@ fun AppBackupScreen(
                 moreMenuContent = { onDismiss ->
                     DetailMoreMenu(
                         canRemoveDir = onRemoveDir != null,
-                        hasEntries = entries.isNotEmpty(),
                         onDismiss = onDismiss,
-                        onRemoveDir = { onRemoveDir?.invoke() },
                         onRequestRemoveDirConfirm = { confirmRemoveDir = true },
                         onRequestDeleteAllConfirm = { confirmDeleteAll = true }
                     )
@@ -767,7 +765,7 @@ fun AppBackupScreen(
         )
     }
 
-    // 移除文件夹确认：有备份时说明会一起删掉
+    // 移除文件夹确认：只退出备份目标，仓库里的备份保留
     if (confirmRemoveDir) {
         AppDialog(
             title = "移除该文件夹",
@@ -775,16 +773,9 @@ fun AppBackupScreen(
             confirmText = "移除",
             onConfirm = {
                 confirmRemoveDir = false
-                deleteAllBackups()
                 onRemoveDir?.invoke()
-            },
-            destructive = true
-        ) {
-            Text(
-                "「${displayApp.packageName}」有 ${entries.size} 个备份，" +
-                        "移除后这些备份会被一起删除，此操作不可撤销。"
-            )
-        }
+            }
+        ) { Text("「${displayApp.packageName}」将不再作为备份目标。") }
     }
 
     // 帮助对话框：内容随目标类型变（应用 / 文件 / Wi-Fi / 联系人 / 通话记录）
@@ -864,15 +855,13 @@ fun AppBackupScreen(
 /**
  * 详情页右上角「更多」菜单：移除文件夹（仅文件夹目标）+ 删除全部备份。
  *
- * 「移除文件夹」在有备份时要先弹确认（备份会跟着删掉），所以这里只负责发起请求，
- * 由调用方决定是直接执行还是先问一句。
+ * 「移除文件夹」只退出备份目标、不删备份，但仍是状态变更（要回到列表里重新加回来），
+ * 所以统一先弹一次确认，这里只负责发起请求。
  */
 @Composable
 private fun DetailMoreMenu(
     canRemoveDir: Boolean,
-    hasEntries: Boolean,
     onDismiss: () -> Unit,
-    onRemoveDir: () -> Unit,
     onRequestRemoveDirConfirm: () -> Unit,
     onRequestDeleteAllConfirm: () -> Unit,
 ) {
@@ -881,7 +870,7 @@ private fun DetailMoreMenu(
             text = { Text("移除该文件夹") },
             onClick = {
                 onDismiss()
-                if (hasEntries) onRequestRemoveDirConfirm() else onRemoveDir()
+                onRequestRemoveDirConfirm()
             }
         )
     }

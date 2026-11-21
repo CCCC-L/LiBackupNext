@@ -27,6 +27,8 @@ import com.cc.libackupnext.service.usecase.BackupUseCase
 import com.cc.libackupnext.service.usecase.DefaultBackupUseCase
 import com.cc.libackupnext.service.usecase.DefaultRestoreUseCase
 import com.cc.libackupnext.service.usecase.RestoreUseCase
+import com.cc.libackupnext.service.target.BackupTargets
+import com.cc.libackupnext.service.target.PrefsBackupTargets
 
 /**
  * 依赖容器：应用内唯一的「从哪拿实现」的地方。
@@ -41,8 +43,8 @@ import com.cc.libackupnext.service.usecase.RestoreUseCase
  *   ├─→ RusticWriterGateway  : RepoWriter + DeviceGateway
  *   └─→ RusticAdminGateway   : RepoAdmin
  *
- * DefaultBackupUseCase(reader, writer)
- * DefaultRestoreUseCase(writer, DefaultOperationPlanner)
+ * DefaultBackupUseCase(reader, writer, backupPrefs, device)
+ * DefaultRestoreUseCase(writer, planner, device, backupTargets)
  * ```
  * 三个网关共用同一个 [RusticSession]：它们共享 root 服务绑定与凭据注入状态，
  * 各持一份会让每次操作都重新绑一次服务。
@@ -97,7 +99,12 @@ class AppContainer(private val app: Application) {
     }
 
     /** 恢复编排：前置判断 → 停应用 → 写回。 */
-    val restore: RestoreUseCase by lazy { DefaultRestoreUseCase(writer, planner, device) }
+    val restore: RestoreUseCase by lazy {
+        DefaultRestoreUseCase(writer, planner, device, backupTargets)
+    }
+
+    /** 备份目标的增删查：界面和恢复编排都用它，不直接改 prefs。 */
+    val backupTargets: BackupTargets by lazy { PrefsBackupTargets(backupPrefs) }
 
     /** 目录浏览（本地 / 远程），给仓库配置的文件夹选择器用。 */
     val browser: DirectoryBrowser by lazy { RcloneClient }

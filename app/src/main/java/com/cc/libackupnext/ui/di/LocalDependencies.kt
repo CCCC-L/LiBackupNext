@@ -11,6 +11,7 @@ import com.cc.libackupnext.service.gateway.RepoAdmin
 import com.cc.libackupnext.service.gateway.RepoReader
 import com.cc.libackupnext.service.gateway.RepoWriter
 import com.cc.libackupnext.service.progress.OperationPlanner
+import com.cc.libackupnext.service.target.BackupTargets
 import com.cc.libackupnext.service.usecase.BackupUseCase
 import com.cc.libackupnext.service.usecase.RestoreUseCase
 
@@ -63,6 +64,16 @@ val LocalBackupUseCase = staticCompositionLocalOf<BackupUseCase> {
 /** 恢复编排：前置判断 + 停应用 + 写回。 */
 val LocalRestoreUseCase = staticCompositionLocalOf<RestoreUseCase> {
     error("RestoreUseCase 未提供：请确认 AppRoot 里有 CompositionLocalProvider")
+}
+
+/**
+ * 备份目标的增删查。
+ *
+ * 界面不直接改 [BackupPrefs]：移除 / 加回目标的语义在 service 层，
+ * 这里只下发「能增删 + 能订阅」这一个窄接口（ISP）。
+ */
+val LocalBackupTargets = staticCompositionLocalOf<BackupTargets> {
+    error("BackupTargets 未提供：请确认 AppRoot 里有 CompositionLocalProvider")
 }
 
 // ==================== 本地配置 ====================

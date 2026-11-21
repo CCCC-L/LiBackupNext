@@ -1,15 +1,10 @@
 package com.cc.libackupnext.data
 
-import com.cc.libackupnext.data.AppInfo
-import com.cc.libackupnext.data.dirAppInfo
-import com.cc.libackupnext.data.isDirectory
-import java.io.File
-
 /**
  * 批量页 / 列表页备份的「目标类型」。
  *
- * 每种类型自己决定：列表怎么来、统计里叫什么单位、快照有哪些内容类型（列头那几列）。
- * 以后要加「数据库备份」「微信记录」这类，只要在这里加一个枚举值 + 补一个 [targets] 分支。
+ * 这里只有**元数据**：统计单位、有哪些内容类型、固定目标的 id 和显示名。
+ * 「这一页该列哪些行」是业务规则，在 `service.target.TargetListing` 里。
  *
  * @param unit 统计文字里的单位，例如「个应用」
  * @param kinds 可勾选的单位，也是列表顶部的列
@@ -66,31 +61,6 @@ enum class BackupTarget(
      */
     fun backupKinds(checked: Set<BackupGroup>): Set<BackupGroup> =
         if (kinds.size == 1) kinds.toSet() else checked intersect kinds.toSet()
-
-    /**
-     * 这一页要列的目标。
-     *
-     * @param apps 应用列表（[APP] 用）
-     * @param create true = 新建备份页（全部目标），false = 管理页（只留有备份的）
-     * @param hasBackup 这个包名 / 路径在仓库里有没有备份
-     */
-    fun targets(
-        apps: List<AppInfo>,
-        create: Boolean,
-        hasBackup: (String) -> Boolean,
-        /** 要备份的目录列表（来自 BackupPrefs.extraDirs） */
-        extraDirs: Set<String>,
-    ): List<AppInfo> {
-        val all = when (this) {
-            APP -> apps.filterNot { create && it.onlyInBackup }
-            DIR -> extraDirs
-                .filterNot { create && !File(it).isDirectory }
-                .map { dirAppInfo(it) }
-            // 固定目标永远只有一行，和系统里有没有数据无关
-            else -> listOf(fixedAppInfo())
-        }
-        return if (create) all else all.filter { hasBackup(it.packageName) }
-    }
 
     /** 固定目标的伪应用：packageName 就是 [fixedId]，name 是显示名。 */
     fun fixedAppInfo(): AppInfo = AppInfo(

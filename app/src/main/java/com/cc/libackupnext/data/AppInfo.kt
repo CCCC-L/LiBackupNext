@@ -46,8 +46,12 @@ fun AppInfo.isVersionChangedFrom(
         !backupVersion.isNullOrBlank() &&
         backupVersion != version
 
-/** 把一个目录包装成 [AppInfo]，好复用应用详情页 / 批量页。 */
-fun dirAppInfo(path: String): AppInfo {
+/**
+ * 把一个目录包装成 [AppInfo]，好复用应用详情页 / 批量页。
+ *
+ * @param onlyInBackup 只在 rustic 备份里存在。
+ */
+fun dirAppInfo(path: String, onlyInBackup: Boolean = false): AppInfo {
     val normalized = path.trimEnd('/').ifBlank { path }
     return AppInfo(
         name = normalized.substringAfterLast('/').ifBlank { normalized },
@@ -58,7 +62,8 @@ fun dirAppInfo(path: String): AppInfo {
         updateTime = 0,
         userId = 0,
         isSystem = false,
-        isFrozen = false
+        isFrozen = false,
+        onlyInBackup = onlyInBackup
     )
 }
 

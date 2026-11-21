@@ -73,6 +73,7 @@ import com.cc.libackupnext.data.target.TargetSpecs
 import com.cc.libackupnext.service.gateway.BackendErrors
 import com.cc.libackupnext.service.progress.OperationOutcome
 import com.cc.libackupnext.service.progress.OperationRunner
+import com.cc.libackupnext.service.target.TargetListing
 import com.cc.libackupnext.ui.AppTopBar
 import com.cc.libackupnext.ui.HomeTab
 import com.cc.libackupnext.ui.MainViewModel
@@ -87,7 +88,7 @@ import com.cc.libackupnext.ui.component.TargetIconBox
 import com.cc.libackupnext.ui.component.dimmedWhen
 import com.cc.libackupnext.ui.component.isMissing
 import com.cc.libackupnext.ui.component.rowTitleColor
-import com.cc.libackupnext.ui.di.LocalBackupPrefs
+import com.cc.libackupnext.ui.di.LocalBackupTargets
 import com.cc.libackupnext.ui.di.LocalBackupUseCase
 import com.cc.libackupnext.ui.di.LocalOperationPlanner
 import com.cc.libackupnext.ui.di.LocalRepoReader
@@ -147,7 +148,7 @@ fun BackupBatchScreen(
     val reader = LocalRepoReader.current
     val writer = LocalRepoWriter.current
     val planner = LocalOperationPlanner.current
-    val backupPrefs = LocalBackupPrefs.current
+    val backupTargets = LocalBackupTargets.current
     // 备份 / 恢复走编排层：暂停应用、清理过期都在里面
     val backupCase = LocalBackupUseCase.current
     val restoreCase = LocalRestoreUseCase.current
@@ -155,6 +156,10 @@ fun BackupBatchScreen(
     val runner = remember(planner) { OperationRunner(planner) }
     val displayApps by viewModel.displayApps.collectAsState()
     val allApps by viewModel.allApps.collectAsState()
+    // 仓库里有备份的目录：管理页要把「已移除备份目标」的目录也列出来（能恢复）
+    val backedUpDirs by viewModel.backedUpDirs.collectAsState()
+    // 备份目标：订阅 service 层，恢复成功把目录加回来时这一页也跟着变
+    val extraDirs by backupTargets.dirs.collectAsState()
     val users by viewModel.users.collectAsState()
     val currentUserId by viewModel.currentUserId.collectAsState()
 
@@ -227,16 +232,18 @@ fun BackupBatchScreen(
 
     // 这一页的行：目标 + 展示数据。多目标页就是几个目标各自的行拼起来。
     // 管理页只显示仓库里有备份的。
-    val rows = remember(displayApps, overview, mode, targets, isReverse) {
+    val rows = remember(displayApps, overview, mode, targets, isReverse, backedUpDirs, extraDirs) {
         targets.flatMap { target ->
-            val list = target.targets(
+            val list = TargetListing.rows(
+                target = target,
                 apps = displayApps,
                 create = mode == BackupBatchMode.CREATE,
                 hasBackup = { overview.containsKey(it) },
-                extraDirs = backupPrefs.extraDirs
+                extraDirs = extraDirs,
+                backedUpDirs = backedUpDirs
             ).map { TargetRow(target, it) }
             // 应用行来自 displayApps（已经按 sortType + 倒序排过）；
-            // 文件夹行来自 extraDirs（已按字母序），得在这里单独反转。
+            // 文件夹行来自「目标和有备份的并集」，已按路径排好，得在这里单独反转。
             if (isReverse && target == BackupTarget.DIR) list.asReversed() else list
         }
     }
@@ -308,11 +315,13 @@ fun BackupBatchScreen(
         // 新建页：默认全选只做一次（用户取消后不会再被选上）
         if (mode == BackupBatchMode.CREATE && !viewModel.isBatchSelectionInitialized(tab, mode)) {
             val allRows = targets.flatMap { target ->
-                target.targets(
+                TargetListing.rows(
+                    target = target,
                     apps = displayApps,
                     create = true,
                     hasBackup = { overview.containsKey(it) },
-                    extraDirs = backupPrefs.extraDirs
+                    extraDirs = extraDirs,
+                    backedUpDirs = backedUpDirs
                 ).map { TargetRow(target, it) }
             }
             if (allRows.isEmpty()) return@LaunchedEffect
@@ -1180,7 +1189,7 @@ private fun BackupSelectRow(
 ) {
     val colors = MaterialTheme.colorScheme
 
-    // 应用没装 / 文件夹被删：和列表页一样，图标置灰 + 标题划线
+    // 应用没装 / 文件夹被删 / 文件夹已移除备份目标：和列表页一样，图标置灰 + 标题划线
     val missing = target.isMissing(app)
 
     // 备份版本只取一次：下面判变化、显示「> 备份版本」都用它

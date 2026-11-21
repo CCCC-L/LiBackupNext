@@ -142,6 +142,14 @@ class TargetSpecsTest {
     }
 
     @Test
+    fun `目录只剩备份时也标记为不存在`() {
+        val spec = TargetSpecs.of(BackupTarget.DIR)
+        // 目录还在磁盘上（"/" 一定存在），但已经从备份目标里移除 → 行要划线置灰
+        assertTrue(spec.isMissing(app(packageName = "/", onlyInBackup = true)))
+        assertFalse(spec.isMissing(app(packageName = "/", onlyInBackup = false)))
+    }
+
+    @Test
     fun `系统数据永远不标记为不存在`() {
         TargetSpecs.specs()
             .filter { it.viewKind == TargetViewKind.SYSTEM }

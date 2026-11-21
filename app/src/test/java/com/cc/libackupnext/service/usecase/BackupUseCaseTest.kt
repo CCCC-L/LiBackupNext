@@ -1,20 +1,23 @@
 package com.cc.libackupnext.service.usecase
 
 import com.cc.libackupnext.data.AppBackupSummary
+import com.cc.libackupnext.data.AppInfo
 import com.cc.libackupnext.data.BackupEntry
 import com.cc.libackupnext.data.BackupGroup
+import com.cc.libackupnext.data.BackupProgress
 import com.cc.libackupnext.data.BackupRequest
 import com.cc.libackupnext.data.BackupSnapshot
 import com.cc.libackupnext.data.RepoOverview
-import com.cc.libackupnext.data.UserAccount
 import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.SnapshotOverride
+import com.cc.libackupnext.data.UserAccount
 import com.cc.libackupnext.data.prefs.BackupPrefs
-import com.cc.libackupnext.data.AppInfo
-import com.cc.libackupnext.data.BackupProgress
 import com.cc.libackupnext.service.gateway.DeviceGateway
 import com.cc.libackupnext.service.gateway.RepoReader
 import com.cc.libackupnext.service.gateway.RepoWriter
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -43,7 +46,13 @@ class BackupUseCaseTest {
     ) : BackupPrefs {
         override var keepScreenOn: Boolean = false
         override var fetchIconFromRepo: Boolean = false
-        override var extraDirs: Set<String> = emptySet()
+        private val extraDirsState = MutableStateFlow<Set<String>>(emptySet())
+        override var extraDirs: Set<String>
+            get() = extraDirsState.value
+            set(value) {
+                extraDirsState.value = value
+            }
+        override val extraDirsFlow: StateFlow<Set<String>> = extraDirsState.asStateFlow()
         private val paused = mutableSetOf<String>()
 
         override fun addPausedApp(key: String) { paused += key }

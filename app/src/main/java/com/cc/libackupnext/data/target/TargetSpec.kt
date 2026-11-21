@@ -34,7 +34,7 @@ enum class TargetViewKind { APP, DIR, SYSTEM }
  * @param countText 「其他」页副标题（已保存 12 个 / 共 86 条）；应用和目录用空串
  * @param helpLines 详情页帮助文案，一行一段
  * @param actions 详情页菜单里的动作；需要看应用状态时用 [AppInfo] 算
- * @param isMissing 这个目标在列表里是不是已经不存在了（应用只在备份里 / 文件夹已删）
+ * @param isMissing 这个目标在列表里是不是已经不算数了（应用只在备份里 / 文件夹已删或已移除备份目标）
  */
 data class TargetSpec(
     val target: BackupTarget,
@@ -103,7 +103,8 @@ object TargetSpecs {
                 "恢复：覆盖同名文件，保留新增文件"
             ),
             actions = { listOf(ItemAction.OPEN_DIR, ItemAction.DELETE_DIR) },
-            isMissing = { app -> !File(app.packageName).isDirectory }
+            // 两种「不在备份目标里」都算置灰：目录已被删，或已从备份目标里移除（备份还在）
+            isMissing = { app -> app.onlyInBackup || !File(app.packageName).isDirectory }
         ),
 
         TargetSpec(

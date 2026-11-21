@@ -3,15 +3,18 @@ package com.cc.libackupnext.data.prefs
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
+import com.cc.libackupnext.data.DefaultBackupDirs
 import com.cc.libackupnext.data.RemoteRepo
 import com.cc.libackupnext.data.SavedRepo
 import com.cc.libackupnext.data.json.RemoteRepoDto
 import com.cc.libackupnext.data.json.SavedRepoDto
 import com.cc.libackupnext.data.json.toDto
 import com.cc.libackupnext.data.json.toModel
-import com.cc.libackupnext.data.DefaultBackupDirs
 import com.cc.libackupnext.service.json.parseJson
 import com.cc.libackupnext.service.json.toJsonText
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * 四个配置接口的 SharedPreferences 实现。
@@ -201,16 +204,29 @@ internal class SharedBackupPrefs(context: Context) : BackupPrefs {
         get() = prefs.getBoolean(Keys.FETCH_ICON_FROM_REPO, false)
         set(value) = prefs.edit { putBoolean(Keys.FETCH_ICON_FROM_REPO, value) }
 
+    private val extraDirsState = MutableStateFlow(readExtraDirs())
+
     /**
      * 备份目录（绝对路径），默认的 4 个也在里面。
      *
      * 读出来就按字母序排好 —— 文件页直接拿它渲染，不用再排一次。
+     * 写入时同步更新 [extraDirsFlow]：恢复成功把目录加回来这种后台改动，界面要能收到。
      */
     override var extraDirs: Set<String>
-        get() = (prefs.getStringSet(Keys.EXTRA_DIRS, null) ?: DefaultBackupDirs.toSet())
+        get() = extraDirsState.value
+        set(value) {
+            val sorted = value.sorted().toSet()
+            if (sorted == extraDirsState.value) return
+            prefs.edit { putStringSet(Keys.EXTRA_DIRS, sorted) }
+            extraDirsState.value = sorted
+        }
+
+    override val extraDirsFlow: StateFlow<Set<String>> = extraDirsState.asStateFlow()
+
+    private fun readExtraDirs(): Set<String> =
+        (prefs.getStringSet(Keys.EXTRA_DIRS, null) ?: DefaultBackupDirs.toSet())
             .sorted()
             .toSet()
-        set(value) = prefs.edit { putStringSet(Keys.EXTRA_DIRS, value) }
 
     override fun addPausedApp(key: String) {
         val current = pausedApps()

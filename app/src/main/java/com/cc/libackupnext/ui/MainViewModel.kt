@@ -23,6 +23,7 @@ import com.cc.libackupnext.service.gateway.DeviceGateway
 import com.cc.libackupnext.service.gateway.RepoReader
 import com.cc.libackupnext.service.json.encodePendingBatch
 import com.cc.libackupnext.service.json.loadPendingBatch
+import com.cc.libackupnext.service.target.TargetListing
 import com.cc.libackupnext.ui.util.AppIconStore
 import com.cc.libackupnext.util.AppLog
 import kotlinx.coroutines.CancellationException
@@ -374,6 +375,15 @@ class MainViewModel(
     /** 包名 -> 备份概况（备份次数 / 最近一次备份时间），列表里显示「x个备份」用。 */
     val backupSummaries: StateFlow<Map<String, AppBackupSummary>> = _backupSummaries
 
+    private val _backedUpDirs = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * 仓库里有备份的目录（绝对路径）。
+     *
+     * 文件页的数据源是「备份目标」和「仓库里有备份的目录」的并集：移除一个文件夹只是让它退出备份目标，
+     * 备份还在，这一行必须继续列出来（划线置灰），否则再也找不到恢复入口。
+     */
+    val backedUpDirs: StateFlow<Set<String>> = _backedUpDirs.asStateFlow()
     private suspend fun loadBackupSummaries(
         apps: List<AppInfo>,
         overview: List<com.cc.libackupnext.data.RepoOverview>? = null
@@ -395,6 +405,8 @@ class MainViewModel(
 
         if (summaries == _backupSummaries.value) return
         _backupSummaries.value = summaries
+        // 「哪些 key 是目录」的判据在 service 层，界面只拿结果
+        _backedUpDirs.value = TargetListing.backedUpDirs(summaries)
 
         // 正在按备份时间排序时，数据到了要重排一次
         if (sortType.value == SortType.BACKUP_TIME) {
