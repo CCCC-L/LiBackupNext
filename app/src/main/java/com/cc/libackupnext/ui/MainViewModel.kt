@@ -34,6 +34,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -254,10 +255,18 @@ class MainViewModel(
 
     // ==================== init ====================
     init {
-        // 用户列表和应用列表互不依赖，并行加载
+        // 用户列表和「其他」页条数：和列表数据无关，进来就取
         loadUsers()
-        loadList()
         refreshSystemData()
+        loadList()
+
+        // allApps 必须和 currentUserId 一致：这个不变量由持有两者的 ViewModel 守，界面只管写
+        // currentUserId（漏转发就出现「切了用户还是旧列表」）。已加载过的不重查，来回切省一次 IPC。
+        viewModelScope.launch {
+            currentUserId.drop(1).collect { userId ->
+                if (_loadedUserId.value != userId) loadList()
+            }
+        }
     }
 
     // ==================== 用户 ====================

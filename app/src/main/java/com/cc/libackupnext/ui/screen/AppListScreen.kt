@@ -56,7 +56,6 @@ import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.data.BatchOrigin
 import com.cc.libackupnext.data.FolderPickerLauncher
 import com.cc.libackupnext.data.MediaPath
-import com.cc.libackupnext.data.isDirectory
 import com.cc.libackupnext.service.target.TargetListing
 import com.cc.libackupnext.ui.AppBottomBar
 import com.cc.libackupnext.ui.AppTopBar
@@ -380,15 +379,11 @@ fun AppListScreen(
         viewModel.pendingBatch.value?.let { batch ->
             if (isSearching) viewModel.toggleSearch()
 
-            // 批次冻的是发起时的用户：先切回去，界面才和实际要执行的内容对齐。
-            // 执行本身用的是 batch.items（已经冻结），和顶栏无关 —— 这里只是别让用户看错行。
+            // 批次冻的是发起时的用户：切回去，界面才和要执行的内容对齐（执行用的是已冻结的
+            // batch.items，这里只影响显示；切值后的重查由 MainViewModel / 各页面自己响应）。
             batch.userId?.let { userId ->
                 if (viewModel.currentUserId.value != userId) {
                     viewModel.currentUserId.value = userId
-                    // 应用批次需要那个用户的包列表；纯文件夹批次的行会按新用户重新展开
-                    if (batch.items.any { !it.app.isDirectory }) {
-                        viewModel.loadList(scrollToTop = false, silent = true)
-                    }
                 }
             }
 
@@ -532,11 +527,6 @@ fun AppListScreen(
                         titleAlpha = { ((0.5f - settingsWeight()) / 0.5f).coerceIn(0f, 1f) },
                         // 用户切换和应用、文件夹有关（系统数据 / 设置没有「属于谁」）
                         showUserButton = tab == HomeTab.APPS || tab == HomeTab.FILES,
-                        // 应用页切用户 = 换一批包；文件页的行按新用户重新展开，不需要额外动作
-                        onUserSelected = { user ->
-                            viewModel.currentUserId.value = user.id
-                            if (tab == HomeTab.APPS) viewModel.loadList()
-                        },
                         // 设置页没有可搜的东西；系统数据页是固定三行，没有可排序的内容
                         showSearch = tab != HomeTab.SETTINGS,
                         showSortMenu = tab != HomeTab.SETTINGS && tab != HomeTab.OTHERS,

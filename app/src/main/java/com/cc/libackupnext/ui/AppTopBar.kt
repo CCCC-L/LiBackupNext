@@ -55,7 +55,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.cc.libackupnext.data.UserAccount
 import com.cc.libackupnext.ui.component.CheckboxMenuItem
 import com.cc.libackupnext.ui.theme.IconSlotWidth
 import com.cc.libackupnext.ui.theme.SearchButtonHideMs
@@ -92,13 +91,6 @@ fun AppTopBar(
     searchPlaceholder: String = "搜索应用名称或包名",
     /** 是否显示右上角的用户切换按钮（应用 / 文件夹这种「属于某个用户」的目标才显示）。 */
     showUserButton: Boolean = true,
-    /**
-     * 顶栏换了用户。
-     *
-     * 不传就按应用页的默认行为：切 `currentUserId` 并重载应用列表。文件页要传自己的 ——
-     * 它不重拉应用列表（那是另一个用户装的包），只重算目录归属和存在性。
-     */
-    onUserSelected: ((UserAccount) -> Unit)? = null,
     /** 是否显示搜索按钮（设置页没有可搜的东西）。 */
     showSearch: Boolean = true,
     /**
@@ -491,15 +483,11 @@ fun AppTopBar(
                         users.forEach { user ->
                             DropdownMenuItem(
                                 text = { Text(user.name) },
+                                // 只改这一个值：谁需要跟着变，谁自己盯着它（见 MainViewModel.init）
                                 onClick = {
                                     viewModel?.let { vm ->
                                         vm.isUserMenuExpanded.value = false
-                                        if (onUserSelected != null) {
-                                            onUserSelected.invoke(user)
-                                        } else {
-                                            vm.currentUserId.value = user.id
-                                            vm.loadList()
-                                        }
+                                        vm.currentUserId.value = user.id
                                     }
                                 },
                                 leadingIcon = {

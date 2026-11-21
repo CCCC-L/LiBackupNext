@@ -697,11 +697,6 @@ fun AppBackupScreen(
                 showMiddleButton = true,
                 // 用户切换：应用和文件夹都「属于某个用户」，换了他就是换到那个空间里的同一个目标
                 showUserButton = target.isApp || target == BackupTarget.DIR,
-                onUserSelected = { user ->
-                    viewModel.currentUserId.value = user.id
-                    // 应用页要换一批包；文件夹的路径由 displayApp 跟着重算
-                    if (target.isApp) viewModel.loadList()
-                },
                 searchPlaceholder = "搜索备注",
                 searchOpen = detailSearchOpen,
                 searchQueryText = detailQuery,

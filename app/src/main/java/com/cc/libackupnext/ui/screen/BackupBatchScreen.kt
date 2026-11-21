@@ -872,11 +872,6 @@ fun BackupBatchScreen(
                 title = if (mode == BackupBatchMode.CREATE) "新建备份" else "管理备份",
                 // 应用和文件夹都「属于某个用户」；这一页的行是按当前用户展开的，切用户有意义
                 showUserButton = targets.any { it.isApp || it == BackupTarget.DIR },
-                // 切用户：这一页的行按新用户重新展开；应用页才需要重拉包列表
-                onUserSelected = { user ->
-                    viewModel.currentUserId.value = user.id
-                    if (targets.any { it.isApp }) viewModel.loadList()
-                },
                 // 系统数据页是固定三行，没有可排序的内容
                 showSortMenu = tab != HomeTab.OTHERS,
                 // 文件夹页只留「倒序」；只有应用页需要四种排序方式
