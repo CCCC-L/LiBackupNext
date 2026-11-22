@@ -27,8 +27,9 @@ use jni::sys::jint;
 use jni::EnvUnowned;
 use rustic_backend::choose::BackendOptions;
 use rustic_core::{
-    BackupOptions, ConfigOptions, Credentials, KeyOptions, LsOptions, PathList, Repository,
-    RepositoryBackends, RepositoryOptions, SnapshotOptions, StringList,
+    BackupOptions, ConfigOptions, Credentials, KeyOptions, LsOptions, PathList, Progress,
+    ProgressBars, ProgressType, Repository, RepositoryBackends, RepositoryOptions, RusticProgress,
+    SnapshotOptions, StringList,
 };
 use rustic_core::repofile::SnapshotFile;
 use rustic_core::repofile::NodeType;
@@ -232,6 +233,10 @@ struct RestoreItem {
     /// 恢复后删除目标目录里快照没有的文件
     #[serde(default)]
     delete: bool,
+    /// 这一步的快照类型（apk / user / data …）。进度帧用它标 stage，
+    /// 读端才知道这些字节该挂到哪一步上。
+    #[serde(default)]
+    stage: String,
 }
 
 #[derive(Deserialize)]
@@ -669,10 +674,13 @@ fn repository_backends(
 }
 
 /// 打开仓库（不需要索引，列表/改备注都够用）。
+///
+/// 走 `new_with_progress`：备份时 rustic 内部的字节进度会经 [BridgeProgressBars]
+/// 写进共享内存。列表 / prune / check 这些操作没有挂进度端，emit 会静默跳过。
 fn open_repo(config: &RepoConfig) -> Result<rustic_core::Repository<rustic_core::OpenStatus>, String> {
     let backends = repository_backends(&config.path, &config.options)?;
 
-    Repository::new(&repo_options(), &backends)
+    Repository::new_with_progress(&repo_options(), &backends, BridgeProgressBars)
         .map_err(|e| describe_error(&e))?
         .open(&Credentials::password(&config.password))
         .map_err(|e| describe_error(&e))
@@ -825,8 +833,9 @@ fn open_backup_repo_cached(
         }
         _ => {
             let backends = repository_backends(&config.path, &config.options)?;
-            let repository = Repository::new(&repo_options(), &backends)
-                .map_err(|e| describe_error(&e))?;
+            let repository =
+                Repository::new_with_progress(&repo_options(), &backends, BridgeProgressBars)
+                    .map_err(|e| describe_error(&e))?;
             return Ok(Arc::new(
                 repository
                     .open(&Credentials::password(&config.password))
@@ -852,7 +861,7 @@ fn open_backup_repo_cached(
     }
 
     let backends = repository_backends(&config.path, &config.options)?;
-    let repository = Repository::new(&repo_options(), &backends)
+    let repository = Repository::new_with_progress(&repo_options(), &backends, BridgeProgressBars)
         .map_err(|e| describe_error(&e))?;
 
     let repo = Arc::new(
@@ -1541,7 +1550,15 @@ pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_native
             }
         };
 
-        match restore_snapshots(&request) {
+        // 恢复的字节进度走和备份同一套环形缓冲（这块共享内存本来就有进度区），
+        // root 侧的 Kotlin 用 RusticProgressPoller 读
+        set_current_stage("");
+        set_active_progress(Arc::new(ProgressCtx::new(ptr, capacity)));
+
+        let result = restore_snapshots(&request);
+        clear_active_progress();
+
+        match result {
             Ok(()) => {
                 write_response(ptr, capacity, &BridgeResponse::ok());
                 0
@@ -1574,11 +1591,17 @@ fn restore_snapshots(request: &RestoreRequest) -> Result<(), String> {
             .next()
             .ok_or_else(|| format!("snapshot {} not found", item.id))?;
 
+        // 字节进度的 stage 由调用方指定：恢复是逐个快照调进来的，
+        // Rust 侧只认 id，不知道这是 apk 还是 data
+        set_current_stage(&item.stage);
+        let bytes = BytesProgress::default();
+
         restore_snapshot(
             repository.as_ref(),
             &snapshot,
             std::path::Path::new(&item.dest),
             item.delete,
+            &bytes,
         )
         .map_err(|e| format!("restore {} failed: {e}", item.id))?;
     }
@@ -1788,6 +1811,7 @@ fn restore_snapshot<S: rustic_core::IndexedFull + Sync>(
     snapshot: &SnapshotFile,
     dest: &std::path::Path,
     delete: bool,
+    bytes: &BytesProgress,
 ) -> Result<(), String> {
     // 空路径就是快照根节点
     let root = repository
@@ -1874,6 +1898,9 @@ fn restore_snapshot<S: rustic_core::IndexedFull + Sync>(
     }
 
     if !files.is_empty() {
+        // 总量直接来自快照元数据：恢复不需要扫盘，也不需要走 rustic 的 ProgressBars
+        bytes.set_length(files.iter().map(|(_, node)| node.meta.size).sum());
+
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(restore_threads())
             .thread_name(|index| format!("restore-{index}"))
@@ -1882,10 +1909,17 @@ fn restore_snapshot<S: rustic_core::IndexedFull + Sync>(
 
         pool.install(|| {
             use rayon::prelude::*;
-            files
-                .par_iter()
-                .try_for_each(|(target, node)| restore_file(repository, node, target))
+            files.par_iter().try_for_each(|(target, node)| {
+                let result = restore_file(repository, node, target);
+                // 失败的文件不计入进度：进度条走完了但少文件，比慢一点更糟
+                if result.is_ok() {
+                    bytes.inc(node.meta.size);
+                }
+                result
+            })
         })?;
+
+        bytes.finish();
     }
 
     // 建硬链接：等 primary 的内容全部落盘之后再连
@@ -2081,7 +2115,15 @@ fn handle_backup(ptr: *mut u8, capacity: usize) -> jint {
 
     let progress = Arc::new(ProgressCtx::new(ptr, capacity));
 
-    match backup_repo(&request, progress.clone()) {
+    // 让 rustic 内部的字节进度（ProgressBars）能写到这块 buffer 上。
+    // 必须在 backup_repo 之前挂、之后摘：缓存的 Repository 如果拿着上一次调用
+    // 留下的旧地址，emit 会因为全局槽为空而静默跳过，不会写野指针。
+    set_current_stage("");
+    set_active_progress(progress.clone());
+    let result = backup_repo(&request, progress.clone());
+    clear_active_progress();
+
+    match result {
         Ok(()) => {
             progress.finish();
             write_response(ptr, capacity, &BridgeResponse::ok());
@@ -2169,8 +2211,9 @@ fn backup_items(
         } else {
             item.excludes.clone()
         };
-        // 进度是按「步骤」显示的，不需要总字节数；关掉这一步能省掉一整遍目录扫描
-        backup_options.no_scan = true;
+        // 保留默认的 no_scan = false：rustic 会在独立线程里并行扫一遍源目录拿总字节，
+        // 给进度条当分母（`archiver` 里是 `scope.spawn`，和备份内容读并行，不阻塞主流程）。
+        // 关掉它进度条就永远只有「已处理多少」，没有「总共多少」。
 
         // 直接指定 parent：省掉 rustic 内部的「列全部快照找最新」这一遍扫描。
         // 客户端从备份概况里拿到同类型最新快照的 id 传过来；没传就退回默认行为。
@@ -2248,6 +2291,11 @@ impl ProgressCtx {
     ///
     /// `errors` 是这次快照里**读不出来的源文件个数**（0 就不写这个字段）。
     fn emit(&self, stage: &str, state: &str) {
+        // 记下当前步骤：字节进度帧只带 total / current，步骤名要在这里补，
+        // 否则读端拿到一堆字节数却不知道该挂到哪一步上
+        if state == "running" && !stage.is_empty() {
+            set_current_stage(stage);
+        }
         self.write_event(stage, state, None, None, None);
     }
 
@@ -2268,7 +2316,6 @@ impl ProgressCtx {
         errors: Option<u64>,
         reason: Option<&str>,
     ) {
-        let _guard = self.write_lock.lock();
         let mut json = format!(
             r#"{{"stage":"{}","state":"{}""#,
             escape_json(stage),
@@ -2284,6 +2331,23 @@ impl ProgressCtx {
             json.push_str(&format!(r#","reason":"{}""#, escape_json(reason)));
         }
         json.push('}');
+        self.write_raw(&json);
+    }
+
+    /// 字节进度：`{"stage":"data","state":"progress","total":…,"current":…}`。
+    ///
+    /// 和步骤事件走同一个环形缓冲，读端按 `state` 区分。
+    fn write_progress(&self, stage: &str, total: u64, current: u64) {
+        let json = format!(
+            r#"{{"stage":"{}","state":"progress","total":{total},"current":{current}}}"#,
+            escape_json(stage)
+        );
+        self.write_raw(&json);
+    }
+
+    /// 往环形缓冲写一格并推进计数。所有事件共用这一条路径。
+    fn write_raw(&self, json: &str) {
+        let _guard = self.write_lock.lock();
         let index = self.counter.fetch_add(1, Ordering::SeqCst) + 1;
         let slot = ((index - 1) as usize) % PROGRESS_SLOT_COUNT;
         let offset = PROGRESS_OFFSET + PROGRESS_COUNTER_SIZE + slot * PROGRESS_SLOT_SIZE;
@@ -2299,6 +2363,132 @@ impl ProgressCtx {
 
     fn finish(&self) {
         self.emit("", "finished");
+    }
+}
+
+// ==================== rustic 字节进度 ====================
+
+/// 当前这次 JNI 调用可写的进度端。
+///
+/// **必须放全局，不能挂在 `ProgressBars` 实例上**：`Repository` 会被
+/// `open_indexed_repo_cached()` 缓存并跨多次 JNI 调用复用，而每次调用拿到的
+/// direct buffer 地址可能不同。挂在实例上，第二次调用写的就是已经失效的地址。
+static ACTIVE_PROGRESS: Mutex<Option<Arc<ProgressCtx>>> = Mutex::new(None);
+
+/// 当前正在备份的步骤（`apk` / `user` / `data` …）。
+///
+/// rustic 的字节进度回调只给一个 `"backing up..."` 前缀，没有步骤信息；
+/// 步骤由 `backup_items` 在开始每一项时设置，字节帧读它补上 stage。
+static CURRENT_STAGE: Mutex<String> = Mutex::new(String::new());
+
+fn set_current_stage(stage: &str) {
+    if let Ok(mut guard) = CURRENT_STAGE.lock() {
+        guard.clear();
+        guard.push_str(stage);
+    }
+}
+
+fn current_stage() -> String {
+    CURRENT_STAGE.lock().map(|g| g.clone()).unwrap_or_default()
+}
+
+fn set_active_progress(ctx: Arc<ProgressCtx>) {
+    if let Ok(mut guard) = ACTIVE_PROGRESS.lock() {
+        *guard = Some(ctx);
+    }
+}
+
+fn clear_active_progress() {
+    if let Ok(mut guard) = ACTIVE_PROGRESS.lock() {
+        *guard = None;
+    }
+}
+
+/// 写帧节流间隔：`inc` 每 1 MiB 调一次，7 GB 就是 7000 次；
+/// 读端 60ms 才轮询一次，写那么密纯属浪费。
+const PROGRESS_THROTTLE_MS: u64 = 200;
+
+/// 进程启动时刻，用于节流计时（`Instant` 不能直接放进 atomic）。
+static PROGRESS_EPOCH: OnceLock<Instant> = OnceLock::new();
+
+fn elapsed_ms() -> u64 {
+    PROGRESS_EPOCH
+        .get_or_init(Instant::now)
+        .elapsed()
+        .as_millis() as u64
+}
+
+/// rustic 内部每调用一次 `progress_bytes()` 就创建一条，对应一个快照的字节进度。
+#[derive(Debug, Default)]
+struct BytesProgress {
+    total: AtomicU64,
+    current: AtomicU64,
+    last_emit_ms: AtomicU64,
+}
+
+impl RusticProgress for BytesProgress {
+    /// 必须返回 false：`archiver` 里只有 `!p.is_hidden()` 才会去扫描源目录
+    /// 拿总字节数，返回 true 就永远没有分母。
+    fn is_hidden(&self) -> bool {
+        false
+    }
+
+    fn set_length(&self, len: u64) {
+        self.total.store(len, Ordering::Relaxed);
+        self.emit(true);
+    }
+
+    fn set_title(&self, _title: &str) {}
+
+    fn inc(&self, inc: u64) {
+        self.current.fetch_add(inc, Ordering::Relaxed);
+        self.emit(false);
+    }
+
+    fn finish(&self) {
+        self.emit(true);
+    }
+}
+
+impl BytesProgress {
+    fn emit(&self, force: bool) {
+        let now = elapsed_ms();
+        if !force {
+            let last = self.last_emit_ms.load(Ordering::Relaxed);
+            if now.saturating_sub(last) < PROGRESS_THROTTLE_MS {
+                return;
+            }
+        }
+        self.last_emit_ms.store(now, Ordering::Relaxed);
+
+        let Ok(guard) = ACTIVE_PROGRESS.lock() else {
+            return;
+        };
+        let Some(ctx) = guard.as_ref() else {
+            return;
+        };
+        ctx.write_progress(
+            &current_stage(),
+            self.total.load(Ordering::Relaxed),
+            self.current.load(Ordering::Relaxed),
+        );
+    }
+}
+
+/// 把 rustic 的进度回调接到共享内存上。
+///
+/// 零大小类型：`Repository` 会被缓存复用，挂状态就会在两次调用之间串味。
+#[derive(Debug, Clone, Copy)]
+struct BridgeProgressBars;
+
+impl ProgressBars for BridgeProgressBars {
+    fn progress(&self, progress_type: ProgressType, _prefix: &str) -> Progress {
+        match progress_type {
+            // 只有字节进度值得上报。Spinner / Counter 是索引文件和收尾用的，
+            // 对用户没意义，而且频率高，写进环形缓冲只会把真正的进度挤掉。
+            ProgressType::Bytes => Progress::new(BytesProgress::default()),
+            _ => Progress::hidden(),
+        }
     }
 }
 
@@ -2531,9 +2721,12 @@ fn describe_error(error: &rustic_core::RusticError) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        backup_repo, describe_error, init_repo, read_frame_at, set_repo, BackupItem, BackupRequest,
-        ProgressCtx, PROGRESS_COUNTER_SIZE, PROGRESS_OFFSET, PROGRESS_SLOT_SIZE,
+        backup_repo, clear_active_progress, describe_error, init_repo, read_frame_at,
+        set_active_progress, set_current_stage, set_repo, BackupItem, BackupRequest, BytesProgress,
+        ProgressCtx, PROGRESS_COUNTER_SIZE, PROGRESS_OFFSET, PROGRESS_SLOT_COUNT,
+        PROGRESS_SLOT_SIZE,
     };
+    use rustic_core::RusticProgress;
     use std::sync::{Arc, Mutex};
 
     /// Backtrace 是 Display 的最后一节，从源头截断，日志和 UI 都不再出现这一段。
@@ -2602,6 +2795,80 @@ mod tests {
         let snapshots = repo_dir.join("snapshots");
         let count = std::fs::read_dir(&snapshots).map(|d| d.count()).unwrap_or(0);
         assert!(count > 0, "没有生成快照");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 端到端：rustic 的字节进度必须真的流到共享内存里。
+    ///
+    /// 这条链路有三处容易断，任何一处都会让帧被静默丢弃、UI 永远停在不确定态：
+    /// `is_hidden()` 返回 true、`no_scan = true`、全局进度端没挂上。
+    #[test]
+    fn backup_emits_byte_progress() {
+        let base = std::env::temp_dir().join(format!("rustic-byte-progress-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        let repo_dir = base.join("repo");
+        let src_dir = base.join("src");
+        std::fs::create_dir_all(&repo_dir).unwrap();
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(src_dir.join("hello.txt"), b"hello rustic").unwrap();
+
+        let repo = repo_dir.to_string_lossy().to_string();
+        // setup_repo 持着 TEST_LOCK：进度端是全局的，不能和别的测试并行
+        let _guard = setup_repo(&repo);
+
+        let request = BackupRequest {
+            items: vec![BackupItem {
+                stage: "user".to_string(),
+                label: "com.example:user".to_string(),
+                tags: vec!["com.example".to_string()],
+                sources: vec![src_dir.to_string_lossy().to_string()],
+                as_path: None,
+                skip_reason: None,
+                description: None,
+                parent: None,
+                excludes: Vec::new(),
+                ignore_inode: false,
+            }],
+            excludes: Vec::new(),
+            batch: None,
+        };
+
+        let mut buffer = vec![0u8; PROGRESS_OFFSET + 64 * 1024];
+        let capacity = buffer.len();
+        let ptr = buffer.as_mut_ptr();
+        let progress = Arc::new(ProgressCtx::new(ptr, capacity));
+
+        set_current_stage("");
+        set_active_progress(progress.clone());
+        let result = backup_repo(&request, progress);
+        clear_active_progress();
+        result.expect("backup 应该成功");
+
+        // 字节帧和步骤帧穿插在同一圈槽位里，要全部扫一遍
+        let mut totals = Vec::new();
+        for slot in 0..PROGRESS_SLOT_COUNT {
+            let offset = PROGRESS_OFFSET + PROGRESS_COUNTER_SIZE + slot * PROGRESS_SLOT_SIZE;
+            let Ok(bytes) = read_frame_at(ptr, capacity, offset) else {
+                continue;
+            };
+            let Ok(text) = String::from_utf8(bytes) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+                continue;
+            };
+            if value["state"] == "progress" && value["stage"] == "user" {
+                totals.push(value["total"].as_u64().unwrap_or(0));
+            }
+        }
+
+        assert!(!totals.is_empty(), "没有收到任何字节进度帧");
+        assert!(
+            totals.iter().any(|&total| total > 0),
+            "字节进度的总量一直是 0：{totals:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -2959,6 +3226,7 @@ mod tests {
                 id: snap.id,
                 dest: out.to_string_lossy().to_string(),
                 delete: true,
+                stage: "user".to_string(),
             }],
         })
         .expect("恢复应该成功");
@@ -2974,6 +3242,101 @@ mod tests {
         assert!(
             !out.join("com.example").join("stale.txt").exists(),
             "delete 应该清掉快照里没有的文件"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 恢复的字节进度：总量直接来自快照元数据（不用扫盘），写文件时按文件大小累加。
+    #[test]
+    fn restore_emits_byte_progress() {
+        let base =
+            std::env::temp_dir().join(format!("rustic-restore-progress-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        let repo_dir = base.join("repo");
+        let src = base.join("src");
+        let out = base.join("out");
+        std::fs::create_dir_all(&repo_dir).unwrap();
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&out).unwrap();
+
+        // 64 KiB 整块，断言时能精确对上
+        std::fs::write(src.join("a.bin"), vec![7u8; 64 * 1024]).unwrap();
+
+        let repo = repo_dir.to_string_lossy().to_string();
+        let _guard = setup_repo(&repo);
+
+        let request = BackupRequest {
+            items: vec![BackupItem {
+                stage: "user".to_string(),
+                label: "com.example:user".to_string(),
+                tags: vec!["com.example".to_string()],
+                sources: vec![src.to_string_lossy().to_string()],
+                as_path: Some("com.example".to_string()),
+                skip_reason: None,
+                description: None,
+                parent: None,
+                excludes: Vec::new(),
+                ignore_inode: false,
+            }],
+            excludes: Vec::new(),
+            batch: None,
+        };
+
+        let mut backup_buffer = vec![0u8; PROGRESS_OFFSET + 64 * 1024];
+        let backup_progress = Arc::new(ProgressCtx::new(
+            backup_buffer.as_mut_ptr(),
+            backup_buffer.len(),
+        ));
+        backup_repo(&request, backup_progress).expect("backup 应该成功");
+
+        let snap = super::list_snapshots(&super::ListRequest {
+            package_name: "com.example".to_string(),
+        })
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+
+        let mut buffer = vec![0u8; PROGRESS_OFFSET + 64 * 1024];
+        let capacity = buffer.len();
+        let ptr = buffer.as_mut_ptr();
+        set_current_stage("");
+        set_active_progress(Arc::new(ProgressCtx::new(ptr, capacity)));
+
+        let result = super::restore_snapshots(&super::RestoreRequest {
+            items: vec![super::RestoreItem {
+                id: snap.id,
+                dest: out.to_string_lossy().to_string(),
+                delete: false,
+                stage: "user".to_string(),
+            }],
+        });
+        clear_active_progress();
+        result.expect("恢复应该成功");
+
+        let mut totals = Vec::new();
+        for slot in 0..PROGRESS_SLOT_COUNT {
+            let offset = PROGRESS_OFFSET + PROGRESS_COUNTER_SIZE + slot * PROGRESS_SLOT_SIZE;
+            let Ok(bytes) = read_frame_at(ptr, capacity, offset) else {
+                continue;
+            };
+            let Ok(text) = String::from_utf8(bytes) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+                continue;
+            };
+            if value["state"] == "progress" && value["stage"] == "user" {
+                totals.push(value["total"].as_u64().unwrap_or(0));
+            }
+        }
+
+        assert!(!totals.is_empty(), "没有收到恢复的字节进度帧");
+        assert!(
+            totals.iter().any(|&total| total == 64 * 1024),
+            "总量应该等于文件大小：{totals:?}"
         );
 
         let _ = std::fs::remove_dir_all(&base);
@@ -3077,5 +3440,47 @@ mod tests {
         .expect("读取进度帧失败");
         let second = String::from_utf8(second).unwrap();
         assert_eq!(second, r#"{"stage":"apk","state":"done","files":1}"#);
+    }
+
+    /// 字节进度帧同样是跨进程协议：Kotlin 侧 `BackupProgress` 的 `total` / `current`
+    /// 必须和这里对得上，否则进度条永远停在不确定态。
+    #[test]
+    fn bytes_progress_frame_carries_total_and_current() {
+        // 进度端是全局的，和别的测试同时写会互相覆盖
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let mut buffer = vec![0u8; PROGRESS_OFFSET + 64 * 1024];
+        let capacity = buffer.len();
+        let ptr = buffer.as_mut_ptr();
+
+        set_current_stage("data");
+        set_active_progress(Arc::new(ProgressCtx::new(ptr, capacity)));
+
+        let progress = BytesProgress::default();
+        progress.set_length(1000);
+        progress.inc(250);
+        // inc 有 200ms 节流，finish 是强制写，正好把累计值带出来
+        progress.finish();
+        clear_active_progress();
+
+        // 别的测试可能同时在写这块缓冲，直接扫全部槽位找自己那条
+        let mut found = None;
+        for slot in 0..PROGRESS_SLOT_COUNT {
+            let offset = PROGRESS_OFFSET + PROGRESS_COUNTER_SIZE + slot * PROGRESS_SLOT_SIZE;
+            let Ok(bytes) = read_frame_at(ptr, capacity, offset) else {
+                continue;
+            };
+            let Ok(text) = String::from_utf8(bytes) else {
+                continue;
+            };
+            if text.contains(r#""state":"progress""#) && text.contains(r#""current":250"#) {
+                found = Some(text);
+                break;
+            }
+        }
+
+        let text = found.expect("没有找到字节进度帧");
+        assert!(text.contains(r#""stage":"data""#), "{text}");
+        assert!(text.contains(r#""current":250"#), "{text}");
     }
 }

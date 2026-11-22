@@ -50,10 +50,17 @@ object DefaultOperationPlanner : OperationPlanner {
     ): List<BackupStep> {
         if (progress.stage.isBlank()) return steps
         return steps.map { step ->
-            if (step.kind.key != progress.stage) {
-                step
-            } else {
-                step.copy(
+            when {
+                step.kind.key != progress.stage -> step
+
+                // 字节进度帧只带 total / current：files / reason 在帧里是默认值，
+                // 直接 copy 会把步骤已有的说明清掉
+                progress.state == BackupProgress.STATE_PROGRESS -> step.copy(
+                    total = progress.total,
+                    current = progress.current
+                )
+
+                else -> step.copy(
                     status = statusOf(progress.state, step.status),
                     files = progress.files,
                     errors = progress.errors,

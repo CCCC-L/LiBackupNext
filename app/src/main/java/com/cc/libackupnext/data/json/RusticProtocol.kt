@@ -136,7 +136,9 @@ data class RestoreTreeRequest(val items: List<RestoreTreeItem>)
 data class RestoreTreeItem(
     val id: String,
     val dest: String,
-    val delete: Boolean = false
+    val delete: Boolean = false,
+    /** 快照类型（apk / user / data …）。Rust 侧用它给字节进度帧标 stage。 */
+    val stage: String = ""
 )
 
 // ==================== Rust -> 主进程的响应 ====================

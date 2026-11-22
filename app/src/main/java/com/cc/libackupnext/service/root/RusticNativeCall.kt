@@ -3,6 +3,7 @@ package com.cc.libackupnext.service.root
 import android.os.SharedMemory
 import com.cc.libackupnext.data.json.OkResponse
 import com.cc.libackupnext.data.json.OperationEnvelope
+import com.cc.libackupnext.service.IBackupProgressCallback
 import com.cc.libackupnext.service.json.parseJson
 import com.cc.libackupnext.service.json.toJsonText
 import com.cc.libackupnext.util.AppLog
@@ -24,12 +25,15 @@ internal fun opOf(request: String): String? = runCatching {
  *
  * @param nativeError native 库没加载成功时的固定错误；非空就直接返回它
  * @param failText 失败时的文案前缀，例如「修改备注失败」
+ * @param onProgress 进度回调。传了就在 native 执行期间轮询共享内存的进度区
+ *   （恢复的字节进度写在那里，和备份同一套布局）
  */
 internal fun runSimpleNative(
     request: String,
     native: (ByteBuffer) -> Int,
     nativeError: String?,
     failText: String = "操作失败",
+    onProgress: IBackupProgressCallback? = null,
 ): String {
     nativeError?.let { return it }
     val op = opOf(request)
@@ -41,7 +45,14 @@ internal fun runSimpleNative(
             val buffer = shared.mapReadWrite()
             writeFrameAt(buffer, 0, request)
 
-            val code = native(buffer)
+            // 进度区由 native 侧写、这里轮询读。native 是阻塞调用，读必须在另一个线程
+            val poller = onProgress?.let { RusticProgressPoller(buffer, it) }
+            poller?.start()
+            val code = try {
+                native(buffer)
+            } finally {
+                poller?.stop()
+            }
             val raw = runCatching { readFrameAt(buffer, 0) }.getOrNull()
             val response = raw?.let {
                 runCatching { it.parseJson<OkResponse>() }.getOrNull()

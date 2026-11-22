@@ -1,6 +1,9 @@
 package com.cc.libackupnext.ui.dialog
 
 import android.os.SystemClock
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,6 +13,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -17,10 +23,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
@@ -29,7 +37,10 @@ import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.BackupStepStatus
 import com.cc.libackupnext.service.gateway.BackendErrors
 import com.cc.libackupnext.ui.component.AppSurfaceDialog
+import com.cc.libackupnext.ui.util.formatSize
 import com.cc.libackupnext.util.AppLog
+import kotlinx.coroutines.delay
+import java.util.Locale
 
 /**
  * 进度弹窗里的一段：标题（应用名，可为空）+ 这一步的步骤。
@@ -81,7 +92,19 @@ fun BackupProgressDialog(
             else -> title
         }
     ) {
-        Text(text = subtitle, style = MaterialTheme.typography.bodySmall)
+        // 进度区固定在滚动区之外：滚动的是历史步骤，当前进度必须一直看得见
+        ProgressHeader(
+            subtitle = subtitle,
+            sections = sections,
+            running = running
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+        HorizontalDivider(
+            thickness = 1.dp,
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+        )
+        Spacer(modifier = Modifier.height(8.dp))
 
         // 步骤多的时候滚动，新加的一段自动滚到底
         val scrollState = rememberScrollState()
@@ -106,7 +129,8 @@ fun BackupProgressDialog(
             modifier = Modifier
                 // 撑满宽度：文字右边的空白区域也能拖动滚动
                 .fillMaxWidth()
-                .heightIn(max = 320.dp)
+                // 比原来矮 40dp：顶部多了进度区，弹窗总高度保持不变
+                .heightIn(max = 280.dp)
                 .verticalScroll(scrollState)
         ) {
             sections.forEach { section ->
@@ -126,9 +150,9 @@ fun BackupProgressDialog(
                                     unreadableSuffix(step),
                             style = MaterialTheme.typography.bodySmall
                         )
-                        if (step.status == BackupStepStatus.SKIPPED &&
-                            step.reason.isNotBlank()
-                        ) {
+                        // 任何状态下的 reason 都要显示：跳过要说明原因，
+                        // 恢复目录的「正在更新相册索引…」也是挂在 done 上的
+                        if (step.reason.isNotBlank()) {
                             Text(
                                 text = step.reason,
                                 style = MaterialTheme.typography.bodySmall,
@@ -161,6 +185,156 @@ fun BackupProgressDialog(
                 Text("关闭")
             }
         }
+    }
+}
+
+/**
+ * 弹窗顶部固定的进度区：状态一行 + 进度条 + 当前步骤 + 已用时间。
+ *
+ * 进度条有两种形态，由 rustic 扫没扫出源目录总量决定：
+ * - 备份刚起步的几秒（rustic 在独立线程里扫源目录），没有分母 → 不确定态（流动）；
+ * - 拿到 total 之后 → 确定态，封顶 99%（扫出来的总量可能比实际略小）。
+ *
+ * 时间从弹窗第一次组合开始算：两个调用方都是在把 running 置 true 的同一帧里打开弹窗。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun ProgressHeader(
+    subtitle: String,
+    sections: List<ProgressSection>,
+    running: Boolean
+) {
+    Text(text = subtitle, style = MaterialTheme.typography.bodySmall)
+
+    val startedAt = remember { SystemClock.elapsedRealtime() }
+    var now by remember { mutableLongStateOf(startedAt) }
+    LaunchedEffect(running) {
+        while (running) {
+            now = SystemClock.elapsedRealtime()
+            delay(1_000)
+        }
+        // 结束的那一下补一次，把最后一秒也算进去
+        now = SystemClock.elapsedRealtime()
+    }
+    val elapsed = (now - startedAt).coerceAtLeast(0)
+
+    if (running) {
+        val step = runningStep(sections)
+        val total = step?.total ?: 0L
+        val current = step?.current ?: 0L
+        val hasLength = total > 0
+
+        // 目标比例。封顶 0.99：扫出来的总量可能比实际略小，到了 100% 还在写最伤人
+        val target = if (hasLength) {
+            (current.toDouble() / total).coerceIn(0.0, 0.99).toFloat()
+        } else {
+            0f
+        }
+        // 线性缓动：进度要匀速追赶。用 ease-in-out 会一顿一顿，反而显得卡
+        val fraction by animateFloatAsState(
+            targetValue = target,
+            animationSpec = tween(durationMillis = 350, easing = LinearEasing),
+            label = "backup-progress"
+        )
+        // 波幅固定：默认实现会随进度衰减，99% 时压成一条直线
+        val amplitude = with(LocalDensity.current) { 3.dp.toPx() }
+
+        Spacer(modifier = Modifier.height(10.dp))
+        LinearWavyProgressIndicator(
+            progress = { fraction },
+            amplitude = { amplitude },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = currentStepText(sections),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = if (hasLength) {
+                    "${percent(current, total)}%"
+                } else {
+                    "已用 ${formatElapsed(elapsed)}"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        Spacer(modifier = Modifier.height(2.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = if (hasLength) {
+                    "${formatSize(current.coerceAtMost(total))} / ${formatSize(total)}"
+                } else {
+                    // 没有分母时不画流动条：条停在 0%，用文字说明还在数
+                    "正在统计总量…"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (hasLength) {
+                Text(
+                    text = "已用 ${formatElapsed(elapsed)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    } else if (elapsed >= 1_000) {
+        // 结束后不再画进度条：一条停在原地的满条没有任何信息量
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = "用时 ${formatElapsed(elapsed)}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/**
+ * 当前正在处理的那一步。
+ *
+ * 从最后一段往前找：批量时当前应用是最后一段，前面几段都是已经跑完的历史。
+ */
+private fun runningStep(sections: List<ProgressSection>): BackupStep? =
+    sections.asReversed().firstNotNullOfOrNull { section ->
+        section.steps.lastOrNull { it.status == BackupStepStatus.RUNNING }
+    }
+
+private fun currentStepText(sections: List<ProgressSection>): String {
+    val step = runningStep(sections)
+    return if (step == null) {
+        "正在准备…"
+    } else {
+        // 不写「正在备份 data」：标题已经是「正在备份」，再重复一次只是噪音
+        step.kind.key
+    }
+}
+
+/** 0..99：到 100% 就说明分母不准了，宁可停在 99 等真正完成。 */
+private fun percent(current: Long, total: Long): Int =
+    if (total <= 0) 0 else ((current * 100) / total).coerceIn(0L, 99L).toInt()
+
+/** `1:23` / `12:05` / `1:02:03`。 */
+private fun formatElapsed(millis: Long): String {
+    val total = millis / 1_000
+    val hours = total / 3_600
+    val minutes = (total % 3_600) / 60
+    val seconds = total % 60
+    return if (hours > 0) {
+        String.format(Locale.US, "%d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format(Locale.US, "%d:%02d", minutes, seconds)
     }
 }
 

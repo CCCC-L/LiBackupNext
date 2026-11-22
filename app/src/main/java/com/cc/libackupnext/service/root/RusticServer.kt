@@ -344,11 +344,13 @@ object RusticServer {
                     val error = restoreSupport.restoreTree(
                         snapshotId = id,
                         target = target,
+                        stage = SnapshotKind.DIR.key,
                         delete = false,
                         uid = uid,
                         gid = gid,
                         parentContext = true,
-                        dirMode = "2770"
+                        dirMode = "2770",
+                        onProgress = callback
                     )
                     if (error != null) {
                         emit(SnapshotKind.DIR, "failed")
@@ -366,7 +368,13 @@ object RusticServer {
                         mkdirs()
                     }
 
-                    val error = restoreSupport.restoreTo(id, dir.absolutePath, delete = false)
+                    val error = restoreSupport.restoreTo(
+                        id,
+                        dir.absolutePath,
+                        delete = false,
+                        stage = SnapshotKind.APK.key,
+                        onProgress = callback
+                    )
                     if (error.isNotBlank()) {
                         emit(SnapshotKind.APK, "failed")
                         return error
@@ -455,10 +463,12 @@ object RusticServer {
                     val error = restoreSupport.restoreTree(
                         snapshotId = id,
                         target = File(spec.dir, packageName),
+                        stage = kind.key,
                         delete = deleteFirst,
                         uid = appUid,
                         gid = spec.gid,
-                        dirMode = spec.dirMode
+                        dirMode = spec.dirMode,
+                        onProgress = callback
                     )
                     if (error != null) {
                         emit(kind, "failed")

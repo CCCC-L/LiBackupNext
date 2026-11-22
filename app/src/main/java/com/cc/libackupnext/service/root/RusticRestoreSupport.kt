@@ -4,6 +4,7 @@ import android.content.Context
 import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.json.RestoreTreeItem
 import com.cc.libackupnext.data.json.RestoreTreeRequest
+import com.cc.libackupnext.service.IBackupProgressCallback
 import com.cc.libackupnext.service.json.AppJson
 import com.cc.libackupnext.service.json.toJsonText
 import kotlinx.serialization.json.jsonObject
@@ -90,9 +91,12 @@ internal class RusticRestoreSupport(
      *   解到 [target] 的父目录正好落在 [target]，所以 [dest] 默认取父目录；
      * - 导出图标这类单文件快照：解包目录本身就是目标，[dest] 和 [target] 传同一个路径。
      *
+     * @param stage 这一步的快照类型（apk / user / data …）。Rust 侧用它给字节进度帧标 stage，
+     *   不传的话进度条不知道该挂到哪一步上。
      * @param delete 恢复后删掉 [dest] 里快照没有的文件。**里面还有别的东西时绝不能开**
      * @param parentContext 用父目录的 SELinux 上下文（外部存储必须 true）
      * @param dirMode 恢复后统一设的目录权限；null = 保持快照里记录的权限
+     * @param onProgress 恢复过程中的字节进度回调；null 表示不需要（导出图标这类小快照）
      * @return 出错时返回给用户看的说明，成功返回 null
      */
     fun restoreTree(
@@ -100,13 +104,15 @@ internal class RusticRestoreSupport(
         target: File,
         uid: Int,
         gid: Int,
+        stage: String = "",
         delete: Boolean = false,
         // target 都是 File(父目录, 名字) 拼出来的，父目录一定在
         dest: File = target.parentFile!!,
         parentContext: Boolean = false,
-        dirMode: String? = null
+        dirMode: String? = null,
+        onProgress: IBackupProgressCallback? = null
     ): String? {
-        val error = restoreTo(snapshotId, dest.absolutePath, delete)
+        val error = restoreTo(snapshotId, dest.absolutePath, delete, stage, onProgress)
         if (error.isNotBlank()) return error
 
         // 备份文件夹为空时Rustic不会写入快照中，所以补建一下，如果补建失败直接返回
@@ -117,19 +123,28 @@ internal class RusticRestoreSupport(
     }
 
     /** 把单个快照恢复到 dest。 */
-    fun restoreTo(id: String, dest: String, delete: Boolean): String {
+    fun restoreTo(
+        id: String,
+        dest: String,
+        delete: Boolean,
+        stage: String = "",
+        onProgress: IBackupProgressCallback? = null
+    ): String {
         val payload = RestoreTreeRequest(
-            items = listOf(RestoreTreeItem(id = id, dest = dest, delete = delete))
+            items = listOf(
+                RestoreTreeItem(id = id, dest = dest, delete = delete, stage = stage)
+            )
         )
-        return runSimple(payload.toJsonText(), nativeRestore)
+        return runSimple(payload.toJsonText(), nativeRestore, onProgress = onProgress)
     }
 
     /** 简单请求：转给 [runSimpleNative]，把 native 库错误一并带过去。 */
     private fun runSimple(
         request: String,
         native: (ByteBuffer) -> Int,
-        failText: String = "操作失败"
-    ): String = runSimpleNative(request, native, nativeError, failText)
+        failText: String = "操作失败",
+        onProgress: IBackupProgressCallback? = null
+    ): String = runSimpleNative(request, native, nativeError, failText, onProgress)
 
     /** 查询请求：转给 [runQueryNative]，结果 JSON 原样回给主进程。 */
     private fun runQuery(

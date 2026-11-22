@@ -579,7 +579,7 @@ fun BackupBatchScreen(
         progressError = null
         connectionInterrupted = false
         cleanedBackups = 0
-        progressSubtitle = "开始:${list.first().app.packageName}"
+        progressSubtitle = list.first().app.name.ifBlank { list.first().app.packageName }
         progressSections = emptyList()
         running = true
         showProgress = true
@@ -609,7 +609,7 @@ fun BackupBatchScreen(
                     progressSubtitle = if (total > 1) {
                         "${finished + 1}/$total  ${app.name}"
                     } else {
-                        "开始:${app.packageName}"
+                        app.name.ifBlank { app.packageName }
                     }
                     // 每个应用追加一段，之前成功的记录保留在窗口里
                     progressSections = progressSections + ProgressSection(

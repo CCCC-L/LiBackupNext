@@ -858,7 +858,8 @@ fun AppBackupScreen(
         BackupProgressDialog(
             title = progressTitle,
             doneTitle = if (progressTitle == "正在备份") "备份成功" else "恢复成功",
-            subtitle = "开始:${displayApp.packageName}",
+            // 用应用名而不是包名：进度弹窗顶部就这一行，给用户看的是「在备份谁」
+            subtitle = displayApp.name.ifBlank { displayApp.packageName },
             sections = listOf(ProgressSection(title = "", steps = currentSteps)),
             isRestore = progressTitle != "正在备份",
             error = backupError,

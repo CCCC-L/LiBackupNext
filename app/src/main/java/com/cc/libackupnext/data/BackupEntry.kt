@@ -51,7 +51,11 @@ data class BackupStep(
     val files: Long = 0,
     /** 这一步有多少个源文件读不出来（0 表示全读到了）。 */
     val errors: Long = 0,
-    val reason: String = ""
+    val reason: String = "",
+    /** 这一步的字节总量；0 表示 rustic 还没扫出来，进度条只能用不确定态。 */
+    val total: Long = 0,
+    /** 这一步已处理的字节数。 */
+    val current: Long = 0
 )
 
 /** 某个包在仓库里的备份概况：备份次数 + 最近一次备份。 */
