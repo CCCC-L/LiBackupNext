@@ -68,7 +68,6 @@ import com.cc.libackupnext.ui.dialog.BackupHelpDialog
 import com.cc.libackupnext.ui.dialog.BackupProgressDialog
 import com.cc.libackupnext.ui.dialog.ProgressSection
 import com.cc.libackupnext.ui.dialog.rememberDoubleClickGuard
-import com.cc.libackupnext.ui.dialog.title
 import com.cc.libackupnext.ui.screen.detail.BackupEntryRow
 import com.cc.libackupnext.ui.screen.detail.BackupManageDialog
 import com.cc.libackupnext.ui.screen.detail.BackupOptionsDialog
@@ -295,7 +294,7 @@ fun AppBackupScreen(
                         ItemAction.OPEN_WIFI_SETTINGS,
                         ItemAction.OPEN_CONTACTS,
                         ItemAction.OPEN_CALL_LOG,
-                        ItemAction.OPEN_SMS -> Unit
+                        ItemAction.OPEN_MESSAGING -> Unit
                     }
                 }
 
@@ -328,14 +327,14 @@ fun AppBackupScreen(
                     ItemAction.OPEN_WIFI_SETTINGS,
                     ItemAction.OPEN_CONTACTS,
                     ItemAction.OPEN_CALL_LOG,
-                    ItemAction.OPEN_SMS,
+                    ItemAction.OPEN_MESSAGING,
                     ItemAction.WIFI_ON,
                     ItemAction.WIFI_OFF -> Unit
                 }
 
                 AppLog.toastOnMain("成功")
             } catch (t: Throwable) {
-                AppLog.toastOnMain("${action.title()}失败：${t.message ?: "未知错误"}")
+                AppLog.toastOnMain("${action.title}失败：${t.message ?: "未知错误"}")
             } finally {
                 isBusy = false
             }
@@ -666,13 +665,13 @@ fun AppBackupScreen(
             ItemAction.OPEN_WIFI_SETTINGS -> openWifiSettings(context)
             ItemAction.OPEN_CONTACTS -> openContacts(context)
             ItemAction.OPEN_CALL_LOG -> openCallLog(context)
-            ItemAction.OPEN_SMS -> openSms(context)
-            // 破坏性操作先确认
-            ItemAction.CLEAR_DATA, ItemAction.UNINSTALL, ItemAction.DELETE_DIR -> confirmAction =
-                action
-            // 剩下的是直接执行的 root 操作
+            ItemAction.OPEN_MESSAGING -> openSms(context)
+            // 剩下的是 root 侧操作：破坏性的先确认，其余直接执行。
+            // 「哪些要确认」不再在这里列一遍 —— 判据是 ItemAction.destructive，和菜单标红同源。
+            ItemAction.CLEAR_DATA, ItemAction.UNINSTALL, ItemAction.DELETE_DIR,
             ItemAction.FORCE_STOP, ItemAction.FREEZE, ItemAction.UNFREEZE,
-            ItemAction.WIFI_ON, ItemAction.WIFI_OFF -> runAction(action)
+            ItemAction.WIFI_ON, ItemAction.WIFI_OFF ->
+                if (action.destructive) confirmAction = action else runAction(action)
         }
     }
 
@@ -911,22 +910,21 @@ private fun DetailMoreMenu(
 
 /**
  * 按操作类型生成确认弹窗的标题和正文。
+ *
+ * 标题直接取 [ItemAction.title]（菜单和弹窗用同一个词，改一处就够了）；
+ * 正文才需要知道具体对象，所以按动作分。
  */
 private fun confirmDialogText(
     action: ItemAction,
     appName: String,
     appPath: String
-): Pair<String, String> =
-    when (action) {
-        ItemAction.DELETE_DIR ->
-            "删除文件夹" to "确定要删除「$appPath」吗？此操作不可撤销。"
-
-        ItemAction.UNINSTALL ->
-            "卸载应用" to "确定要卸载「$appName」吗？此操作不可撤销。"
-
-        else ->
-            "清空数据" to "确定要清空「$appName」的全部数据吗？此操作不可撤销。"
-    }
+): Pair<String, String> = action.title to when (action) {
+    ItemAction.DELETE_DIR -> "确定要删除「$appPath」吗？此操作不可撤销。"
+    ItemAction.UNINSTALL -> "确定要卸载「$appName」吗？此操作不可撤销。"
+    ItemAction.CLEAR_DATA -> "确定要清空「$appName」的全部数据吗？此操作不可撤销。"
+    // 以后新增危险动作忘了写正文时，至少不会拿「清空数据」的文案去问用户
+    else -> "确定要执行「${action.title}」吗？此操作不可撤销。"
+}
 
 /**
  * 用系统的「文件」应用打开目录。
@@ -1032,7 +1030,7 @@ private fun openContacts(context: Context) {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
     }.onFailure {
-        AppLog.toastOnMain("打开联系人失败")
+        AppLog.toastOnMain("${ItemAction.OPEN_CONTACTS.title} 失败")
     }
 }
 
@@ -1044,7 +1042,7 @@ private fun openCallLog(context: Context) {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
     }.onFailure {
-        AppLog.toastOnMain("打开通话记录失败")
+        AppLog.toastOnMain("${ItemAction.OPEN_CALL_LOG.title} 失败")
     }
 }
 
@@ -1057,7 +1055,7 @@ private fun openSms(context: Context) {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
     }.onFailure {
-        AppLog.toastOnMain("打开短彩信失败")
+        AppLog.toastOnMain("${ItemAction.OPEN_MESSAGING.title} 失败")
     }
 }
 

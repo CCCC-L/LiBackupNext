@@ -112,7 +112,7 @@ class TargetSpecsTest {
     @Test
     fun `短彩信菜单里能打开短信应用`() {
         assertEquals(
-            listOf(ItemAction.OPEN_SMS),
+            listOf(ItemAction.OPEN_MESSAGING),
             TargetSpecs.of(BackupTarget.SMS).actions(app())
         )
     }
