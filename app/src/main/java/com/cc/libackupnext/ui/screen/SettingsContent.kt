@@ -103,6 +103,7 @@ fun SettingsContent(
     }
 
     var backupSelf by remember { mutableStateOf(backupPrefs.backupSelf) }
+    var rescanMedia by remember { mutableStateOf(backupPrefs.rescanMediaAfterRestore) }
     val screenOnEnabled by screenOnSetting.enabled.collectAsState()
     var fetchIconFromRepo by remember { mutableStateOf(backupPrefs.fetchIconFromRepo) }
     var checkUpdateOnLaunch by remember { mutableStateOf(viewPrefs.checkUpdateOnLaunch) }
@@ -217,6 +218,26 @@ fun SettingsContent(
                     onLimitChange = {
                         retentionLimit = it
                         backupPrefs.retentionLimit = it
+                    }
+                )
+            }
+        )
+
+        CardGroup(
+            "恢复",
+            { shape ->
+                SettingsCard(
+                    shape = shape,
+                    title = "文件夹恢复后重建媒体索引",
+                    subtitle = "恢复文件夹后登记媒体文件，小米建议开启",
+                    trailing = {
+                        Switch(
+                            checked = rescanMedia,
+                            onCheckedChange = {
+                                rescanMedia = it
+                                backupPrefs.rescanMediaAfterRestore = it
+                            }
+                        )
                     }
                 )
             }

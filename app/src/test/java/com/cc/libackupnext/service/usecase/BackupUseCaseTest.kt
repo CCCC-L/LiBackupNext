@@ -46,6 +46,7 @@ class BackupUseCaseTest {
     ) : BackupPrefs {
         override var keepScreenOn: Boolean = false
         override var fetchIconFromRepo: Boolean = false
+        override var rescanMediaAfterRestore: Boolean = false
         private val extraDirsState = MutableStateFlow<Set<String>>(emptySet())
         override var extraDirs: Set<String>
             get() = extraDirsState.value

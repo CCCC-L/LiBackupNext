@@ -10,8 +10,11 @@ import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.SnapshotOverride
 import com.cc.libackupnext.data.UserAccount
 import com.cc.libackupnext.data.dirAppInfo
+import com.cc.libackupnext.data.prefs.RestorePrefs
 import com.cc.libackupnext.service.gateway.DeviceGateway
 import com.cc.libackupnext.service.gateway.RepoWriter
+import com.cc.libackupnext.service.media.MediaRescanner
+import com.cc.libackupnext.service.media.RescanResult
 import com.cc.libackupnext.service.progress.DefaultOperationPlanner
 import com.cc.libackupnext.service.target.BackupTargets
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -116,6 +119,22 @@ class RestoreUseCaseTest {
 
     // ==================== 造数据 ====================
 
+    private class FakeMedia : MediaRescanner {
+        val scanned = mutableListOf<String>()
+
+        override suspend fun rescan(
+            dir: String,
+            onProgress: ((processed: Int, total: Int) -> Unit)?
+        ): RescanResult {
+            scanned += dir
+            return RescanResult(indexed = 1, total = 1, truncated = false, timedOut = false)
+        }
+    }
+
+    private class FakeRestorePrefs(
+        override var rescanMediaAfterRestore: Boolean = true
+    ) : RestorePrefs
+
     private fun entry(label: String, id: String = "s1") = BackupEntry(
         title = "测试",
         time = 0,
@@ -130,8 +149,12 @@ class RestoreUseCaseTest {
         userId = 0
     )
 
-    private fun useCase(writer: FakeWriter, targets: FakeTargets) =
-        DefaultRestoreUseCase(writer, DefaultOperationPlanner, FakeDevice(), targets)
+    private fun useCase(
+        writer: FakeWriter,
+        targets: FakeTargets,
+        media: FakeMedia = FakeMedia(),
+        prefs: RestorePrefs = FakeRestorePrefs()
+    ) = DefaultRestoreUseCase(writer, DefaultOperationPlanner, FakeDevice(), targets, media, prefs)
 
     // ==================== 用例 ====================
 
@@ -150,6 +173,50 @@ class RestoreUseCaseTest {
         assertTrue(result.isSuccess)
         assertEquals("恢复出来的目录要重新成为备份目标", listOf(path), targets.added)
         assertEquals("原有目标不能被覆盖", setOf("/other", path), targets.dirs.value)
+    }
+
+    @Test
+    fun `目录恢复成功后重建媒体索引`() = runBlocking {
+        val media = FakeMedia()
+        val path = "/fake/DCIM"
+
+        useCase(FakeWriter(), FakeTargets(), media).restore(
+            app = dirAppInfo(path, onlyInBackup = true),
+            entry = entry("$path:dir"),
+            groups = setOf(BackupGroup.DIR),
+            installed = false
+        )
+
+        assertEquals("目录恢复完必须重建媒体索引，否则相册看不见", listOf(path), media.scanned)
+    }
+
+    @Test
+    fun `应用恢复不碰媒体索引`() = runBlocking {
+        val media = FakeMedia()
+
+        useCase(FakeWriter(), FakeTargets(), media).restore(
+            app = app(),
+            entry = entry("com.test:user"),
+            groups = setOf(BackupGroup.USER),
+            installed = true
+        )
+
+        assertTrue("应用数据不进 MediaStore，不该触发扫描", media.scanned.isEmpty())
+    }
+
+    @Test
+    fun `开关关闭时不重建媒体索引`() = runBlocking {
+        val media = FakeMedia()
+        val path = "/fake/DCIM"
+
+        useCase(FakeWriter(), FakeTargets(), media, FakeRestorePrefs(false)).restore(
+            app = dirAppInfo(path, onlyInBackup = true),
+            entry = entry("$path:dir"),
+            groups = setOf(BackupGroup.DIR),
+            installed = false
+        )
+
+        assertTrue("设置里关掉之后不该再扫", media.scanned.isEmpty())
     }
 
     @Test

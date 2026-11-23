@@ -29,7 +29,15 @@ enum class SnapshotKind(val key: String) {
     SMS("sms"),
 
     /** 彩信：content://mms + 它的 addr / part 子表。 */
-    MMS("mms");
+    MMS("mms"),
+
+    /**
+     * 恢复目录之后的「重建媒体索引」阶段。
+     *
+     * **不是快照类型**：永远不会写进 label、不会出现在仓库里、不参与备份 / 恢复请求。
+     * 它是一个真实存在的阶段，不该藏在 `dir` 的 reason 里。
+     */
+    MEDIA("media");
 
     companion object {
         /** 容错解析：仓库里可能有本版本还不认识的类型，返回 null 而不是抛异常。 */

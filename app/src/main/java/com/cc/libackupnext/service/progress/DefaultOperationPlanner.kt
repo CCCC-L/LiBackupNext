@@ -41,7 +41,13 @@ object DefaultOperationPlanner : OperationPlanner {
 
     override fun restoreSteps(entry: BackupEntry, groups: Set<BackupGroup>): List<BackupStep> {
         val kinds = entry.selectedSnapshots(groups).mapNotNull { it.kind() }.toSet()
-        return STEP_ORDER.filter { it in kinds }.map { BackupStep(it, BackupStepStatus.WAITING) }
+        val steps = STEP_ORDER.filter { it in kinds }.map { BackupStep(it, BackupStepStatus.WAITING) }
+        // 目录恢复完还要重建媒体索引：这一步真实存在，列出来让用户看见
+        return if (SnapshotKind.DIR in kinds) {
+            steps + BackupStep(SnapshotKind.MEDIA, BackupStepStatus.WAITING)
+        } else {
+            steps
+        }
     }
 
     override fun applyProgress(
@@ -71,10 +77,15 @@ object DefaultOperationPlanner : OperationPlanner {
     }
 
     override fun markFailed(steps: List<BackupStep>): List<BackupStep> = steps.map {
-        if (it.status == BackupStepStatus.WAITING || it.status == BackupStepStatus.RUNNING) {
-            it.copy(status = BackupStepStatus.FAILED)
-        } else {
-            it
+        when {
+            // 目录都没恢复成功，谈不上重建索引：标「跳过」而不是「失败」
+            it.kind == SnapshotKind.MEDIA && it.status == BackupStepStatus.WAITING ->
+                it.copy(status = BackupStepStatus.SKIPPED, reason = "目录恢复失败，未重建索引")
+
+            it.status == BackupStepStatus.WAITING || it.status == BackupStepStatus.RUNNING ->
+                it.copy(status = BackupStepStatus.FAILED)
+
+            else -> it
         }
     }
 

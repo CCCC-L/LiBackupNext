@@ -109,11 +109,28 @@ interface ViewPrefs {
 }
 
 /**
+ * 恢复之后的附加动作开关。
+ *
+ * 单独一个接口而不是塞进 [BackupPrefs]：恢复编排只关心这一件事，
+ * 不该为了一个开关去依赖「备份怎么做」的整个面。
+ */
+interface RestorePrefs {
+
+    /**
+     * 恢复完文件夹后是否重建媒体索引。
+     *
+     * 默认关闭：恢复本身已经完成，这一步是额外的扫描（相册 / 播放器才看得见恢复出来的
+     * 文件），要不要付这个代价交给用户决定。
+     */
+    var rescanMediaAfterRestore: Boolean
+}
+
+/**
  * 备份行为与运行期状态：保留数、是否备份自身、常亮、图标来源、暂停列表、目录列表。
  *
  * 这些决定「备份怎么做」，由 usecase 和设置页消费。
  */
-interface BackupPrefs {
+interface BackupPrefs : RestorePrefs {
 
     /** 备份时是否把本程序自己的安装包复制到仓库根目录。 */
     var backupSelf: Boolean

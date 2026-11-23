@@ -21,8 +21,11 @@ import com.cc.libackupnext.service.gateway.RusticReaderGateway
 import com.cc.libackupnext.service.gateway.RusticSession
 import com.cc.libackupnext.service.gateway.RootDeviceGateway
 import com.cc.libackupnext.service.gateway.RusticWriterGateway
+import com.cc.libackupnext.service.media.AndroidMediaRescanner
+import com.cc.libackupnext.service.media.MediaRescanner
 import com.cc.libackupnext.service.progress.DefaultOperationPlanner
 import com.cc.libackupnext.service.progress.OperationPlanner
+import com.cc.libackupnext.service.root.RootMediaFileLister
 import com.cc.libackupnext.service.usecase.BackupUseCase
 import com.cc.libackupnext.service.usecase.DefaultBackupUseCase
 import com.cc.libackupnext.service.usecase.DefaultRestoreUseCase
@@ -98,9 +101,14 @@ class AppContainer(private val app: Application) {
         DefaultBackupUseCase(reader, writer, backupPrefs, device)
     }
 
-    /** 恢复编排：前置判断 → 停应用 → 写回。 */
+    /** 恢复编排：前置判断 → 停应用 → 写回 → 重建媒体索引。 */
     val restore: RestoreUseCase by lazy {
-        DefaultRestoreUseCase(writer, planner, device, backupTargets)
+        DefaultRestoreUseCase(writer, planner, device, backupTargets, mediaRescanner, backupPrefs)
+    }
+
+    /** 恢复完文件夹后把媒体文件重新登记进 MediaStore（相册才看得见）。 */
+    private val mediaRescanner: MediaRescanner by lazy {
+        AndroidMediaRescanner(app, RootMediaFileLister())
     }
 
     /** 备份目标的增删查：界面和恢复编排都用它，不直接改 prefs。 */

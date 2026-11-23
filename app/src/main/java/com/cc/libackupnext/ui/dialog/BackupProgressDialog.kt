@@ -43,6 +43,14 @@ import kotlinx.coroutines.delay
 import java.util.Locale
 
 /**
+ * 「重建媒体数据库」这一步的标题。
+ *
+ * 它不是快照类型，没有「备份 / 恢复」前缀可加；顶部和步骤列表共用这一份文案，
+ * 免得两处各写一遍再改漏。
+ */
+private const val MEDIA_STEP_TITLE = "重建媒体数据库"
+
+/**
  * 进度弹窗里的一段：标题（应用名，可为空）+ 这一步的步骤。
  *
  * 批量操作时每处理完一个应用就追加一段，之前成功的记录不会被清掉。
@@ -274,7 +282,12 @@ private fun ProgressHeader(
         ) {
             Text(
                 text = if (hasLength) {
-                    "${formatSize(current.coerceAtMost(total))} / ${formatSize(total)}"
+                    // 媒体索引这一步的 total / current 是文件数，不是字节
+                    if (step?.kind == SnapshotKind.MEDIA) {
+                        "${current} / ${total} 个文件"
+                    } else {
+                        "${formatSize(current.coerceAtMost(total))} / ${formatSize(total)}"
+                    }
                 } else {
                     // 没有分母时不画流动条：条停在 0%，用文字说明还在数
                     "正在统计总量…"
@@ -312,13 +325,9 @@ private fun runningStep(sections: List<ProgressSection>): BackupStep? =
     }
 
 private fun currentStepText(sections: List<ProgressSection>): String {
-    val step = runningStep(sections)
-    return if (step == null) {
-        "正在准备…"
-    } else {
-        // 不写「正在备份 data」：标题已经是「正在备份」，再重复一次只是噪音
-        step.kind.key
-    }
+    val step = runningStep(sections) ?: return "正在准备…"
+    // 和下面步骤列表保持一致：同一个步骤不能顶上一句、列表里另一句
+    return if (step.kind == SnapshotKind.MEDIA) MEDIA_STEP_TITLE else step.kind.key
 }
 
 /** 0..99：到 100% 就说明分母不准了，宁可停在 99 等真正完成。 */
@@ -339,8 +348,10 @@ private fun formatElapsed(millis: Long): String {
 }
 
 /** 步骤标题：`备份apk` / `恢复user` 这种。 */
-private fun backupStepTitle(kind: SnapshotKind, isRestore: Boolean): String =
-    (if (isRestore) "恢复" else "备份") + kind.key
+private fun backupStepTitle(kind: SnapshotKind, isRestore: Boolean): String = when (kind) {
+    SnapshotKind.MEDIA -> MEDIA_STEP_TITLE
+    else -> (if (isRestore) "恢复" else "备份") + kind.key
+}
 
 private fun backupStepStatusText(step: BackupStep): String = when (step.status) {
     BackupStepStatus.WAITING -> "等待"

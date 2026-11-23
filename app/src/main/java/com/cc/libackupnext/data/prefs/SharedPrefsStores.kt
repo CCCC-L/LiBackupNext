@@ -48,6 +48,7 @@ private object Keys {
     const val SHOW_SYSTEM = "show_system_apps"
     const val BACKUP_SELF = "backup_self"
     const val KEEP_SCREEN_ON = "keep_screen_on"
+    const val RESCAN_MEDIA_AFTER_RESTORE = "rescan_media_after_restore"
     const val RETENTION_LIMIT = "retention_limit"
     const val FETCH_ICON_FROM_REPO = "fetch_icon_from_repo"
     const val PAUSED_APPS = "paused_apps"
@@ -196,6 +197,11 @@ internal class SharedBackupPrefs(context: Context) : BackupPrefs {
     override var keepScreenOn: Boolean
         get() = prefs.getBoolean(Keys.KEEP_SCREEN_ON, false)
         set(value) = prefs.edit { putBoolean(Keys.KEEP_SCREEN_ON, value) }
+
+    // 默认关闭：这是恢复之后的额外扫描动作，不是恢复本身的必需环节
+    override var rescanMediaAfterRestore: Boolean
+        get() = prefs.getBoolean(Keys.RESCAN_MEDIA_AFTER_RESTORE, false)
+        set(value) = prefs.edit { putBoolean(Keys.RESCAN_MEDIA_AFTER_RESTORE, value) }
 
     override var retentionLimit: Int
         get() = prefs.getInt(Keys.RETENTION_LIMIT, DEFAULT_RETENTION_LIMIT)
