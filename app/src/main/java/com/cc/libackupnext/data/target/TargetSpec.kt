@@ -185,7 +185,8 @@ object TargetSpecs {
                 "恢复：已存在的消息会跳过，不会重复写入",
                 "注：无法备份5G消息",
                 "注：备份时建议用其他软件也备份一次"
-            )
+            ),
+            actions = { listOf(ItemAction.OPEN_SMS) }
         )
     )
 

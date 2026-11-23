@@ -294,7 +294,8 @@ fun AppBackupScreen(
                         ItemAction.OPEN_DIR,
                         ItemAction.OPEN_WIFI_SETTINGS,
                         ItemAction.OPEN_CONTACTS,
-                        ItemAction.OPEN_CALL_LOG -> Unit
+                        ItemAction.OPEN_CALL_LOG,
+                        ItemAction.OPEN_SMS -> Unit
                     }
                 }
 
@@ -327,6 +328,7 @@ fun AppBackupScreen(
                     ItemAction.OPEN_WIFI_SETTINGS,
                     ItemAction.OPEN_CONTACTS,
                     ItemAction.OPEN_CALL_LOG,
+                    ItemAction.OPEN_SMS,
                     ItemAction.WIFI_ON,
                     ItemAction.WIFI_OFF -> Unit
                 }
@@ -664,6 +666,7 @@ fun AppBackupScreen(
             ItemAction.OPEN_WIFI_SETTINGS -> openWifiSettings(context)
             ItemAction.OPEN_CONTACTS -> openContacts(context)
             ItemAction.OPEN_CALL_LOG -> openCallLog(context)
+            ItemAction.OPEN_SMS -> openSms(context)
             // 破坏性操作先确认
             ItemAction.CLEAR_DATA, ItemAction.UNINSTALL, ItemAction.DELETE_DIR -> confirmAction =
                 action
@@ -1033,7 +1036,7 @@ private fun openContacts(context: Context) {
     }
 }
 
-/** 打开通话记录（没有专门入口就退回拨号盘）。 */
+/** 打开通话记录。 */
 private fun openCallLog(context: Context) {
     runCatching {
         context.startActivity(
@@ -1042,6 +1045,19 @@ private fun openCallLog(context: Context) {
         )
     }.onFailure {
         AppLog.toastOnMain("打开通话记录失败")
+    }
+}
+
+/** 打开默认短信应用。*/
+private fun openSms(context: Context) {
+    runCatching {
+        context.startActivity(
+            Intent(Intent.ACTION_MAIN)
+                .addCategory(Intent.CATEGORY_APP_MESSAGING)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }.onFailure {
+        AppLog.toastOnMain("打开短彩信失败")
     }
 }
 

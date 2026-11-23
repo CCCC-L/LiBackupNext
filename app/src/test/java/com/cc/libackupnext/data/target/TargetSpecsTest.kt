@@ -100,21 +100,21 @@ class TargetSpecsTest {
     // ==================== 行为 ====================
 
     @Test
-    fun `除短彩信外每种目标都有菜单动作`() {
-        // 短彩信没有「打开系统对应界面」这种动作，是既有的产品决定，不是漏配
-        TargetSpecs.specs()
-            .filter { it.target != BackupTarget.SMS }
-            .forEach { spec ->
-                assertTrue(
-                    "${spec.target} 在详情页没有任何可点的动作",
-                    spec.actions(app()).isNotEmpty()
-                )
-            }
+    fun `每种目标都有菜单动作`() {
+        TargetSpecs.specs().forEach { spec ->
+            assertTrue(
+                "${spec.target} 在详情页没有任何可点的动作",
+                spec.actions(app()).isNotEmpty()
+            )
+        }
     }
 
     @Test
-    fun `短彩信没有菜单动作`() {
-        assertTrue(TargetSpecs.of(BackupTarget.SMS).actions(app()).isEmpty())
+    fun `短彩信菜单里能打开短信应用`() {
+        assertEquals(
+            listOf(ItemAction.OPEN_SMS),
+            TargetSpecs.of(BackupTarget.SMS).actions(app())
+        )
     }
 
     @Test

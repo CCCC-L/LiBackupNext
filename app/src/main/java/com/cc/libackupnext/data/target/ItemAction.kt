@@ -32,5 +32,8 @@ enum class ItemAction {
     OPEN_CONTACTS,
 
     /** 通话记录 */
-    OPEN_CALL_LOG
+    OPEN_CALL_LOG,
+
+    /** 短彩信 */
+    OPEN_SMS
 }

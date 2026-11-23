@@ -30,6 +30,7 @@ fun ItemAction.title(): String = when (this) {
     ItemAction.OPEN_WIFI_SETTINGS -> "Wi-Fi 设置"
     ItemAction.OPEN_CONTACTS -> "打开联系人"
     ItemAction.OPEN_CALL_LOG -> "打开通话记录"
+    ItemAction.OPEN_SMS -> "打开短彩信"
 }
 
 /** 菜单里标红的危险动作。加新动作时想一下要不要放进来。 */
