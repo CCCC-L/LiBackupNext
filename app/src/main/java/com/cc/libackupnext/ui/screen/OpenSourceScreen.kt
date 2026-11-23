@@ -20,21 +20,22 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.cc.libackupnext.data.openSourceLibs
+import com.cc.libackupnext.data.openSourceGroups
 import com.cc.libackupnext.ui.AppTopBar
 import com.cc.libackupnext.ui.PageContentHorizontalPadding
 import com.cc.libackupnext.ui.component.GroupVerticalSpacing
 import com.cc.libackupnext.ui.component.SettingsCard
 import com.cc.libackupnext.ui.component.cardGroup
 import com.cc.libackupnext.util.AppLog
+import androidx.core.net.toUri
 
 /**
  * 开源软件声明页：关于 → 开源软件声明。
  *
  * 和「仓库」页一样压在底栏之上；顶栏直接复用主 tab 页的 [AppTopBar]，列表用
  * [cardGroup] + [SettingsCard]，和设置页 / 关于页 / apptab 是同一套分组卡片。
- * 清单只来自 [openSourceLibs]，点击任一卡片打开对应上游 GitHub 仓库；
- * 这里不读写仓库、不碰凭据。
+ * 清单只来自 [openSourceGroups]，点击任一卡片打开对应上游 GitHub 仓库；
+ * 没有上游地址的条目不可点。这里不读写仓库、不碰凭据。
  */
 @Composable
 fun OpenSourceScreen(
@@ -45,13 +46,10 @@ fun OpenSourceScreen(
     val pageBackground = MaterialTheme.colorScheme.surfaceContainer
     val searchBarBackground = MaterialTheme.colorScheme.surfaceContainerHighest
 
-    // groupBy 保持清单里的声明顺序
-    val groups = openSourceLibs.groupBy { it.group }
-
     fun openUrl(url: String) {
         val ok = runCatching {
             context.startActivity(
-                Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                Intent(Intent.ACTION_VIEW, url.toUri())
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
         }.isSuccess
@@ -100,17 +98,20 @@ fun OpenSourceScreen(
                 )
             }
 
-            groups.forEach { (group, libs) ->
+            openSourceGroups.forEach { group ->
                 cardGroup(
-                    title = group,
-                    items = libs,
-                    key = { lib -> "$group-${lib.name}" }
+                    title = group.title,
+                    items = group.libs,
+                    key = { lib -> "${group.title}/${lib.name}" }
                 ) { lib, shape ->
                     SettingsCard(
                         shape = shape,
                         title = lib.name,
                         subtitle = lib.license,
-                        onClick = { openUrl(lib.url) }
+                        // 没有上游地址的条目（如「备份工具箱」）不做成可点，
+                        // 否则点下去只会弹「没有可用的浏览器」
+                        onClick = lib.url.takeIf { it.isNotEmpty() }
+                            ?.let { url -> { openUrl(url) } }
                     )
                 }
             }
