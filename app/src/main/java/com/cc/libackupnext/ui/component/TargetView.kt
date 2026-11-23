@@ -1,11 +1,8 @@
 package com.cc.libackupnext.ui.component
 
-import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -15,6 +12,9 @@ import com.cc.libackupnext.data.target.TargetViewKind
 import com.cc.libackupnext.data.AppInfo
 import com.cc.libackupnext.ui.UserBadge
 import com.cc.libackupnext.ui.isNonPrimaryUser
+
+/** 列表行 / 详情页的图标边长；图标下方的归属徽标也按它夹宽度，两处不会各写一个 48。 */
+val TargetIconSize: Dp = 48.dp
 
 /**
  * 一个备份目标「长什么样」：列表行和详情页 header 共用这一份。
@@ -50,7 +50,7 @@ sealed class TargetView(
      * @param size 方块边长，由调用方按版面给（列表行 / 详情页 48，批量页 40）
      */
     @Composable
-    fun Icon(size: Dp = 48.dp) {
+    fun Icon(size: Dp = TargetIconSize) {
         TargetIconBox(target, app, size)
     }
 
@@ -59,10 +59,17 @@ sealed class TargetView(
     open fun Badge() {
     }
 
-    /** 叠在图标右下角的小徽标（详情页 header 用），默认没有。 */
-    @Composable
-    open fun BoxScope.IconOverlay() {
-    }
+    /**
+     * 非主用户（工作资料 / 应用分身）的目标要标出归属，主用户不加任何装饰。
+     *
+     * 判据只有这一处：列表行标在行尾、详情页标在图标下方，两处共用同一个徽标。
+     */
+    protected val ownerBadge: (@Composable () -> Unit)? =
+        if (isNonPrimaryUser(app.userId)) {
+            { UserBadge(userId = app.userId) }
+        } else {
+            null
+        }
 
     /**
      * 行尾附加内容（列表行用），没有就返回 null。
@@ -70,7 +77,10 @@ sealed class TargetView(
      * 返回 null 而不是「渲染一个空 Composable」，是为了让列表行不加多余间距 ——
      * 主用户的应用没有徽标，那一行右侧不该凭空多出 12dp。
      */
-    open fun trailing(): (@Composable () -> Unit)? = null
+    open fun trailing(): (@Composable () -> Unit)? = ownerBadge
+
+    /** 图标下方的小字（详情页 header 用），没有就返回 null。 */
+    open fun caption(): (@Composable () -> Unit)? = ownerBadge
 }
 
 /** 已安装 / 只在备份里存在的应用。 */
@@ -94,29 +104,14 @@ class AppView(
             Spacer(modifier = Modifier.width(4.dp))
         }
     }
-
-    @Composable
-    override fun BoxScope.IconOverlay() {
-        if (isNonPrimaryUser(app.userId)) {
-            UserBadge(
-                userId = app.userId,
-                compact = true,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(2.dp)
-            )
-        }
-    }
-
-    override fun trailing(): (@Composable () -> Unit)? =
-        if (isNonPrimaryUser(app.userId)) {
-            { UserBadge(userId = app.userId) }
-        } else {
-            null
-        }
 }
 
-/** 备份过的文件夹。 */
+/**
+ * 备份过的文件夹。
+ *
+ * 「属于谁」跟着路径走（[AppInfo.userId] 由 `MediaPath.userOf` 算），所以换用户后
+ * 同一个配置项会带上不同的徽标 —— 这正是要传达的：同一个名字，不同用户空间里是不同的东西。
+ */
 class DirView(
     app: AppInfo,
     override val isMissing: Boolean,
@@ -127,32 +122,6 @@ class DirView(
 
     override val title: String = normalized.substringAfterLast('/').ifBlank { normalized }
     override val subtitle: String = path
-
-    /**
-     * 和 [AppView] 同一句判据：主用户的行不加装饰，其他用户的行标出归属。
-     *
-     * 文件夹的「属于谁」跟着路径走，所以换用户后同一个配置项会带上不同的徽标 ——
-     * 这正是要传达的：同一个名字，不同用户空间里是不同的东西。
-     */
-    @Composable
-    override fun BoxScope.IconOverlay() {
-        if (isNonPrimaryUser(app.userId)) {
-            UserBadge(
-                userId = app.userId,
-                compact = true,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(2.dp)
-            )
-        }
-    }
-
-    override fun trailing(): (@Composable () -> Unit)? =
-        if (isNonPrimaryUser(app.userId)) {
-            { UserBadge(userId = app.userId) }
-        } else {
-            null
-        }
 }
 
 /**

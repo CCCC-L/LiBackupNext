@@ -18,36 +18,29 @@ const val PRIMARY_USER_ID = MediaPath.PRIMARY_USER_ID
 fun isNonPrimaryUser(userId: Int): Boolean = userId != PRIMARY_USER_ID
 
 /**
- * 非主用户应用的用户标记，例如「用户:10」。
+ * 非主用户目标的用户标记，例如「用户10」。
  *
- * @param compact 紧凑模式，用于贴在应用图标右下角。
+ * 列表行标在行尾，详情页标在图标下方，两处同一份样式 —— 同一个事实不该有两种长相。
  */
 @Composable
 fun UserBadge(
     userId: Int,
-    modifier: Modifier = Modifier,
-    compact: Boolean = false
+    modifier: Modifier = Modifier
 ) {
-    val background = MaterialTheme.colorScheme.secondaryContainer
-    val content = MaterialTheme.colorScheme.onSecondaryContainer
-
     Text(
-        text = "用户:$userId",
-        color = content,
-        fontSize = if (compact) 9.sp else 11.sp,
-        lineHeight = if (compact) 11.sp else 14.sp,
+        text = "用户$userId",
+        color = MaterialTheme.colorScheme.onSecondaryContainer,
+        fontSize = 11.sp,
+        lineHeight = 14.sp,
+        letterSpacing = 0.sp,
         fontWeight = FontWeight.Medium,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         modifier = modifier
             .background(
-                color = background,
-                shape = if (compact) MaterialTheme.shapes.extraSmall
-                else MaterialTheme.shapes.small
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                shape = MaterialTheme.shapes.small
             )
-            .padding(
-                horizontal = if (compact) 3.dp else 8.dp,
-                vertical = if (compact) 1.dp else 3.dp
-            )
+            .padding(horizontal = 3.dp, vertical = 2.dp)
     )
 }

@@ -1,8 +1,14 @@
 package com.cc.libackupnext.ui.screen.detail
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.cc.libackupnext.data.AppInfo
 import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.data.target.ItemAction
@@ -11,6 +17,7 @@ import com.cc.libackupnext.data.target.TargetViewKind
 import com.cc.libackupnext.ui.component.AppView
 import com.cc.libackupnext.ui.component.DirView
 import com.cc.libackupnext.ui.component.SystemView
+import com.cc.libackupnext.ui.component.TargetIconSize
 import com.cc.libackupnext.ui.component.TargetView
 
 /**
@@ -46,13 +53,26 @@ sealed class DetailTarget(
     /** 点开菜单时列出的动作，按显示顺序。 */
     abstract val actions: List<ItemAction>
 
-    /** 图标，48dp 的方块由调用方给。 */
+    /**
+     * 图标 + 图标下方的归属徽标（非主用户才有），竖排居中对齐。
+     *
+     * 徽标不叠在图标上：图标是应用自己的脸，压上去会看不清是谁的图标。
+     * 宽度夹在 [TargetIconSize] 以内 —— 比图标宽会把右侧文字区顶偏，切用户时整页跟着抖。
+     */
     @Composable
-    fun Icon(modifier: Modifier) {
-        Box(modifier) {
+    fun Icon() {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
             view.Icon()
-            // 成员扩展函数要 with(分发接收者) 才能调，BoxScope 是隐式的扩展接收者
-            with(view) { IconOverlay() }
+            val caption = view.caption()
+            if (caption != null) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Box(
+                    modifier = Modifier.widthIn(max = TargetIconSize),
+                    contentAlignment = Alignment.Center
+                ) {
+                    caption()
+                }
+            }
         }
     }
 

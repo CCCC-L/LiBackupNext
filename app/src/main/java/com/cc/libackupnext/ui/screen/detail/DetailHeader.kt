@@ -70,7 +70,7 @@ fun DetailHeader(
                     .padding(horizontal = 6.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                target.Icon(modifier = Modifier.size(48.dp))
+                target.Icon()
                 Spacer(modifier = Modifier.width(12.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
