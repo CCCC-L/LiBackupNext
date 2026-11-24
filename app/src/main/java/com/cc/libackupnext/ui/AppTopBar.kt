@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
@@ -15,10 +16,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Deselect
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
@@ -67,6 +68,7 @@ import com.cc.libackupnext.ui.theme.rememberMiddleButtonEndPadding
 import com.cc.libackupnext.ui.theme.rememberPendingRetryPulse
 import com.cc.libackupnext.ui.theme.rememberSearchBarProgress
 import kotlinx.coroutines.android.awaitFrame
+import kotlin.math.floor
 
 @Composable
 fun AppTopBar(
@@ -111,15 +113,12 @@ fun AppTopBar(
      * 而不是等 tab 翻牌后再补一段淡出。
      */
     moreWeight: (() -> Float)? = null,
-    /** 非空时和 [title] 做切换（滑动切页签时换标题用）。 */
-    incomingTitle: String? = null,
     /**
-     * [incomingTitle] 的展开比例（0..1）：宽度和透明度用同一个值，
-     * 和底栏的文字展开是同一套做法 —— 从 0 宽长出来，不是整体淡入。
+     * 连续模式：每页一个标题，按 [pagePosition] 在相邻两页之间交叉淡化。
      */
-    incomingTitleAlpha: () -> Float = { 0f },
-    /** [title] 的展开比例；不传就用 1 减 [incomingTitleAlpha]。 */
-    titleAlpha: (() -> Float)? = null,
+    pageTitles: List<String>? = null,
+    /** 连续模式：页面位置（0 = 第一页，1 = 第二页……）。拖动 / 惯性 / 程序化滚动都适用。 */
+    pagePosition: (() -> Float)? = null,
     /** 外部接管搜索状态：传了就用自己的，不再读写 ViewModel 里的全局搜索状态。 */
     searchOpen: Boolean? = null,
     searchQueryText: String? = null,
@@ -304,40 +303,35 @@ fun AppTopBar(
                     // 换页签时标题用「宽度展开」切换：宽度和透明度取同一个比例，
                     // 和底栏的文字一样 —— 旧的收完、新的再从 0 宽长出来，两段不会叠在一起。
                     // 标题随搜索栏的展开 / 收缩反向淡入淡出，收起时不会突然露出整行文字
-                    val baseAlpha = 1f - searchBarProgress
-                    val incomingAlpha =
-                        if (isSearching) 0f else incomingTitleAlpha().coerceIn(0f, 1f)
-                    val outgoingAlpha = if (isSearching) {
-                        0f
+                    val baseAlpha = if (isSearching) 0f else 1f - searchBarProgress
+                    val titles = pageTitles
+                    val position = pagePosition
+                    if (titles != null && position != null && titles.isNotEmpty()) {
+                        // 连续模式：只看夹住当前位置的两页。旧的收到一半（50%）、
+                        // 新的从 35% 就开始长，两段不叠在一起，中间也不会空一帧。
+                        // 位置在这里读 —— 放到调用方按位置算标题会让整页每帧重组。
+                        val p = position()
+                        val lower = floor(p).toInt().coerceIn(0, titles.lastIndex)
+                        val upper = (lower + 1).coerceAtMost(titles.lastIndex)
+                        val progress = (p - lower).coerceIn(0f, 1f)
+                        TitleText(
+                            text = titles[lower],
+                            progress = ((0.5f - progress) / 0.5f).coerceIn(0f, 1f),
+                            baseAlpha = baseAlpha,
+                            style = titleStyle
+                        )
+                        TitleText(
+                            text = titles[upper],
+                            progress = ((progress - 0.35f) / 0.65f).coerceIn(0f, 1f),
+                            baseAlpha = baseAlpha,
+                            style = titleStyle
+                        )
                     } else {
-                        (titleAlpha?.invoke() ?: (1f - incomingAlpha)).coerceIn(0f, 1f)
-                    }
-
-                    Text(
-                        text = if (selectionMode) "已选择 $selectionCount 项" else title,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = titleStyle,
-                        modifier = Modifier
-                            .fillMaxWidth(outgoingAlpha)
-                            .clipToBounds()
-                            .align(Alignment.CenterStart)
-                            .alpha(baseAlpha * outgoingAlpha)
-                    )
-
-                    if (incomingTitle != null) {
-                        Text(
-                            text = incomingTitle,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            style = titleStyle,
-                            modifier = Modifier
-                                .fillMaxWidth(incomingAlpha)
-                                .clipToBounds()
-                                .align(Alignment.CenterStart)
-                                .alpha(baseAlpha * incomingAlpha)
+                        TitleText(
+                            text = if (selectionMode) "已选择 $selectionCount 项" else title,
+                            progress = 1f,
+                            baseAlpha = baseAlpha,
+                            style = titleStyle
                         )
                     }
 
@@ -583,6 +577,36 @@ fun AppTopBar(
             if (showSortMenu) viewModel?.let { SortMenu(it, sortMenuExtra, showSortTypes) }
             }
         }
+    )
+}
+
+/**
+ * 标题的一层：宽度和透明度取同一个比例 —— 是「展开 / 收起」，不是整体淡入。
+ *
+ * 两份文字交替长 / 收就成了交叉淡化：旧的收到 0 宽时新的才长到一半，中间不会空一帧。
+ * 超出宽度的部分被 [clipToBounds] 裁掉，所以收缩时字不会被挤扁。
+ */
+@Composable
+private fun BoxScope.TitleText(
+    text: String,
+    /** 展开比例：0 = 完全收起，1 = 完整显示。 */
+    progress: Float,
+    /** 搜索栏开合带来的整体淡出。 */
+    baseAlpha: Float,
+    style: TextStyle
+) {
+    val p = progress.coerceIn(0f, 1f)
+    Text(
+        text = text,
+        fontWeight = FontWeight.Bold,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        style = style,
+        modifier = Modifier
+            .fillMaxWidth(p)
+            .clipToBounds()
+            .align(Alignment.CenterStart)
+            .alpha(baseAlpha * p)
     )
 }
 

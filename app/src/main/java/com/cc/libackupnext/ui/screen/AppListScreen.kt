@@ -40,7 +40,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -113,14 +112,10 @@ fun AppListScreen(
     /** 打开通用文件夹选择弹窗（窗口由 MainActivity 顶层持有）。 */
     onOpenFolderPicker: (FolderPickerLauncher) -> Unit = {}
 ) {
-    val context = LocalContext.current
     // 本地配置：仓库信息（不含密码）、界面偏好、备份目标
     val repoDisplay = LocalRepoDisplay.current
     val device = LocalDeviceGateway.current
     val backupTargets = LocalBackupTargets.current
-    val appName = remember {
-        context.applicationInfo.loadLabel(context.packageManager).toString()
-    }
 
     val displayApps by viewModel.displayApps.collectAsState()
     val backupSummaries by viewModel.backupSummaries.collectAsState()
@@ -162,6 +157,8 @@ fun AppListScreen(
     var tab by remember { mutableStateOf(initialTab) }
     // 页签的横向 Pager：手势、跟手、相邻页都由它负责
     val pagerState = rememberPagerState(initialPage = tab.ordinal) { HomeTab.entries.size }
+    // 顶栏标题：就是页签的名字，四页走同一套算法 —— 由顶栏按位置在相邻两页之间交叉淡化
+    val tabTitles = remember { HomeTab.entries.map { it.label } }
 
     /**
      * 页面的连续位置：0 = 应用，1 = 文件……
@@ -193,7 +190,7 @@ fun AppListScreen(
     }
 
     // 点底栏切页签 → 滚到对应页。
-    // 这段时间里不能用位置回写 tab：跨页动画会掠过中间页，标题会闪一路
+    // 这段时间里不能用位置回写 tab：跨页动画会掠过中间页，页签会闪一路
     var programmaticScroll by remember { mutableStateOf(false) }
     LaunchedEffect(tab) {
         if (pagerState.currentPage != tab.ordinal) {
@@ -516,15 +513,14 @@ fun AppListScreen(
                 topBar = {
                     AppTopBar(
                         viewModel = viewModel,
-                        title = appName,
-                        // 只有「设置」和其它页的标题不同，所以只需要在这一条边界上做切换。
-                        // 和底栏文字同一套做法：宽度 + 透明度一起长 / 收。
-                        // 新标题从 35% 就开始长（不是等过半），否则两边同时归零，标题会空一帧。
-                        incomingTitle = HomeTab.SETTINGS.label,
-                        incomingTitleAlpha = {
-                            ((settingsWeight() - 0.35f) / 0.65f).coerceIn(0f, 1f)
+                        title = tab.label,
+                        // 每页的标题就是页签名，相邻两页的交叉淡化交给顶栏自己做
+                        pageTitles = tabTitles,
+                        pagePosition = {
+                            // 点底栏跨页跳转时不跟位置走：直接显示目标页的名字，
+                            // 否则 300ms 掠过 3 页会把中间页的名字挨个闪一遍
+                            if (programmaticScroll) tab.ordinal.toFloat() else pagerPosition
                         },
-                        titleAlpha = { ((0.5f - settingsWeight()) / 0.5f).coerceIn(0f, 1f) },
                         // 用户切换和应用、文件夹有关（系统数据 / 设置没有「属于谁」）
                         showUserButton = tab == HomeTab.APPS || tab == HomeTab.FILES,
                         // 设置页没有可搜的东西；系统数据页是固定三行，没有可排序的内容
