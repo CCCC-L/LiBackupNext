@@ -49,7 +49,19 @@ object AppLog {
     private const val MAX_STACK = 16000
     private const val MAX_CRUMBS = 120
     private const val RETAIN_MILLIS = 7L * 24 * 60 * 60 * 1000
-    private const val MAX_TOTAL_BYTES = 2L * 1024 * 1024
+
+    /** 每份 256KB、留 2 份备份。不用全局按大小删：那会删掉另一个进程正在写的文件。 */
+    private const val MAX_FILE_BYTES = 256L * 1024
+    private const val MAX_BACKUPS = 2
+    private const val MAX_CRASH_FILES = 10
+
+    /** 操作索引一样不能无限长：超过就整体挪成 .1，只留一份历史。 */
+    private const val MAX_OPERATIONS_BYTES = 256L * 1024
+
+    /** 每写这么多条检查一次轮转。比每条 stat 便宜，128 条最多几十 KB，不会撑爆上限。 */
+    private const val ROTATE_CHECK_INTERVAL = 128
+    private const val CRASH_PREFIX = "crash-"
+
     private const val CRASH_WINDOW_MS = 10_000L
     private const val CRASH_LIMIT = 5
 
@@ -73,6 +85,7 @@ object AppLog {
 
     private var process: String = "main"
     private var stream: FileOutputStream? = null
+    private var sinceRotateCheck = 0
     private var previousHandler: Thread.UncaughtExceptionHandler? = null
 
     @Volatile
@@ -138,9 +151,8 @@ object AppLog {
         if (installed) return
         appContext = context
 
-        process = if (runCatching { Application.getProcessName() }.getOrNull().orEmpty()
-                .endsWith(":root")
-        ) "root" else "main"
+        // libsu 的 root 进程不设进程名，只能用 uid 判：uid 0 即 :root
+        process = if (Process.myUid() == 0) "root" else "main"
         sessionId = "${System.currentTimeMillis()}-${Process.myPid()}"
 
         logDir = File(appContext.filesDir, LOG_DIR)
@@ -164,7 +176,7 @@ object AppLog {
             sync = false
         )
 
-        if (process == "main") trim()
+        trim()
     }
 
     private val activityCallbacks = object : Application.ActivityLifecycleCallbacks {
@@ -276,11 +288,42 @@ object AppLog {
 
         synchronized(writeLock) {
             runCatching {
+                maybeRotate()
                 val out = ensureStream()
                 out.write((text + "\n").toByteArray(Charsets.UTF_8))
                 if (sync) out.fd.sync()
             }
         }
+    }
+
+    /** 每 [ROTATE_CHECK_INTERVAL] 条检查一次：文件被删则重开流，超限则轮转。 */
+    private fun maybeRotate() {
+        if (++sinceRotateCheck < ROTATE_CHECK_INTERVAL) return
+        sinceRotateCheck = 0
+
+        if (!logFile.exists()) {
+            runCatching { stream?.close() }
+            stream = null
+            return
+        }
+        if (logFile.length() < MAX_FILE_BYTES) return
+        rotate()
+    }
+
+    /** main.log → main.log.1 → … → main.log.N，最老的丢掉。顺序由 [LogRetention.rotationPlan] 决定。 */
+    private fun rotate() {
+        runCatching { stream?.close() }
+        stream = null
+
+        LogRetention.rotationPlan(logFile.name, MAX_BACKUPS).forEach { (from, to) ->
+            val source = File(logDir, from)
+            if (!source.exists()) return@forEach
+            val target = File(logDir, to)
+            runCatching { target.delete() }
+            runCatching { source.renameTo(target) }
+        }
+
+        makeSharedWritable(File(logDir, "${logFile.name}.1"), MODE_FILE)
     }
 
     // ==================== 操作轨迹 ====================
@@ -312,6 +355,16 @@ object AppLog {
             }
         }
         makeSharedWritable(operationsFile, MODE_FILE)
+        rotateOperations()
+    }
+
+    /** 操作索引超过上限就整体挪成 .1，只留一份历史。 */
+    private fun rotateOperations() {
+        if (operationsFile.length() < MAX_OPERATIONS_BYTES) return
+        val old = File(logDir, "${operationsFile.name}.1")
+        runCatching { old.delete() }
+        runCatching { operationsFile.renameTo(old) }
+        makeSharedWritable(old, MODE_FILE)
     }
 
     /** 用户点击 / 页面切换这类 breadcrumb，功能异常时靠它还原操作路径。 */
@@ -372,10 +425,7 @@ object AppLog {
                 runCatching { relaunchTopActivity() }
             }
             reviveMainLoop()
-        } else if (!isMain) {
-            // 后台线程维持原有策略：只记录，线程结束，进程继续跑
-            Log.e("AppLog", "后台线程 ${thread.name} 崩溃，已记录", error)
-        } else {
+        } else if (isMain) {
             // 熔断：交回系统，避免陷入「反复抛异常 + 卡死不退出」
             previousHandler?.uncaughtException(thread, error)
         }
@@ -441,7 +491,7 @@ object AppLog {
 
     private fun writeCrashReport(thread: Thread, error: Throwable) {
         val file =
-            File(logDir, "crash-${System.currentTimeMillis()}-${Process.myPid()}-$process.txt")
+            File(logDir, "$CRASH_PREFIX${System.currentTimeMillis()}-${Process.myPid()}-$process.txt")
         val text = buildString {
             append(environmentText())
             append("\n===== 未捕获异常 =====\n")
@@ -481,37 +531,20 @@ object AppLog {
         verbose = enabled
     }
 
-    fun clear() {
-        runCatching {
-            val keep = setOf(logFile.name, operationsFile.name)
-            logFiles().filter { it.name !in keep }.forEach { it.delete() }
-        }
-    }
-
+    /** 只清崩溃报告；主日志各进程自己轮转，删对方的文件会让它继续写已删除的 inode。 */
     private fun trim() {
         runCatching {
-            val files = logFiles()
-            val cutoff = System.currentTimeMillis() - RETAIN_MILLIS
-            files.filter { it.lastModified() < cutoff && it.name != pendingFile.name }
-                .forEach { it.delete() }
+            val crashes = logFiles().filter { it.name.startsWith(CRASH_PREFIX) }
+            if (crashes.isEmpty()) return@runCatching
 
-            var total = files.sumOf { it.length() }
-            if (total > MAX_TOTAL_BYTES) {
-                files.filter {
-                    it.name !in setOf(
-                        logFile.name,
-                        operationsFile.name,
-                        pendingFile.name
-                    )
-                }
-                    .sortedBy { it.lastModified() }
-                    .forEach { file ->
-                        if (total > MAX_TOTAL_BYTES) {
-                            total -= file.length()
-                            file.delete()
-                        }
-                    }
-            }
+            val victims = LogRetention.crashesToDelete(
+                crashes = crashes.map { LogRetention.CrashFile(it.name, it.lastModified()) },
+                maxFiles = MAX_CRASH_FILES,
+                now = System.currentTimeMillis(),
+                retainMillis = RETAIN_MILLIS
+            ).toSet()
+
+            crashes.filter { it.name in victims }.forEach { it.delete() }
         }
     }
 

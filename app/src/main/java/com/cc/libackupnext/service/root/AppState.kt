@@ -155,7 +155,8 @@ internal class AppState(private val context: Context) {
             if (result.isFailure) failed++
         }
 
-        applyAppOps(state.appops, packageName, uid)
+        // 这三类失败不进 failed（它只数权限），单独汇总
+        var degraded = applyAppOps(state.appops, packageName, uid)
 
         // 旧快照没有这个字段，不能当成 false —— 那会把白名单删掉
         state.batteryWhitelist?.let { wantWhitelist ->
@@ -165,22 +166,33 @@ internal class AppState(private val context: Context) {
                 } else {
                     idleController.removePowerSaveWhitelistApp(packageName)
                 }
-            }.onFailure { Log.w(TAG, "白名单写入失败（备份=$wantWhitelist）", it) }
+            }.onFailure {
+                Log.w(TAG, "白名单写入失败（备份=$wantWhitelist）", it)
+                degraded++
+            }
         }
 
         // 待机分组
         val bucket = state.standbyBucket
         if (bucket >= 0 && bucket != STANDBY_BUCKET_EXEMPTED) {
             runCatching { usageStats.setAppStandbyBucket(packageName, bucket) }
-                .onFailure { Log.w(TAG, "setAppStandbyBucket=$bucket 失败", it) }
+                .onFailure {
+                    Log.w(TAG, "setAppStandbyBucket=$bucket 失败", it)
+                    degraded++
+                }
+        }
+
+        // 逐条只留 logcat，落盘一条汇总
+        if (degraded > 0) {
+            AppLog.w(TAG, "$packageName 有 $degraded 项系统设置未写回（白名单/待机分组/appops）")
         }
 
         return failed
     }
 
-    /** appops 全量写回：逐条比对，不一样的才写，备份里没有的设回默认。 */
-    private fun applyAppOps(state: AppOpsFile?, packageName: String, uid: Int) {
-        if (state == null) return
+    /** appops 全量写回：逐条比对，不一样的才写，备份里没有的设回默认。返回失败条数。 */
+    private fun applyAppOps(state: AppOpsFile?, packageName: String, uid: Int): Int {
+        if (state == null) return 0
 
         fun modes(section: Map<String, Int>): Map<Int, Int> = section
             .mapNotNull { (key, mode) -> key.toIntOrNull()?.let { op -> op to mode } }
@@ -200,13 +212,17 @@ internal class AppState(private val context: Context) {
         }
 
         var written = 0
+        var failed = 0
         for (op in opCodes) {
             val name = op.toString()
 
             val packageTarget = wantPackage[op] ?: AppOpsManager.MODE_DEFAULT
             if ((currentPackage[op] ?: AppOpsManager.MODE_DEFAULT) != packageTarget) {
                 runCatching { appOpsManager.setMode(op, uid, packageName, packageTarget) }
-                    .onFailure { Log.w(TAG, "setMode $name=$packageTarget 失败", it) }
+                    .onFailure {
+                        Log.w(TAG, "setMode $name=$packageTarget 失败", it)
+                        failed++
+                    }
                     .onSuccess { written++ }
             }
 
@@ -219,16 +235,23 @@ internal class AppState(private val context: Context) {
             }
             if ((currentUid[op] ?: AppOpsManager.MODE_DEFAULT) != uidTarget) {
                 runCatching { appOpsManager.setUidMode(op, uid, uidTarget) }
-                    .onFailure { Log.w(TAG, "setUidMode $name=$uidTarget 失败", it) }
+                    .onFailure {
+                        Log.w(TAG, "setUidMode $name=$uidTarget 失败", it)
+                        failed++
+                    }
                     .onSuccess { written++ }
             }
         }
-        Log.d(
-            TAG,
-            "appops $packageName uid=$uid 写入 $written 条 | " +
-                    "目标 pkg=${wantPackage.size} uid=${wantUid.size} | " +
-                    "当前 pkg=${currentPackage.size} uid=${currentUid.size}"
-        )
+        // 每个应用一遍，只在写入成功时留痕
+        if (written > 0) {
+            Log.d(
+                TAG,
+                "appops $packageName uid=$uid 写入 $written 条 | " +
+                        "目标 pkg=${wantPackage.size} uid=${wantUid.size} | " +
+                        "当前 pkg=${currentPackage.size} uid=${currentUid.size}"
+            )
+        }
+        return failed
     }
 
     /** 只关心 dangerous 级别的运行时权限 */
@@ -355,7 +378,6 @@ internal fun fixupTree(
         // 归属改不过去应用会读不到自己的数据，必须让用户看见
         val detail = result?.err?.joinToString(" ").orEmpty()
             .ifBlank { "退出码 ${result?.code ?: -1}" }
-        Log.w(TAG, "fixup failed: $path ($detail)")
         AppLog.e("恢复", "修改文件归属失败：$path（$detail）", IllegalStateException(detail))
     }
 }

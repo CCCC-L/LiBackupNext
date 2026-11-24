@@ -31,14 +31,14 @@ object LogReport {
             ?: error("系统没有返回可写的输出流")
 
         ZipOutputStream(BufferedOutputStream(output)).use { zip ->
-            put(zip, "README.txt", readme())
             put(zip, "environment.txt", AppLog.environmentText())
             put(zip, "operations.txt", AppLog.operationsText())
 
-            // 主进程 / root 进程日志、崩溃报告、Rust panic 痕迹，全都在 logs/ 下。
-            // operations.log 只是生成 operations.txt 的原始索引，内容已全在后者里，不重复打包。
+            // logs/ 下全量打包；operations.log* 内容已在 operations.txt，不重复。
             AppLog.logFiles()
-                .filter { it.name != "pending_crash" && it.name != "operations.log" }
+                .filter {
+                    it.name != "pending_crash" && !it.name.startsWith("operations.log")
+                }
                 .forEach { file ->
                     put(
                         zip,
@@ -66,22 +66,4 @@ object LogReport {
             "# logcat 读取失败（可能尚未获得 root，或系统限制了读取）\n"
         }
     }.getOrElse { "# logcat 读取异常：${it.message}\n" }
-
-    private fun readme(): String = """
-        LiBackupNext 日志包
-
-        environment.txt  软件版本 / 设备 / 系统核心信息（排查时先看这个）
-        operations.txt   操作索引：一次业务操作一行，拿 op 值去日志里搜完整链路
-        main.log         主进程实时日志
-        root.log         :root 服务实时日志
-        crash-*.txt      未捕获异常报告（含崩溃前轨迹）
-        rust-panic.txt   Rust panic 留痕（panic=abort 之前写入）
-        logcat.txt       最近 $LOGCAT_LINES 行系统日志
-
-        日志格式：时间 级别 [进程] op=操作ID 标签 | 内容
-        同一 op 值即同一次业务操作跨主进程 / root 服务的完整链路。
-
-        密码类字段在导出前已做脱敏，但 logcat 由系统产生，可能包含应用包名、
-        文件路径或其他应用的输出，请在发送前自行检查。
-    """.trimIndent()
 }

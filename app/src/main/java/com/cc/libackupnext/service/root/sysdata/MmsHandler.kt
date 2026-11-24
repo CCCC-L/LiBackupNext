@@ -13,6 +13,7 @@ import com.cc.libackupnext.data.json.MmsDto
 import com.cc.libackupnext.data.json.MmsPartDto
 import com.cc.libackupnext.service.json.parseJson
 import com.cc.libackupnext.service.json.toJsonText
+import com.cc.libackupnext.util.AppLog
 import com.topjohnwu.superuser.Shell
 import java.io.File
 
@@ -192,6 +193,13 @@ internal object MmsHandler : SystemDataHandler {
             if (insertOne(context, mms, dir)) added++ else failed++
         }
 
+        // 逐条只留 logcat，落盘一条汇总
+        if (failed > 0) {
+            AppLog.w(
+                TAG,
+                "恢复彩信：新增 $added，跳过 $skipped，失败 $failed（共 ${backup.messages.size}）"
+            )
+        }
         return RestoreResult(added, skipped, failed)
     }
 

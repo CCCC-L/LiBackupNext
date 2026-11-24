@@ -93,7 +93,7 @@ object BackupNotifier {
                     .putExtra(ProgressService.EXTRA_NOTIFICATION, initial)
             )
         }.onFailure {
-            Log.w(TAG, "start foreground service failed", it)
+            AppLog.w(TAG, "start foreground service failed", it)
         }
     }
 
@@ -191,7 +191,7 @@ object BackupNotifier {
         runCatching { ProgressService.instance?.finishAndStop() }
         runCatching { manager.cancel(NOTIFICATION_ID) }
         runCatching { manager.notify(NOTIFICATION_ID, notification) }
-            .onFailure { Log.w(TAG, "notify finish failed", it) }
+            .onFailure { AppLog.w(TAG, "notify finish failed", it) }
 
         // 再补一次：cancel + notify 之间如果系统正好在还原前台服务的快照，
         // 这一发会把完成态盖回去。延迟重发一次兜底（setOnlyAlertOnce 不会重复响铃）。

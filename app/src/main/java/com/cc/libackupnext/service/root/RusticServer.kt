@@ -174,7 +174,6 @@ object RusticServer {
         ): String = runQueryNative(request, native, nativeError, failText)
 
         fun onBind() {
-            AppLog.i(TAG, "root 服务绑定，加载 native 库")
             nativeError = runCatching { loadRusticBridge() }
                 .exceptionOrNull()
                 ?.let { t ->
@@ -192,15 +191,15 @@ object RusticServer {
                     val logDir = File(context.filesDir, "logs")
                     logDir.mkdirs()
                     nativeSetLogDir(logDir.absolutePath)
-                    AppLog.i(TAG, "rustic 缓存目录与 panic 日志目录已注入")
                 }.onFailure { AppLog.w(TAG, "set rustic cache/log dir failed", it) }
+
+                AppLog.d(TAG, "root 服务绑定完成，native 库与缓存目录就绪")
             }
         }
 
         /** 主进程在绑定 / 初始化成功 / 改密码 / 清配置时调一次，凭据只进 Rust 静态配置。 */
         override fun setRepo(path: String, password: String, options: String) {
             if (nativeError != null) return
-            AppLog.i(TAG, "setRepo：注入仓库凭据（不含密码内容）")
             runCatching { nativeSetRepo(path, password, options) }
                 .onFailure { AppLog.e(TAG, "nativeSetRepo failed", it) }
         }

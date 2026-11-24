@@ -81,7 +81,11 @@ class RootServiceManager<T : IInterface>(
         if (current.conn !== conn) return
         binding = null
         conn.abandon()
-        AppLog.w(TAG, "root 服务断开，已退掉旧绑定，下次调用自动重绑")
+
+        when (val nth = disconnectGate.mark(System.currentTimeMillis())) {
+            1 -> AppLog.w(TAG, "root 服务断开，已退掉旧绑定，下次调用自动重绑")
+            else -> AppLog.d(TAG, "root 服务断开（同一次进程死亡的第 $nth 个回调，已合并）")
+        }
     }
 
     private inner class Conn : ServiceConnection {
@@ -129,5 +133,11 @@ class RootServiceManager<T : IInterface>(
 
     private companion object {
         const val TAG = "RootService"
+
+        /** 一次 kill 的三个回调落在窗口内，只留第一条 WARN。 */
+        const val DISCONNECT_WINDOW_MS = 1_000L
+
+        /** companion 由三个服务共享，所以是进程级状态。 */
+        val disconnectGate = DisconnectGate(DISCONNECT_WINDOW_MS)
     }
 }

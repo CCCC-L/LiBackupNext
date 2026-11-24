@@ -30,7 +30,8 @@ internal class RootMediaFileLister : MediaFileLister {
             return@withContext null
         }
 
-        AppLog.i(
+        // 逐目录调用，只留 logcat
+        AppLog.d(
             TAG,
             "root 列目录 $physicalDir：${result.out.size} 个文件，" +
                     "耗时 ${System.currentTimeMillis() - startedAt}ms"

@@ -2,7 +2,6 @@ package com.cc.libackupnext.util
 
 import android.content.Context
 import android.os.PowerManager
-import android.util.Log
 
 /**
  * 操作期间的 CPU 保持：备份 / 恢复 / 删除 / 整理仓库时持有 Partial WakeLock，
@@ -36,7 +35,7 @@ object KeepAwake {
         }.getOrNull()
 
         if (lock == null) {
-            Log.w(TAG, "acquire wake lock failed")
+            AppLog.w(TAG, "acquire wake lock failed")
             holders = 0
         }
     }

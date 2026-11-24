@@ -1,7 +1,6 @@
 package com.cc.libackupnext.service.root.sysdata
 
 import android.content.Context
-import android.util.Log
 import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.util.AppLog
 import java.io.File
@@ -44,7 +43,7 @@ internal object SystemDataExporter {
     fun count(context: Context, kind: SnapshotKind): Int? = try {
         SystemDataHandlers[kind]?.count(context)
     } catch (t: Throwable) {
-        Log.w(TAG, "统计 ${kind.key} 失败", t)
+        AppLog.w(TAG, "统计 ${kind.key} 失败", t)
         null
     }
 }

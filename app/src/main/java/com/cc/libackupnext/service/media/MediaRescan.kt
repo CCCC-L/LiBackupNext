@@ -101,9 +101,11 @@ internal class AndroidMediaRescanner(
         val collected = collectViaRoot(dir)
 
         val files = collected.files
+        // 与 collectViaRoot 的条数相同，合并成一条
         AppLog.i(
             TAG,
-            "媒体索引：$dir 找到 ${files.size} 个媒体文件（截断=${collected.truncated}）"
+            "媒体索引：$dir 找到 ${files.size} 个（物理 ${MediaPath.physical(dir)}，" +
+                    "截断=${collected.truncated}）"
         )
         if (files.isEmpty()) {
             return@withContext RescanResult(0, 0, collected.truncated, false)
@@ -171,7 +173,6 @@ internal class AndroidMediaRescanner(
             if (path.startsWith(base)) fusePrefix + path.removePrefix(base) else path
         }
 
-        AppLog.i(TAG, "媒体索引：root 列出 ${fuse.size} 个媒体文件（物理 $physical）")
         return if (fuse.size > MAX_FILES) {
             Collected(fuse.take(MAX_FILES), true)
         } else {

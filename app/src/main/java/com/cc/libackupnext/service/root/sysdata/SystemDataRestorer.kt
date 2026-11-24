@@ -1,8 +1,8 @@
 package com.cc.libackupnext.service.root.sysdata
 
 import android.content.Context
-import android.util.Log
 import com.cc.libackupnext.data.SnapshotKind
+import com.cc.libackupnext.util.AppLog
 import java.io.File
 
 /**
@@ -24,7 +24,8 @@ internal object SystemDataRestorer {
     fun restoreFrom(context: Context, kind: SnapshotKind, dir: File): RestoreResult = try {
         SystemDataHandlers[kind]?.restoreFrom(context, dir) ?: RestoreResult(0, 0)
     } catch (t: Throwable) {
-        Log.e(TAG, "恢复 ${kind.key} 失败", t)
+        // 恢复失败会中断这一项，必须落盘
+        AppLog.e(TAG, "恢复 ${kind.key} 失败", t)
         throw t
     }
 }

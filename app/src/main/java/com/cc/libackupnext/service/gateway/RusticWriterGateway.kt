@@ -1,6 +1,5 @@
 package com.cc.libackupnext.service.gateway
 
-import android.util.Log
 import com.cc.libackupnext.data.prefs.BackupPrefs
 import com.cc.libackupnext.data.prefs.RepoPrefs
 import com.cc.libackupnext.data.BackupEntry
@@ -340,10 +339,8 @@ internal class RusticWriterGateway(
             val source = session.application.applicationInfo.sourceDir
             val dest = "$dir/app.apk"
             val result = Shell.cmd("cp -f \"$source\" \"$dest\"").exec()
-            if (result.isSuccess) {
-                Log.d(TAG, "copySelfApk: $dest")
-            } else {
-                Log.w(TAG, "copySelfApk failed: ${result.err.joinToString()}")
+            if (!result.isSuccess) {
+                AppLog.w(TAG, "copySelfApk 失败（不影响备份主流程）：${result.err.joinToString()}")
             }
         }.onFailure { AppLog.w(TAG, "copySelfApk 失败（不影响备份主流程）", it) }
     }

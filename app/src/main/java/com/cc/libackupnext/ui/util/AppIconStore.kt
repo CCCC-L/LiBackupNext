@@ -6,7 +6,6 @@ import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.os.Process
-import android.util.Log
 import android.util.LruCache
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -86,8 +85,7 @@ object AppIconStore {
             scope.async {
                 val bitmap = try {
                     loadBitmap(packageName, userId, device)
-                } catch (t: Throwable) {
-                    Log.w(TAG, "load failed: $key", t)
+                } catch (_: Throwable) {
                     null
                 }
                 if (bitmap != null) cache.put(key, bitmap) else missing.add(key)

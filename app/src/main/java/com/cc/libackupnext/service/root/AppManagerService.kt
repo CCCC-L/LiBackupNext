@@ -132,7 +132,7 @@ object AppManagerService {
                     // 列表里不展示当前应用自己
                     buildAppInfos(userId).filter { it.packageName != mContext.packageName }
                 } catch (t: Throwable) {
-                    Log.e(TAG, "buildAppInfos failed, userId=$userId", t)
+                    AppLog.e(TAG, "buildAppInfos failed, userId=$userId", t)
                     null
                 }
 
@@ -208,7 +208,7 @@ object AppManagerService {
                 val drawable = mPackageManager.getApplicationIcon(ai)
                 drawableToIconBytes(drawable)
             } catch (t: Throwable) {
-                Log.w(TAG, "getIcon($packageName, $userId) failed", t)
+                Log.d(TAG, "getIcon($packageName, $userId) failed", t)
                 null
             }
         }
@@ -246,7 +246,7 @@ object AppManagerService {
                 am.forceStopPackageAsUser(packageName, userId)
                 return
             } catch (t: Throwable) {
-                Log.w(TAG, "forceStopPackageAsUser failed, fallback to am", t)
+                AppLog.w(TAG, "forceStopPackageAsUser failed, fallback to am", t)
                 throw IllegalStateException("强制停止失败")
             }
         }
@@ -327,7 +327,7 @@ object AppManagerService {
                 mPackageManagerService.setApplicationEnabledSetting(packageName, newState, 0, userId, null)
                 return
             } catch (t: Throwable) {
-                Log.w(TAG, "setApplicationEnabledSetting failed", t)
+                AppLog.w(TAG, "setApplicationEnabledSetting failed", t)
                 val freeze = newState == PackageManager.COMPONENT_ENABLED_STATE_DISABLED
                 throw IllegalStateException(if (freeze) "冻结失败" else "解冻失败")
             }
@@ -340,7 +340,7 @@ object AppManagerService {
                 try {
                     if (mActivityManager?.clearApplicationUserData(packageName, null) == true) return
                 } catch (t: Throwable) {
-                    Log.w(TAG, "clearApplicationUserData failed", t)
+                    AppLog.w(TAG, "clearApplicationUserData failed", t)
                     throw IllegalStateException("清空数据失败")
                 }
             }
@@ -350,7 +350,7 @@ object AppManagerService {
             try {
                 mPackageManagerHidden.deletePackageAsUser(packageName, null, 0, userId)
             } catch (t: Throwable) {
-                Log.w(TAG, "deletePackageAsUser failed", t)
+                AppLog.w(TAG, "deletePackageAsUser failed", t)
             }
 
             // 卸载是异步的，等状态真正变化后再返回，UI 刷新时拿到的才是准确状态
@@ -375,7 +375,7 @@ object AppManagerService {
                 // 已为该用户卸载（但数据还在）时 FLAG_INSTALLED 会被清掉
                 (ai.flags and ApplicationInfo.FLAG_INSTALLED) != 0
             } catch (t: Throwable) {
-                Log.w(TAG, "isInstalledForUser($packageName, $userId) failed", t)
+                Log.d(TAG, "isInstalledForUser($packageName, $userId) failed", t)
                 false
             }
         }
@@ -392,7 +392,7 @@ object AppManagerService {
     /** 提前绑定 root 服务，避免真正拉列表时再等 su 握手。 */
     suspend fun warmUp() {
         runCatching { getService() }
-            .onFailure { Log.w(TAG, "warmUp failed", it) }
+            .onFailure { AppLog.w(TAG, "warmUp failed", it) }
     }
 
     suspend fun getUsers(): List<UserInfo> {
@@ -436,7 +436,7 @@ object AppManagerService {
         return try {
             getService().getIcon(packageName, userId)
         } catch (t: Throwable) {
-            Log.w(TAG, "getIcon($packageName, $userId) failed", t)
+            Log.d(TAG, "getIcon($packageName, $userId) failed", t)
             null
         }
     }

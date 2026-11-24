@@ -18,8 +18,8 @@ import com.cc.libackupnext.data.json.WifiBackupFile
 import com.cc.libackupnext.data.json.WifiNetworkDto
 import com.cc.libackupnext.service.json.parseJson
 import com.cc.libackupnext.service.json.toJsonText
+import com.cc.libackupnext.util.AppLog
 import dev.rikka.tools.refine.Refine
-import com.cc.libackupnext.service.root.sysdata.StaticIpFactory
 import java.net.InetAddress
 import java.util.BitSet
 
@@ -37,7 +37,7 @@ internal object WifiHandler : SystemDataHandler {
 
     override fun count(context: Context): Int? = runCatching {
         wifiConfigs(context).size
-    }.onFailure { Log.w(TAG, "统计 Wi-Fi 失败", it) }.getOrNull()
+    }.onFailure { AppLog.w(TAG, "统计 Wi-Fi 失败", it) }.getOrNull()
 
     override fun export(context: Context): String =
         WifiBackupFile(networks = wifiConfigs(context).map { exportWifiConfig(it) }).toJsonText()

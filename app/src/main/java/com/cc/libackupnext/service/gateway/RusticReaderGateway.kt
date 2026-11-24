@@ -1,6 +1,5 @@
 package com.cc.libackupnext.service.gateway
 
-import android.util.Log
 import com.cc.libackupnext.data.AppBackupSummary
 import com.cc.libackupnext.data.prefs.RepoPrefs
 import com.cc.libackupnext.data.BackupEntry
@@ -212,7 +211,7 @@ internal class RusticReaderGateway(
 
                 Result.success(file.readBytes())
             } catch (t: Throwable) {
-                Log.w(TAG, "loadIcon failed: $packageName", t)
+                AppLog.w(TAG, "loadIcon failed: $packageName", t)
                 Result.failure(t)
             } finally {
                 dir.deleteRecursively()

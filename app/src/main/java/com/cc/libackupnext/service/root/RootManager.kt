@@ -1,18 +1,8 @@
 package com.cc.libackupnext.service.root
 
-import android.content.ComponentName
-import android.content.Context
-import android.content.Intent
-import android.content.ServiceConnection
-import android.os.IBinder
 import android.util.Log
+import com.cc.libackupnext.util.AppLog
 import com.topjohnwu.superuser.Shell
-import com.topjohnwu.superuser.ipc.RootService
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.withTimeoutOrNull
 
 object RootManager {
 
@@ -27,7 +17,7 @@ object RootManager {
     fun isGranted(): Boolean = try {
         Shell.isAppGrantedRoot() == true
     } catch (t: Throwable) {
-        Log.w(TAG, "isGranted error", t)
+        AppLog.w(TAG, "isGranted error", t)
         false
     }
 
@@ -64,19 +54,18 @@ object RootManager {
                 )
                 Log.d(TAG, "mount-master enabled")
             } else {
-                Log.w(TAG, "mount-master not supported, fallback to default namespace")
+                // 没有 mount-master 会看不到 /data，必须留痕
+                AppLog.w(TAG, "mount-master not supported, fallback to default namespace")
             }
-        }.onFailure { Log.w(TAG, "mount-master probe failed, fallback", it) }
+        }.onFailure { AppLog.w(TAG, "mount-master probe failed, fallback", it) }
     }
 
     fun request(): Boolean = try {
         prepareShell()
         val result = Shell.cmd("id").exec()
-        val ok = result.isSuccess && result.out.any { it.contains("uid=0") }
-        Log.d(TAG, "request: isSuccess=${result.isSuccess}, ok=$ok")
-        ok
+        result.isSuccess && result.out.any { it.contains("uid=0") }
     } catch (t: Throwable) {
-        Log.e(TAG, "request error", t)
+        AppLog.e(TAG, "request error", t)
         false
     }
 

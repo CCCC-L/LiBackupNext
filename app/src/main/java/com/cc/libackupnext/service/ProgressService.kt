@@ -8,7 +8,6 @@ import android.os.IBinder
 import androidx.core.content.IntentCompat
 import com.cc.libackupnext.util.BackupNotifier
 import com.cc.libackupnext.util.AppLog
-import android.util.Log
 import com.cc.libackupnext.util.KeepAwake
 
 /**
@@ -68,8 +67,7 @@ class ProgressService : Service() {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
             )
         }.onFailure {
-            // 后台更新失败会被静默吞掉，留一条记录方便排查
-            Log.w("ProgressService", "startForeground update failed", it)
+            // 通知刷新会反复走到这里，只在首次失败时落盘。
             if (!reportedUpdateFailure) {
                 reportedUpdateFailure = true
                 AppLog.e("通知", "更新前台通知失败", it)
