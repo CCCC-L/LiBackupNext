@@ -11,6 +11,7 @@ import com.cc.libackupnext.service.gateway.DirectoryBrowser
 import com.cc.libackupnext.service.json.parseJson
 import com.cc.libackupnext.service.json.toJsonText
 import com.cc.libackupnext.service.gateway.BackendMessage
+import com.cc.libackupnext.service.gateway.BackendFailureException
 import com.cc.libackupnext.service.gateway.BackendRawException
 import com.cc.libackupnext.service.gateway.BackendSource
 import kotlinx.coroutines.Dispatchers
@@ -19,6 +20,7 @@ import com.cc.libackupnext.service.IRcloneService
 import com.cc.libackupnext.service.root.RcloneServer
 import com.cc.libackupnext.service.root.RootServiceManager
 import com.cc.libackupnext.service.browse.LocalVolumes
+import com.cc.libackupnext.util.AppLog
 
 /**
  * 主进程侧的 rclone 业务入口：目录浏览 / 新建文件夹，以及远程 restic 服务的地址。
@@ -39,7 +41,9 @@ object RcloneClient : DirectoryBrowser {
     private suspend fun getService(): IRcloneService = manager.getService()
 
     /**
-     * 所有 AIDL 调用的唯一出口：完整响应写日志（rclone 先脱敏），失败只把去噪限长后的原文抛给 UI。
+     * 所有 AIDL 调用的唯一出口：完整响应写日志（rclone 先脱敏），
+     * 失败时按 rclone 的报错特征归类（认证失败 / 连不上 / 超时 / 路径不存在），
+     * 认得出就给一句中文，认不出才把原文交给 UI。
      */
     private suspend fun call(
         label: String,
@@ -53,23 +57,26 @@ object RcloneClient : DirectoryBrowser {
             raw = raw,
             error = envelope.error,
             ok = envelope.ok,
-            label = label
+            label = label,
+            reason = if (envelope.ok) {
+                null
+            } else {
+                RcloneFailureClassifier.classify(envelope.error ?: raw)
+            }
         )
         if (!envelope.ok) {
-            throw IllegalStateException(
-                brief.text.ifBlank { "远程操作失败" },
-                BackendRawException(BackendSource.RCLONE, raw)
+            throw BackendFailureException(
+                message = brief.text.ifBlank { "远程操作失败" },
+                detail = brief.detail,
+                cause = BackendRawException(BackendSource.RCLONE, raw)
             )
         }
         raw
     }
 
     /**
-     * 列一层子目录：本地 / 远程共用同一条 AIDL + rclone RC 通道。
-     *
-     * inline 配置随本次请求下传，不依赖已保存的仓库，所以初始化之前也能浏览。
-     * create 不为空时先在该层建一个文件夹再重新列；fixup 是本地外部存储里那个
-     * 新建目录的绝对路径，由 root 侧在成功后修正归属。
+     * 列一层子目录（本地 / 远程同一条通道）。inline 配置随请求下传，初始化前也能浏览。
+     * create 非空时先建文件夹再重列；fixup 是新建目录的绝对路径，由 root 侧修正归属。
      */
     private suspend fun listDirs(
         fs: String,
@@ -94,11 +101,9 @@ object RcloneClient : DirectoryBrowser {
     }
 
     /**
-     * 列出本地某一层下的子目录，供通用文件夹选择弹窗用。
-     *
-     * 新建的目录由 :root 进程（uid 0）建出来，在外部存储的 FUSE 视图下
-     * 归属不对的话普通用户删不掉，所以把要修的绝对路径随请求交给 root 侧，
-     * 由它在列目录成功后用 fixupTree 交还给 media_rw。
+     * 列出本地某一层下的子目录，供文件夹选择弹窗用。
+     * :root（uid 0）建出来的目录在 FUSE 视图下归属不对，普通用户删不掉，
+     * 所以把绝对路径交给 root 侧用 fixupTree 交还给 media_rw。
      */
     override suspend fun listLocalDirs(
         path: String,
@@ -119,11 +124,9 @@ object RcloneClient : DirectoryBrowser {
         listRemoteDirs(repo, "/").map { }
 
     /**
-     * 只有落在已挂载卷（内部存储 / SD卡 / 外置存储）里的新建目录才修归属，
-     * 避免误改 /data 等系统目录；远程路径从来不带 fixup。
-     *
-     * fixupTree 会把路径直接拼进 shell 脚本且不转义，所以整个 target 都要挡住
-     * shell 元字符（path 里也可能有历史目录名），名字本身另外挡路径穿越。
+     * 只给已挂载卷里的新建目录修归属，避免误改 /data；远程路径从不带 fixup。
+     * fixupTree 把路径直接拼进 shell 脚本，所以 target 必须挡住 shell 元字符，
+     * 名字本身另挡路径穿越。
      */
     private fun fixupTarget(path: String, name: String?): String? {
         if (name == null) return null
@@ -140,25 +143,30 @@ object RcloneClient : DirectoryBrowser {
     }
 
     /**
-     * 起（或复用）一个 serve restic，返回给 rustic RestBackend 用的 URL。
-     *
-     * URL 里带本次随机生成的 basic-auth token 与端口，只在当前 root 进程内有效：
-     * 调用方把它放进本次请求的 options，绝不写进 RepoPrefs。key 带上 inline 配置，
-     * 配置一变 root 侧就会停掉旧服务再起新的。
+     * 起（或复用）serve restic，返回给 rustic RestBackend 的 URL。
+     * URL 带本次随机 token 与端口，只放进请求 options，绝不写进 RepoPrefs；
+     * key 含 inline 配置，配置一变 root 侧就停旧起新。
      */
     suspend fun ensureServe(repo: RemoteRepo): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
+        val startedAt = System.currentTimeMillis()
+        val result = runCatching {
             val fs = RemoteBackend.serveFs(repo)
             val request = EnsureServeRequest(
                 lib = RemoteBackend.libraryPath(),
                 fs = fs,
                 key = "${repo.location}|$fs"
             )
-            val requestJson = request.toJsonText()
-            val raw = call("ensureServe") { it.ensureServe(requestJson) }
+            val raw = call("ensureServe") { it.ensureServe(request.toJsonText()) }
             raw.parseJson<EnsureServeResponse>().url?.takeIf { it.isNotBlank() }
                 ?: error("启动远程服务失败")
         }
+        // 绑定 :rclone 的耗时也算在里面：它和 serve/start 的 15s 是两段
+        AppLog.i(
+            TAG,
+            "ensureServe 结束，总耗时 ${System.currentTimeMillis() - startedAt}ms，" +
+                    "结果=${if (result.isSuccess) "成功" else "失败"}"
+        )
+        result
     }
 
     /** 手动停掉当前的 serve restic（配置切换一般由 key 变化自动完成）。 */

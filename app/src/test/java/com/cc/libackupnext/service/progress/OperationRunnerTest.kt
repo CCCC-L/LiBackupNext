@@ -5,7 +5,7 @@ import com.cc.libackupnext.data.BackupStep
 import com.cc.libackupnext.data.BackupStepStatus
 import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.BackupProgress
-import com.cc.libackupnext.service.gateway.BackendErrors
+import com.cc.libackupnext.service.gateway.RemoteInterruptedException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -64,7 +64,8 @@ class OperationRunnerTest {
     @Test
     fun `断连时不标失败，返回 Interrupted`() = runBlocking {
         var observed: List<BackupStep> = emptyList()
-        val error = IllegalStateException(BackendErrors.REMOTE_INTERRUPTED_MESSAGE)
+        // 断连是类型判定，不是文案相等：message 是具体原因（「无法连接到远程服务器」等）
+        val error = RemoteInterruptedException("无法连接到远程服务器")
 
         val outcome = runner.run(
             steps = apkSteps(),

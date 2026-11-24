@@ -1,5 +1,9 @@
+@file:OptIn(ExperimentalSerializationApi::class)
+
 package com.cc.libackupnext.data.json
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -15,9 +19,19 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class OperationEnvelope(val op: String = "")
 
-/** Rust 侧 BridgeResponse：{"ok":true} 或 {"ok":false,"error":"..."}。 */
+/**
+ * Rust 侧 BridgeResponse：`{"ok":true}` 或 `{"ok":false,"error":"...","reason":"password"}`。
+ *
+ * [reason] 是 [com.cc.libackupnext.data.FailureReason] 的 wire 值；缺省表示底层
+ * 也给不出结论，主进程只能拿原文兜底。
+ */
 @Serializable
-data class OkResponse(val ok: Boolean = false, val error: String? = null)
+data class OkResponse(
+    // 失败响应由主进程重新拼成 JSON 传给上层，默认值不写出就会丢字段
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS) val ok: Boolean = false,
+    val error: String? = null,
+    val reason: String? = null
+)
 
 // ==================== 主进程 -> root / Rust 的请求 ====================
 
@@ -41,7 +55,29 @@ data class ExportSnapshotRequest(val id: String, val dest: String)
 data class InitRepoRequest(
     val path: String,
     val password: String,
+    val options: Map<String, String> = emptyMap(),
+    /** true = 直接建库（主进程已判定是空仓库）；false = 只打开。 */
+    @SerialName("force_init") val forceInit: Boolean = false
+)
+
+/** 查仓库结构：只列目录，不需要密码。 */
+@Serializable
+data class RepoLayoutRequest(
+    val path: String,
     val options: Map<String, String> = emptyMap()
+)
+
+/** 五类文件的存在情况；「算不算完整」由 `service.gateway.RepoLayout` 判定。 */
+@Serializable
+data class RepoLayoutResponse(
+    val ok: Boolean = false,
+    val config: Boolean = false,
+    val keys: Boolean = false,
+    val data: Boolean = false,
+    val index: Boolean = false,
+    val snapshots: Boolean = false,
+    val error: String? = null,
+    val reason: String? = null
 )
 
 /**
@@ -158,7 +194,8 @@ data class SnapshotDto(
 data class ListSnapshotsResponse(
     val ok: Boolean = false,
     val snapshots: List<SnapshotDto> = emptyList(),
-    val error: String? = null
+    val error: String? = null,
+    val reason: String? = null
 )
 
 /** Rust 的 OverviewSnapshot。 */
@@ -188,21 +225,24 @@ data class PackageOverviewDto(
 data class OverviewResponse(
     val ok: Boolean = false,
     val packages: List<PackageOverviewDto> = emptyList(),
-    val error: String? = null
+    val error: String? = null,
+    val reason: String? = null
 )
 
 @Serializable
 data class CleanupResponse(
     val ok: Boolean = false,
     val removed: Int = 0,
-    val error: String? = null
+    val error: String? = null,
+    val reason: String? = null
 )
 
 @Serializable
 data class EstimateResponse(
     val ok: Boolean = false,
     val bytes: Long = 0,
-    val error: String? = null
+    val error: String? = null,
+    val reason: String? = null
 )
 
 /** root 侧统计出来的三类系统数据条数；key 是 SnapshotKind.key。 */

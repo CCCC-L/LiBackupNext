@@ -21,17 +21,24 @@ interface IRusticService {
   void setRepo(String path, String password, String options);
 
   /**
-   * 初始化 / 校验 rustic 仓库。
+   * 建库或打开仓库。结构判定由主进程做：先调 [repoLayout]，再决定 forceInit。
    *
-   * - 位置为空仓库：创建新仓库
-   * - 位置已是 rustic 仓库：校验密码
+   * 凭据只用于本次校验，不写入 Rust 侧全局配置；失败什么都不改。
    *
-   * 这三个参数只用于本次校验，不写入 Rust 侧的全局凭据，也不会污染当前仓库配置。
-   * 主进程按返回值决定是否保存：成功才更新 AppPrefs 并重新注入，失败什么都不改。
-   *
-   * @return 成功返回空字符串；失败返回具体错误信息（可直接展示给用户）。
+   * @param forceInit true = 直接建库，false = 只打开（失败原样返回）
+   * @return 成功返回空字符串；失败返回含 error / reason 的响应 JSON
    */
-  String initRepo(String path, String password, String options);
+  String initRepo(String path, String password, String options, boolean forceInit);
+
+  /**
+   * 查五类文件在不在（config / keys / data / index / snapshots）。
+   *
+   * 只列目录，不打开仓库、不需要密码；「算不算完整」由主进程判定。
+   *
+   * @param request JSON：{path, options}
+   * @return {"ok":true,"config":true,"keys":true,"data":false,...}
+   */
+  String repoLayout(String request);
 
   /**
    * 备份一个应用。

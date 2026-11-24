@@ -221,6 +221,9 @@ fun AppBackupScreen(
     }
     var progressTitle by remember { mutableStateOf("正在备份") }
     var backupError by remember { mutableStateOf<String?>(null) }
+
+    /** 失败的完整原文（多行）：弹窗里可滚动查看，toast 只用 [backupError] 那一行 */
+    var backupErrorDetail by remember { mutableStateOf<String?>(null) }
     var connectionInterrupted by remember { mutableStateOf(false) }
     var entries by remember { mutableStateOf<List<BackupEntry>>(emptyList()) }
 
@@ -366,6 +369,7 @@ fun AppBackupScreen(
         showBackupOptions = false
         managingEntry = null
         backupError = null
+        backupErrorDetail = null
         connectionInterrupted = false
         progressTitle = "正在备份"
         backupRunning = true
@@ -421,13 +425,16 @@ fun AppBackupScreen(
                 is OperationOutcome.Failed -> {
                     session.finish(1, 1)
                     backupError = outcome.error.message ?: "备份失败"
+                    backupErrorDetail = BackendErrors.detailOf(outcome.error)
                     AppLog.e("备份", backupError ?: "备份失败", outcome.error)
                 }
 
                 is OperationOutcome.Interrupted -> {
                     session.abort()
                     connectionInterrupted = true
-                    backupError = null
+                    // 断连也要说清是哪一种：HTTP 500 / 连接被拒 / rclone 的原话
+                    backupError = outcome.error.message
+                    backupErrorDetail = BackendErrors.detailOf(outcome.error)
                     AppLog.e("备份", "远程仓库连接中断", outcome.error)
                 }
             }
@@ -535,6 +542,7 @@ fun AppBackupScreen(
 
         progressTitle = "正在恢复"
         backupError = null
+        backupErrorDetail = null
         connectionInterrupted = false
         backupRunning = true
         showBackupProgress = true
@@ -585,13 +593,15 @@ fun AppBackupScreen(
                 is OperationOutcome.Failed -> {
                     session.finish(1, 1)
                     backupError = outcome.error.message ?: "恢复失败"
+                    backupErrorDetail = BackendErrors.detailOf(outcome.error)
                     AppLog.e("恢复", backupError ?: "恢复失败", outcome.error)
                 }
 
                 is OperationOutcome.Interrupted -> {
                     session.abort()
                     connectionInterrupted = true
-                    backupError = null
+                    backupError = outcome.error.message
+                    backupErrorDetail = BackendErrors.detailOf(outcome.error)
                     AppLog.e("恢复", "远程仓库连接中断", outcome.error)
                 }
             }
@@ -865,6 +875,7 @@ fun AppBackupScreen(
             sections = listOf(ProgressSection(title = "", steps = currentSteps)),
             isRestore = progressTitle != "正在备份",
             error = backupError,
+            errorDetail = backupErrorDetail,
             running = backupRunning,
             onDismiss = {
                 showBackupProgress = false

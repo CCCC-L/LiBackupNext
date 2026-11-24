@@ -197,6 +197,8 @@ fun BackupBatchScreen(
     var progressSections by remember { mutableStateOf<List<ProgressSection>>(emptyList()) }
     var progressRestore by remember { mutableStateOf(false) }
     var progressError by remember { mutableStateOf<String?>(null) }
+    /** 失败的完整原文（多行），滚在弹窗步骤列表末尾 */
+    var progressErrorDetail by remember { mutableStateOf<String?>(null) }
     var showProgress by remember { mutableStateOf(false) }
     /** 这一批自动清理掉的旧备份行数：只用于完成时的副标题，没清理就不提。 */
     var cleanedBackups by remember { mutableStateOf(0) }
@@ -577,6 +579,7 @@ fun BackupBatchScreen(
         progressDoneTitle = doneTitle
         progressRestore = isRestore
         progressError = null
+        progressErrorDetail = null
         connectionInterrupted = false
         cleanedBackups = 0
         progressSubtitle = list.first().app.name.ifBlank { list.first().app.packageName }
@@ -655,6 +658,7 @@ fun BackupBatchScreen(
                             failed++
                             AppLog.e(progressTitle, "${app.name} 失败", outcome.error)
                             progressError = outcome.error.message ?: "操作失败"
+                            progressErrorDetail = BackendErrors.detailOf(outcome.error)
                         }
 
                         is OperationOutcome.Interrupted -> {
@@ -662,7 +666,9 @@ fun BackupBatchScreen(
                             failed++
                             AppLog.e(progressTitle, "${app.name} 失败", outcome.error)
                             connectionInterrupted = true
-                            progressError = null
+                            // 断连也要说清是哪一种：HTTP 500 / 连接被拒 / rclone 的原话
+                            progressError = outcome.error.message
+                            progressErrorDetail = BackendErrors.detailOf(outcome.error)
                             aborted = true
                         }
                     }
@@ -1051,6 +1057,7 @@ fun BackupBatchScreen(
             sections = progressSections,
             isRestore = progressRestore,
             error = progressError,
+            errorDetail = progressErrorDetail,
             running = running,
             onDismiss = {
                 showProgress = false

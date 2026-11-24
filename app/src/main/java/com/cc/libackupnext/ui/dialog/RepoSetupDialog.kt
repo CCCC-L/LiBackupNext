@@ -180,10 +180,11 @@ fun RepoSetupDialog(
     // 状态块（进度行 / 红字）出现时从这份预算里扣掉同样高度，避免把按钮行挤出屏幕。
     val isLocalRepo = dialogRepo.protocol.isLocal
     val progressRowHeight = 26.dp
-    val errorTextHeight = 72.dp
+    // 文案已中文化，最长一句约两行；剩下的空间还给表单区，三态总高仍是 420dp
+    val errorTextHeight = 36.dp
     val errorBlockHeight = errorTextHeight + 8.dp   // 上下 padding 各 4dp
     val formMaxHeight = when {
-        initError != null -> 420.dp - errorBlockHeight   // 340 + 80 = 420
+        initError != null -> 420.dp - errorBlockHeight   // 376 + 44 = 420
         isInitializing -> 420.dp - progressRowHeight    // 394 + 26 = 420
         else -> 420.dp                                 // 无状态块：420
     }

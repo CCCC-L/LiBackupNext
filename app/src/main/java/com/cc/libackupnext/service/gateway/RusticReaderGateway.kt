@@ -46,14 +46,12 @@ internal class RusticReaderGateway(
             }.parseJson<OverviewResponse>()
 
             if (!response.ok) {
-                val message = response.error.orEmpty().ifBlank { "读取备份概况失败" }
-                AppLog.e("备份概况", message)
-                // 远程软错误归一一次（停掉旧 serve，让下次请求重建连接），
+                val failure = failureOf(response.error, response.reason, "读取备份概况失败")
+                AppLog.e("备份概况", failure.message)
+                // 远程的失败归一一次（传输层失败会停掉旧 serve，让下次请求重建连接），
                 // 作为 Result.failure 交给 UI 决定怎么提示；本地读失败仍退化为空列表
                 if (repoPrefs.isRemote) {
-                    return@withContext Result.failure(
-                        session.remote.failure(IllegalStateException(message))
-                    )
+                    return@withContext Result.failure(session.remote.error(failure))
                 }
                 return@withContext Result.success(emptyList())
             }
@@ -105,7 +103,9 @@ internal class RusticReaderGateway(
 
             if (!response.ok) {
                 return@withContext Result.failure(
-                    session.remote.error(response.error.orEmpty().ifBlank { "查询快照失败" })
+                    session.remote.error(
+                        failureOf(response.error, response.reason, "查询快照失败")
+                    )
                 )
             }
 
@@ -198,11 +198,13 @@ internal class RusticReaderGateway(
 
             try {
                 val request = ExportSnapshotRequest(id = icon.id, dest = dir.absolutePath)
-                val error = session.remote.call {
-                    session.service().exportSnapshot(request.toJsonText())
-                }
-                if (!error.isNullOrBlank()) {
-                    return@withContext Result.failure(session.remote.error(error))
+                val failure = parseRusticReply(
+                    session.remote.call {
+                        session.service().exportSnapshot(request.toJsonText())
+                    }
+                )
+                if (failure != null) {
+                    return@withContext Result.failure(session.remote.error(failure))
                 }
 
                 val file = dir.listFiles()?.firstOrNull { it.isFile }

@@ -82,10 +82,19 @@ internal class RusticSession(
             if (injectedBinder !== binder || injectedVersion != credentialVersion) {
                 // 只记「注入了凭据」，绝不能把密码写进日志
                 AppLog.i(TAG, "绑定 root 服务，注入仓库凭据")
-                // 远程仓库的地址由 rclone 服务临时起 serve 取回，只用于本次注入；
-                // 配置变化后 root 侧按 key 换服务，URL 含随机 token，绝不落盘。
+                // rest_url 由 rclone 临时起 serve 取回，含随机 token，绝不落盘。
                 val options = if (remoteRepo != null) {
-                    RemoteBackend.optionsFor(RcloneClient.ensureServe(remoteRepo).getOrThrow())
+                    // serve 起不来算传输层失败（后面每笔都会失败，必须停批）；
+                    // 文案已由 RcloneClient 归好类，这里只搬过来。
+                    val url = RcloneClient.ensureServe(remoteRepo).getOrElse { error ->
+                        throw RemoteServeException(
+                            message = error.message?.takeIf { it.isNotBlank() }
+                                ?: "启动远程服务失败",
+                            detail = (error as? BackendFailureException)?.detail,
+                            cause = error
+                        )
+                    }
+                    RemoteBackend.optionsFor(url)
                 } else repoOptions
                 service.setRepo(repoPath, repoPassword, options)
                 injectedBinder = binder

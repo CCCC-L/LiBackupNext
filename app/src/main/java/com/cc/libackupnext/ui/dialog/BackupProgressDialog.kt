@@ -68,6 +68,8 @@ data class ProgressSection(
  * @param subtitle 副标题，例如「开始:com.xxx」或「3/10  应用名」
  * @param sections 已处理过的步骤；批量时按应用分组，全部保留
  * @param isRestore 步骤文案用「恢复」还是「备份」
+ * @param error 一行错误文案（结论 + 原因开头）
+ * @param errorDetail 完整原文（可能多行），滚在步骤列表末尾
  */
 @Composable
 fun BackupProgressDialog(
@@ -81,7 +83,8 @@ fun BackupProgressDialog(
     running: Boolean,
     onDismiss: () -> Unit,
     /** 远程仓库连接中断：弹窗内改标题 + 一行红色提示。 */
-    connectionInterrupted: Boolean = false
+    connectionInterrupted: Boolean = false,
+    errorDetail: String? = null
 ) {
     // 有文件读不出来就不能说「成功」：快照是建出来了，但里面少了东西
     val unreadable = unreadableFiles(sections)
@@ -169,16 +172,30 @@ fun BackupProgressDialog(
                         }
                     }
             }
+
+            // 完整错误放在滚动区末尾：rustic 的 Message / Caused by 可能很长，
+            // 让用户滚着看完，不挤占上面那行固定可见的结论
+            val detail = errorDetail?.takeIf { it.isNotBlank() && it != error }
+            if (detail != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
 
-        if (connectionInterrupted || error != null) {
+        // 断连时没有 error 才用兜底文案：正常都带着具体原因（HTTP 500 / 连接被拒）
+        val errorText = if (connectionInterrupted) {
+            error?.takeIf { it.isNotBlank() } ?: BackendErrors.REMOTE_INTERRUPTED_MESSAGE
+        } else {
+            error?.takeIf { it.isNotBlank() }
+        }
+        if (errorText != null) {
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = if (connectionInterrupted) {
-                    BackendErrors.REMOTE_INTERRUPTED_MESSAGE
-                } else {
-                    error.orEmpty()
-                },
+                text = errorText,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error
             )

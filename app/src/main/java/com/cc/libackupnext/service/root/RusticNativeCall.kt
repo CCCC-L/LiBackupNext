@@ -21,7 +21,17 @@ internal fun opOf(request: String): String? = runCatching {
 }.getOrNull()
 
 /**
- * 简单请求：把 JSON 写进共享内存，调 native，返回空串或错误文案。
+ * 失败响应编成 JSON 回给主进程：空串只表示成功，失败必须带上 `reason`，
+ * 否则主进程只能靠一段英文猜原因。
+ */
+internal fun failureJson(response: OkResponse?, fallback: String): String = OkResponse(
+    ok = false,
+    error = response?.error.orEmpty().ifBlank { fallback },
+    reason = response?.reason
+).toJsonText()
+
+/**
+ * 简单请求：把 JSON 写进共享内存，调 native，成功返回空串、失败返回响应 JSON。
  *
  * @param nativeError native 库没加载成功时的固定错误；非空就直接返回它
  * @param failText 失败时的文案前缀，例如「修改备注失败」
@@ -35,7 +45,7 @@ internal fun runSimpleNative(
     failText: String = "操作失败",
     onProgress: IBackupProgressCallback? = null,
 ): String {
-    nativeError?.let { return it }
+    nativeError?.let { return failureJson(null, it) }
     val op = opOf(request)
     val startedAt = System.currentTimeMillis()
 
@@ -67,14 +77,14 @@ internal fun runSimpleNative(
             if (code == 0 && (response == null || response.ok)) {
                 ""
             } else {
-                response?.error.orEmpty().ifBlank { "$failText（code=$code）" }
+                failureJson(response, "$failText（code=$code）")
             }
         } finally {
             shared.close()
         }
     } catch (t: Throwable) {
         AppLog.e(TAG, "${failText}异常", t, op)
-        "${failText}异常：${t.message ?: t.javaClass.simpleName}"
+        failureJson(null, "${failText}异常：${t.message ?: t.javaClass.simpleName}")
     }
 }
 

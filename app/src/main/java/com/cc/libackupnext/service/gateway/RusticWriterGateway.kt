@@ -104,26 +104,30 @@ internal class RusticWriterGateway(
                 }
             )
 
-            val error = session.remote.call {
+            val reply = session.remote.call {
                 session.service().backup(payload.toJsonText(), callback)
             }
-            if (!error.isNullOrBlank()) {
-                AppLog.finishOperation(op, "backup", request.packageName, startedAt, "failed: $error")
-                return@withContext Result.failure(session.remote.error(error))
+            parseRusticReply(reply)?.let { failure ->
+                AppLog.finishOperation(
+                    op, "backup", request.packageName, startedAt, "failed: ${failure.message}"
+                )
+                return@withContext Result.failure(session.remote.error(failure))
             }
 
             // 覆盖备份：新的写成功了再删旧的
             if (deleteIds.isNotEmpty()) {
                 val deleteRequest = DeleteSnapshotsRequest(ids = deleteIds)
-                val deleteError = session.remote.call {
-                    session.service().deleteSnapshots(deleteRequest.toJsonText())
-                }
-                if (!deleteError.isNullOrBlank()) {
+                val deleteFailure = parseRusticReply(
+                    session.remote.call {
+                        session.service().deleteSnapshots(deleteRequest.toJsonText())
+                    }
+                )
+                if (deleteFailure != null) {
                     AppLog.finishOperation(
                         op, "backup", request.packageName, startedAt,
-                        "failed: 删除旧快照 $deleteError"
+                        "failed: 删除旧快照 ${deleteFailure.message}"
                     )
-                    return@withContext Result.failure(session.remote.error(deleteError))
+                    return@withContext Result.failure(session.remote.error(deleteFailure))
                 }
             }
 
@@ -161,12 +165,16 @@ internal class RusticWriterGateway(
                 }
             }
 
-            val error = session.remote.call {
-                session.service().restoreSnapshots(request.toJsonText(), callback)
-            }
-            if (!error.isNullOrBlank()) {
-                AppLog.finishOperation(op, "restore", app.packageName, startedAt, "failed: $error")
-                return@withContext Result.failure(session.remote.error(error))
+            val failure = parseRusticReply(
+                session.remote.call {
+                    session.service().restoreSnapshots(request.toJsonText(), callback)
+                }
+            )
+            if (failure != null) {
+                AppLog.finishOperation(
+                    op, "restore", app.packageName, startedAt, "failed: ${failure.message}"
+                )
+                return@withContext Result.failure(session.remote.error(failure))
             }
 
             AppLog.finishOperation(
@@ -185,11 +193,13 @@ internal class RusticWriterGateway(
         withContext(Dispatchers.IO) {
             try {
                 val request = DeleteSnapshotsRequest(ids = ids)
-                val error = session.remote.call {
-                    session.service().deleteSnapshots(request.toJsonText())
-                }
-                if (error.isNullOrBlank()) Result.success(Unit)
-                else Result.failure(session.remote.error(error))
+                val failure = parseRusticReply(
+                    session.remote.call {
+                        session.service().deleteSnapshots(request.toJsonText())
+                    }
+                )
+                if (failure == null) Result.success(Unit)
+                else Result.failure(session.remote.error(failure))
             } catch (t: Throwable) {
                 AppLog.e(TAG, "deleteSnapshots failed", t)
                 Result.failure(t)
@@ -225,13 +235,13 @@ internal class RusticWriterGateway(
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val request = UpdateDescriptionRequest(ids = entry.ids, description = description)
-            val error = session.remote.call {
-                session.service().updateDescription(request.toJsonText())
-            }
-            if (error.isNullOrBlank()) {
+            val failure = parseRusticReply(
+                session.remote.call { session.service().updateDescription(request.toJsonText()) }
+            )
+            if (failure == null) {
                 Result.success(Unit)
             } else {
-                Result.failure(session.remote.error(error))
+                Result.failure(session.remote.error(failure))
             }
         } catch (t: Throwable) {
             AppLog.e(TAG, "updateEntryDescription failed", t)
@@ -254,9 +264,9 @@ internal class RusticWriterGateway(
                 return@withContext Result.failure(it)
             }
 
-            val error = session.remote.call { session.service().prune(EMPTY_REQUEST) }
-            if (!error.isNullOrBlank()) {
-                return@withContext Result.failure(session.remote.error(error))
+            val failure = parseRusticReply(session.remote.call { session.service().prune(EMPTY_REQUEST) })
+            if (failure != null) {
+                return@withContext Result.failure(session.remote.error(failure))
             }
 
             Result.success(removedIcons)
@@ -281,7 +291,9 @@ internal class RusticWriterGateway(
             }.parseJson<CleanupResponse>()
             if (!response.ok) {
                 return@withContext Result.failure(
-                    session.remote.error(response.error.orEmpty().ifBlank { "清理孤立图标失败" })
+                    session.remote.error(
+                        failureOf(response.error, response.reason, "清理孤立图标失败")
+                    )
                 )
             }
             Result.success(response.removed)
@@ -300,7 +312,9 @@ internal class RusticWriterGateway(
                 Result.success(response.bytes)
             } else {
                 Result.failure(
-                    session.remote.error(response.error.orEmpty().ifBlank { "估算可回收空间失败" })
+                    session.remote.error(
+                        failureOf(response.error, response.reason, "估算可回收空间失败")
+                    )
                 )
             }
         } catch (t: Throwable) {

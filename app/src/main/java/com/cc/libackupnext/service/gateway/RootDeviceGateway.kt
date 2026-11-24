@@ -29,7 +29,9 @@ internal class RootDeviceGateway(
             try {
                 val error = session.binder().setWifiEnabled(enabled)
                 if (error.isNullOrBlank()) Result.success(Unit)
-                else Result.failure(session.remote.backendFailure("setWifiEnabled", error.orEmpty()))
+                else Result.failure(
+                    session.remote.backendFailure("setWifiEnabled", RusticFailure(error.orEmpty()))
+                )
             } catch (t: Throwable) {
                 Result.failure(t)
             }
@@ -52,7 +54,10 @@ internal class RootDeviceGateway(
                 val response = raw.parseJson<StatDirsResponse>()
                 if (!response.ok) {
                     Result.failure(
-                        session.remote.backendFailure("statDirs", response.error.orEmpty())
+                        session.remote.backendFailure(
+                            "statDirs",
+                            RusticFailure(response.error.orEmpty())
+                        )
                     )
                 } else {
                     Result.success(response.existing.toSet())

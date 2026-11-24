@@ -1,23 +1,17 @@
 package com.cc.libackupnext.service.gateway
 
-import com.cc.libackupnext.service.gateway.BackendMessage
-import com.cc.libackupnext.service.gateway.BackendRawException
-import com.cc.libackupnext.service.gateway.BackendSource
 import com.cc.libackupnext.util.AppLog
 import android.os.DeadObjectException
 import kotlinx.coroutines.CancellationException
 
 /**
- * 一次仓库调用的错误归一化：把底层各种异常收敛成「用户能看的一句话 + 可判定的断连」。
+ * 仓库调用的错误归一化：收敛成「一句话 + 可判定的断连」。
  *
- * 从 `RusticClient` 里搬出来单独成类，因为它和「访问哪个仓库、发什么命令」无关：
- * 它只负责**失败长什么样**。这样换后端实现时不用重写，也能用假的
- * `isRemote` / `stopServe` 单独测。
+ * 只有断连类原因才说「连不上」：原因由 Rust 侧给，不按「仓库是不是远程」猜，
+ * 否则密码错、仓库缺件都会被说成网络问题。依赖全部构造注入，方便单独测。
  *
- * 依赖全部构造注入（函数类型），不读全局单例 —— 这是它能被测试的前提。
- *
- * @param isRemote 当前仓库是不是远程（决定断连时要不要停掉 rclone serve）
- * @param onCredentialsStale 断连后通知上层「下次调用重新注入凭据」
+ * @param isRemote 决定断连时要不要停掉 rclone serve
+ * @param onCredentialsStale 断连后让下次调用重新注入凭据
  * @param stopServe 停掉远程服务，让下一次请求重建连接
  */
 internal class RemoteCallHandler(
@@ -30,63 +24,49 @@ internal class RemoteCallHandler(
         const val TAG = "Rustic"
     }
 
-    /**
-     * rustic 失败的统一收敛：完整原文进日志，UI 只显示底层 message。
-     */
+    /** rustic 失败收敛：原文进日志，UI 拿一句中文（或原文兜底）。 */
     fun backendFailure(
         label: String,
-        raw: String,
+        failure: RusticFailure,
         cause: Throwable? = null
-    ): IllegalStateException {
+    ): BackendFailureException {
         val brief = BackendMessage.record(
             source = BackendSource.RUSTIC,
-            raw = raw,
-            error = raw,
+            raw = failure.message,
+            error = failure.message,
             ok = false,
-            label = label
+            label = label,
+            reason = failure.reason
         )
-        return IllegalStateException(
-            brief.text.ifBlank { "操作失败" },
-            cause ?: BackendRawException(BackendSource.RUSTIC, raw)
+        return BackendFailureException(
+            message = brief.text.ifBlank { "操作失败" },
+            detail = brief.detail,
+            // 原文始终进 cause 链：UI 不显示它，但日志里要能查到
+            cause = cause ?: BackendRawException(BackendSource.RUSTIC, failure.message)
         )
     }
 
-    /**
-     * 把任意失败归一成对外语义：远程不可达统一换成
-     * [BackendErrors.REMOTE_INTERRUPTED_MESSAGE]，并停掉旧的 serve。
-     *
-     * 本地仓库失败原样返回 —— 它没有「重连」这个概念，包装只会掩盖原因。
-     */
+    /** 把任意失败归一成对外语义；本地仓库没有「重连」概念，包装只会掩盖原因。 */
     suspend fun failure(t: Throwable): Throwable {
+        // 已经是断连语义（含 RemoteServeException：serve 起不来，文案由 RcloneClient 定好）
         if (t is CancellationException || BackendErrors.isConnectionLost(t)) return t
+
+        // root 服务死了不是网络问题：下次调用会重绑并重新注入凭据，不标断连，
+        // 免得一笔临时 IPC 失败把整批停掉
+        if (isBinderDeath(t)) {
+            AppLog.w(TAG, "root 服务在调用中死亡", t)
+            onCredentialsStale()
+            return IllegalStateException("root 服务已退出，请重试", t)
+        }
 
         // 部分异常没有 message（NPE / 解析异常）：至少把异常类型记进原文
         val raw = t.message?.takeIf { it.isNotBlank() } ?: t.toString()
-        val concise = backendFailure("remoteFailure", raw, t)
-        if (!isRemote()) return concise
-
-        // 原始异常的整条 Caused by 链仍写一份；正文带原文，完整原文另见 RusticResponse
-        AppLog.e(TAG, "远程仓库连接中断：${concise.message}", t)
-        onCredentialsStale()
-        // stopServe() 是 suspend：用 try/catch 吞掉它自己的异常，不能用 runCatching 包
-        try {
-            stopServe()
-        } catch (stopError: Throwable) {
-            AppLog.w(TAG, "停止远程服务失败", stopError)
-        }
-        return IllegalStateException(BackendErrors.REMOTE_INTERRUPTED_MESSAGE, concise)
+        return interrupted(RusticFailure(raw), t)
     }
 
     /**
-     * 所有访问仓库的调用都过这里：远程失败统一换成
-     * [BackendErrors.REMOTE_INTERRUPTED_MESSAGE]，让 UI 认得出断连、批量能停批。
-     *
-     * block 必须是 suspend；catch 里要调 suspend 的 [failure]（停 serve），
-     * 所以用 try/catch 而不是 runCatching。
-     *
-     * @param retryOnDeath 只在**只读**调用上打开。`:root` 被系统收走时，正在飞的 binder
-     *   事务会抛 [DeadObjectException]；只读操作重放一次没有副作用，用户就不该看到这个错误。
-     *   备份 / 恢复 / 删除 / prune 不开：进程可能死在操作中途，重放是否安全要按业务语义判断。
+     * 所有仓库调用都过这里。catch 里要调 suspend 的 [failure]，所以用 try/catch。
+     * @param retryOnDeath 只给只读调用：binder 死亡时重放无副作用；写操作不能重放。
      */
     suspend fun <T> call(
         retryOnDeath: Boolean = false,
@@ -107,14 +87,38 @@ internal class RemoteCallHandler(
         }
     }
 
-    /**
-     * root 侧把 rustic 的失败包成 error 字符串 / `ok=false` 返回，并不抛异常。
-     * 这些「软错误」同样要归一化，否则断连时 UI 认不出、批量不会停批。
-     */
-    suspend fun error(message: String): Throwable =
-        failure(IllegalStateException(message.ifBlank { "仓库操作失败" }))
+    /** root 侧把失败包成响应 JSON 返回、不抛异常，这些软错误同样要归一化。 */
+    suspend fun error(failure: RusticFailure): Throwable = interrupted(failure, null)
 
-    /** binder 事务没落地（目标进程已死）。沿 Caused by 链找，root 侧可能把异常包过一层。 */
+    /** 断连类原因 + 远程仓库 → 断连；其余原样保留原因（message 就是具体原因）。 */
+    private suspend fun interrupted(failure: RusticFailure, cause: Throwable?): Throwable {
+        val concise = backendFailure(
+            label = if (cause == null) "rusticFailure" else "remoteFailure",
+            failure = failure,
+            cause = cause
+        )
+        if (!failure.transport || !isRemote()) return concise
+        return stopAndWrap(concise.message.orEmpty(), concise.detail, concise)
+    }
+
+    /** 断连收尾：日志 + 让下次重新注入凭据 + 停掉旧 serve。 */
+    private suspend fun stopAndWrap(
+        message: String,
+        detail: String?,
+        cause: Throwable
+    ): Throwable {
+        AppLog.e(TAG, "远程仓库连接中断：$message", cause)
+        onCredentialsStale()
+        // stopServe() 是 suspend：吞掉它自己的异常不能用 runCatching
+        try {
+            stopServe()
+        } catch (stopError: Throwable) {
+            AppLog.w(TAG, "停止远程服务失败", stopError)
+        }
+        return RemoteInterruptedException(message, detail, cause)
+    }
+
+    /** binder 事务没落地（目标进程已死）。沿 cause 链找，root 侧可能包过一层。 */
     private fun isBinderDeath(t: Throwable): Boolean =
         generateSequence(t) { it.cause }.any { it is DeadObjectException }
 }

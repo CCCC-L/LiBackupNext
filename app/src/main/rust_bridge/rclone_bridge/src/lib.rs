@@ -8,9 +8,9 @@
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::io::Write;
 use std::panic;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use jni::objects::{JByteBuffer, JObject, JString};
 use jni::sys::jint;
@@ -394,6 +394,38 @@ fn rpc(method: &str, input: &Value) -> Result<Value, String> {
     }
 }
 
+/// 带超时的 RC 调用：`serve/start` 的 NewFs 在远端不可达时能卡十几分钟，
+/// 超时后主线程直接报错，后台线程跑完会自己停掉刚建好的 serve。
+fn rpc_with_timeout(method: &str, input: &Value, timeout: Duration) -> Result<Value, String> {
+    let (tx, rx) = mpsc::channel();
+    let method_owned = method.to_string();
+    let input_owned = input.clone();
+    let abandoned = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&abandoned);
+
+    std::thread::spawn(move || {
+        let result = rpc(&method_owned, &input_owned);
+        if flag.load(Ordering::SeqCst) {
+            // 主线程已经不等了：它要是真建出了 serve，顺手停掉
+            if let Ok(response) = &result {
+                if let Some(id) = response.get("id").and_then(Value::as_str) {
+                    let _ = rpc("serve/stop", &json!({ "id": id }));
+                }
+            }
+            return;
+        }
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(_) => {
+            abandoned.store(true, Ordering::SeqCst);
+            Err(format!("启动远程服务超时（{}s）", timeout.as_secs()))
+        }
+    }
+}
+
 /// inline 配置里的 pass 会被 rclone 当作「已混淆密码」去解密，明文必须转换一次。
 /// 服务端 HTTP basic auth 的 user/pass 不走 Reveal，不需要转换。
 fn obscure(plain: &str) -> Result<String, String> {
@@ -478,7 +510,10 @@ fn remote_url(fs: &Value, key: &str, insecure: bool) -> Result<String, String> {
 
     let user = token();
     let pass = token();
-    let response = rpc(
+    // 15s 硬上限：rclone 自己卡住时（远端不可达、DNS 不响应）不会主动报错，
+    // 只能由这一层给结论。正常链路（握手 + 一次目录请求）在 1~4s 内完成，
+    // 15s 留了足够余量，又不会让用户干等。
+    let response = rpc_with_timeout(
         "serve/start",
         &json!({
             "type": "restic",
@@ -490,6 +525,7 @@ fn remote_url(fs: &Value, key: &str, insecure: bool) -> Result<String, String> {
             // backend 创建时生成的 HTTP transport 会带上它
             "no_check_certificate": insecure,
         }),
+        Duration::from_secs(15),
     )?;
     let addr = response
         .get("addr")

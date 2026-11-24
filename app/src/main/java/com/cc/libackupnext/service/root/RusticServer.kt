@@ -68,9 +68,11 @@ object RusticServer {
     /** /data/media/0/Android/obb 的 gid（ext_obb_rw）。*/
     private const val EXT_OBB_RW_GID = 1079
 
+    /** 查五类文件在不在（config / keys / data / index / snapshots），不打开仓库。 */
+    private external fun nativeRepoLayout(buffer: ByteBuffer): Int
+
     /**
-     * 初始化 / 校验 rustic 仓库。请求帧里带候选 path / password，只用于本次校验，
-     * 不写 Rust 侧的全局凭据。
+     * 初始化 / 校验 rustic 仓库。
      *
      * @return 0 成功；1 业务失败（原因写回缓冲区）；2 共享内存不可用。
      */
@@ -203,20 +205,34 @@ object RusticServer {
                 .onFailure { AppLog.e(TAG, "nativeSetRepo failed", it) }
         }
 
+        /** 查结构给主进程判「建库 / 打开 / 缺件」。 */
+        override fun repoLayout(request: String): String =
+            runQuery(request, ::nativeRepoLayout, "读取仓库结构失败")
+
         /**
-         * 候选路径、密码和后端选项只随这一次请求下传，不写全局凭据。
-         * 成功与否由主进程判断，失败时不需要任何回滚或状态恢复。
+         * 候选凭据只随本次请求下传，不写全局配置。
+         *
+         * @param forceInit true = 建库（主进程已判定空仓库），false = 只打开
          */
-        override fun initRepo(path: String, password: String, options: String): String {
-            nativeError?.let { return it }
+        override fun initRepo(
+            path: String,
+            password: String,
+            options: String,
+            forceInit: Boolean
+        ): String {
             val request = InitRepoRequest(
                 path = path,
                 password = password,
                 // 和 nativeSetRepo 一样容个错：非法 JSON 退化成空 options，本地仓库照常工作
                 options = runCatching { options.parseJson<Map<String, String>>() }
-                    .getOrDefault(emptyMap())
+                    .getOrDefault(emptyMap()),
+                forceInit = forceInit
             )
-            return runSimple(request.toJsonText(), ::nativeInitRepo, "初始化失败")
+            return runSimple(
+                request.toJsonText(),
+                ::nativeInitRepo,
+                if (forceInit) "初始化失败" else "打开仓库失败"
+            )
         }
 
         override fun listSnapshots(request: String): String =
@@ -557,7 +573,8 @@ object RusticServer {
                         if (code == 0 && (response == null || response.ok)) {
                             ""
                         } else {
-                            response?.error.orEmpty().ifBlank { "备份失败（code=$code）" }
+                            // 失败要带上 kind：主进程靠它区分「连不上」和「rustic 自己的错」
+                            failureJson(response, "备份失败（code=$code）")
                         }
                     } finally {
                         poller.stop()

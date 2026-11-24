@@ -31,7 +31,7 @@ use rustic_core::{
     ProgressBars, ProgressType, Repository, RepositoryBackends, RepositoryOptions, RusticProgress,
     SnapshotOptions, StringList,
 };
-use rustic_core::repofile::SnapshotFile;
+use rustic_core::repofile::{IndexId, KeyId, PackId, RepoId, SnapshotFile, SnapshotId};
 use rustic_core::repofile::NodeType;
 use rustic_core::{LimitOption, PruneOptions};
 use serde::{Deserialize, Serialize};
@@ -205,6 +205,9 @@ struct InitRequest {
     /// 透传给 BackendOptions.options；本地仓库为空 map。
     #[serde(default)]
     options: BTreeMap<String, String>,
+    /// true = 直接建库（主进程已判定是空仓库）；false = 只打开。
+    #[serde(default)]
+    force_init: bool,
 }
 
 #[derive(Deserialize)]
@@ -261,6 +264,29 @@ struct ListResponse {
     snapshots: Vec<SnapshotInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+}
+
+impl ListResponse {
+    fn ok(snapshots: Vec<SnapshotInfo>) -> Self {
+        Self {
+            ok: true,
+            snapshots,
+            error: None,
+            reason: None,
+        }
+    }
+
+    fn err(failure: impl Into<Failure>) -> Self {
+        let failure = failure.into();
+        Self {
+            ok: false,
+            snapshots: Vec::new(),
+            reason: failure.reason_wire(),
+            error: Some(failure.message),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -268,6 +294,8 @@ struct BridgeResponse {
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
 }
 
 impl BridgeResponse {
@@ -275,13 +303,166 @@ impl BridgeResponse {
         Self {
             ok: true,
             error: None,
+            reason: None,
         }
     }
 
-    fn err(message: impl Into<String>) -> Self {
+    fn err(failure: impl Into<Failure>) -> Self {
+        Self::from(failure.into())
+    }
+}
+
+impl From<Failure> for BridgeResponse {
+    fn from(failure: Failure) -> Self {
         Self {
             ok: false,
-            error: Some(message.into()),
+            reason: failure.reason_wire(),
+            error: Some(failure.message),
+        }
+    }
+}
+
+/// 失败原因：只回答「是什么问题」，中文文案由主进程按 wire 值查表。
+///
+/// 判定只在 [classify_error] 里做 —— 只有这里能看到 error_code、io 错误类型
+/// 和 source 链；主进程拿到的只有一段文本，靠它猜必然出错。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reason {
+    /// 密码错：仓库结构完整，但所有 key 都用这个密码解不开
+    Password,
+    /// 连不上远程后端（rest 请求失败 / 超时）
+    Unreachable,
+    /// 远程后端拒绝访问（HTTP 401 / 403）
+    Auth,
+    /// 超时
+    Timeout,
+    /// 磁盘满
+    NoSpace,
+    /// 数据校验失败
+    CorruptData,
+}
+
+impl Reason {
+    /// 跨进程的稳定标识，和 Kotlin 的 `FailureReason.wire` 逐字对应。
+    fn wire(self) -> &'static str {
+        match self {
+            Reason::Password => "password",
+            Reason::Unreachable => "unreachable",
+            Reason::Auth => "auth",
+            Reason::Timeout => "timeout",
+            Reason::NoSpace => "no_space",
+            Reason::CorruptData => "corrupt_data",
+        }
+    }
+}
+
+/// 一次失败：原始文本 + 原因。
+///
+/// `message` 是底层原文（已去掉 Backtrace / 文档链接），不是给用户看的文案：
+/// 已知原因时主进程只显示一句中文，原文只进日志；未知原因才拿它兜底。
+#[derive(Debug)]
+struct Failure {
+    message: String,
+    reason: Option<Reason>,
+}
+
+impl Failure {
+    fn app(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            reason: None,
+        }
+    }
+
+    /// 加一段前缀，原因不变（「备份 apk 失败：」这类上下文）。
+    fn context(self, prefix: impl fmt::Display) -> Self {
+        Self {
+            message: format!("{prefix}{}", self.message),
+            reason: self.reason,
+        }
+    }
+
+    /// 响应里的 `reason` 值：只有认得出来的原因才写。
+    fn reason_wire(&self) -> Option<String> {
+        self.reason.map(|reason| reason.wire().to_string())
+    }
+}
+
+/// 业务代码里大量 `ok_or_else(|| "...".to_string())` / `format!` 都还能用 `?` 直接抛。
+impl From<String> for Failure {
+    fn from(message: String) -> Self {
+        Self::app(message)
+    }
+}
+
+impl From<&str> for Failure {
+    fn from(message: &str) -> Self {
+        Self::app(message)
+    }
+}
+
+/// 只用于拼接；原因要靠 [Failure::context] 传递，`format!` 之后会丢。
+impl fmt::Display for Failure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+/// 五类文件的存在情况；「完整 / 缺失」由主进程判定。
+#[derive(Clone, Copy)]
+struct RepoLayout {
+    config: bool,
+    keys: bool,
+    data: bool,
+    index: bool,
+    snapshots: bool,
+}
+
+#[derive(Deserialize)]
+struct RepoLayoutRequest {
+    path: String,
+    #[serde(default)]
+    options: BTreeMap<String, String>,
+}
+
+#[derive(Serialize)]
+struct LayoutResponse {
+    ok: bool,
+    config: bool,
+    keys: bool,
+    data: bool,
+    index: bool,
+    snapshots: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+}
+
+impl LayoutResponse {
+    fn ok(layout: RepoLayout) -> Self {
+        Self {
+            ok: true,
+            config: layout.config,
+            keys: layout.keys,
+            data: layout.data,
+            index: layout.index,
+            snapshots: layout.snapshots,
+            error: None,
+            reason: None,
+        }
+    }
+
+    fn err(failure: Failure) -> Self {
+        Self {
+            ok: false,
+            config: false,
+            keys: false,
+            data: false,
+            index: false,
+            snapshots: false,
+            reason: failure.reason_wire(),
+            error: Some(failure.message),
         }
     }
 }
@@ -330,12 +511,12 @@ fn set_repo(path: &str, password: &str, options: BTreeMap<String, String>) {
     invalidate_backup_repo();
 }
 
-fn repo_config() -> Result<RepoConfig, String> {
+fn repo_config() -> Result<RepoConfig, Failure> {
     REPO_CONFIG
         .lock()
         .ok()
         .and_then(|guard| (*guard).clone())
-        .ok_or_else(|| "仓库尚未配置，请先初始化仓库".to_string())
+        .ok_or_else(|| Failure::app("仓库尚未配置，请先初始化仓库"))
 }
 
 /// 缓存标识：路径 + 凭据代数。密码不进 key，代数已经能区分每次注入。
@@ -393,9 +574,49 @@ pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_native
     outcome.resolve::<jni::errors::ThrowRuntimeExAndDefault>()
 }
 
+/// `RusticServer.nativeRepoLayout(buffer: ByteBuffer): Int`
+///
+/// 请求 `{"path","options"}`，只查五类文件在不在，不需要密码、不打开仓库。
+#[no_mangle]
+pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_nativeRepoLayout<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    buffer: JByteBuffer<'local>,
+) -> jint {
+    run_simple(env, buffer, |ptr, capacity| {
+        let request = match read_frame_at(ptr, capacity, 0).and_then(|bytes| {
+            serde_json::from_slice::<RepoLayoutRequest>(&bytes)
+                .map_err(|e| Failure::app(e.to_string()))
+        }) {
+            Ok(request) => request,
+            Err(failure) => {
+                write_layout_response(ptr, capacity, LayoutResponse::err(failure));
+                return 1;
+            }
+        };
+
+        match repo_layout(&request.path, &request.options) {
+            Ok(layout) => {
+                write_layout_response(ptr, capacity, LayoutResponse::ok(layout));
+                0
+            }
+            Err(failure) => {
+                write_layout_response(ptr, capacity, LayoutResponse::err(failure));
+                1
+            }
+        }
+    })
+}
+
+fn write_layout_response(ptr: *mut u8, capacity: usize, response: LayoutResponse) {
+    if let Ok(json) = serde_json::to_vec(&response) {
+        write_frame_at(ptr, capacity, 0, &json);
+    }
+}
+
 fn handle_init(ptr: *mut u8, capacity: usize) -> jint {
     let request = match read_frame_at(ptr, capacity, 0)
-        .and_then(|bytes| serde_json::from_slice::<InitRequest>(&bytes).map_err(|e| e.to_string()))
+        .and_then(|bytes| serde_json::from_slice::<InitRequest>(&bytes).map_err(|e| Failure::app(e.to_string())))
     {
         Ok(request) => request,
         Err(message) => {
@@ -404,7 +625,7 @@ fn handle_init(ptr: *mut u8, capacity: usize) -> jint {
         }
     };
 
-    match init_repo(&request.path, &request.password, &request.options) {
+    match init_repo(&request.path, &request.password, &request.options, request.force_init) {
         Ok(()) => {
             write_response(ptr, capacity, &BridgeResponse::ok());
             0
@@ -416,44 +637,102 @@ fn handle_init(ptr: *mut u8, capacity: usize) -> jint {
     }
 }
 
-/// 只建库 / 校验传入的候选凭据，**不读写全局 `REPO_CONFIG`，也不碰仓库缓存**。
+/// 建库或打开仓库，**不读写全局 `REPO_CONFIG`，也不碰缓存**（失败无需回滚）。
 ///
-/// 主进程拿到成功结果后才会保存 AppPrefs 并通过 `setRepo()` 注入新凭据；
-/// 失败时全局状态原封不动，所以不需要任何回滚。
+/// 结构判定不在这里：主进程先用 [repo_layout] 查清楚再决定传哪个 `force_init`。
+/// 放在这里判的话，「空仓库」「密码错」「缺 keys」会纠缠在同一个 C002 上
+/// （本地 backend 列不存在的目录只记日志、返回空列表，open 看不出区别）。
 fn init_repo(
     path: &str,
     password: &str,
     options: &BTreeMap<String, String>,
-) -> Result<(), String> {
+    force_init: bool,
+) -> Result<(), Failure> {
     // 本地路径和 remote:/rest:/opendal: 走同一个工厂，不再用文件系统判断仓库是否存在
     let backends = repository_backends(path, options)?;
     let repo_opts = repo_options();
     let credentials = Credentials::password(password);
 
-    // 已有仓库且密码正确时 open 成功；否则尝试 init：空仓库会成功，
-    // config 已存在时 init 会失败。把两次原因都带出来，便于区分「密码错」和「连不上」。
-    let opened = Repository::new(&repo_opts, &backends)
-        .map_err(|e| describe_error(&e))?
-        .open(&credentials);
-    if opened.is_ok() {
-        return Ok(());
+    if force_init {
+        return init_empty_repo(&repo_opts, &backends, &credentials);
     }
-    let open_error = opened.err().map(|e| describe_error(&e)).unwrap_or_default();
 
     Repository::new(&repo_opts, &backends)
         .map_err(|e| describe_error(&e))?
-        .init(
-            &credentials,
-            &KeyOptions::default(),
-            &ConfigOptions::default(),
-        )
+        .open(&credentials)
         .map(|_| ())
-        .map_err(|e| {
-            format!(
-                "仓库不可用：打开失败（{open_error}）；尝试初始化也失败（{}）",
-                describe_error(&e)
-            )
-        })
+        .map_err(|e| describe_error(&e))
+}
+
+/// 空仓库里建库：唯一的成功路径，失败原因原样交出去（不再和 open 的错误拼在一起）。
+fn init_empty_repo(
+    opts: &RepositoryOptions,
+    backends: &RepositoryBackends,
+    credentials: &Credentials,
+) -> Result<(), Failure> {
+    Repository::new(opts, backends)
+        .map_err(|e| describe_error(&e))?
+        .init(credentials, &KeyOptions::default(), &ConfigOptions::default())
+        .map(|_| ())
+        .map_err(|e| describe_error(&e))
+}
+
+/// 查五类文件在不在（不打开仓库，不需要密码）。
+///
+/// **必须查「目录在不在」而不是「里面有没有东西」**：init 会把 data/index/snapshots
+/// 建成空目录，用 list 查内容会把刚建好的仓库判成「什么都没有」。
+fn repo_layout(path: &str, options: &BTreeMap<String, String>) -> Result<RepoLayout, Failure> {
+    // 本地仓库直接看文件系统：backend 的 list 对不存在的目录只记日志、返回空，
+    // 区分不了「不存在」和「存在但空」
+    if let Some(root) = local_root(path) {
+        return Ok(RepoLayout {
+            config: root.join("config").is_file(),
+            keys: root.join("keys").is_dir(),
+            data: root.join("data").is_dir(),
+            index: root.join("index").is_dir(),
+            snapshots: root.join("snapshots").is_dir(),
+        });
+    }
+
+    // 远程仓库只能列目录：列成功 = 目录存在（哪怕是空），404 = 不存在
+    let backends = repository_backends(path, options)?;
+    let repository =
+        Repository::new(&repo_options(), &backends).map_err(|e| describe_error(&e))?;
+
+    Ok(RepoLayout {
+        // config 是根目录下的单个文件，config_id 自带 head / 404 语义
+        config: repository
+            .config_id()
+            .map_err(|e| describe_error(&e))?
+            .is_some(),
+        keys: dir_exists::<_, KeyId>(&repository)?,
+        data: dir_exists::<_, PackId>(&repository)?,
+        index: dir_exists::<_, IndexId>(&repository)?,
+        snapshots: dir_exists::<_, SnapshotId>(&repository)?,
+    })
+}
+
+/// 本地仓库的根目录；远程（rest: / opendal: / remote: / rclone: / 带 scheme）返回 None。
+fn local_root(location: &str) -> Option<PathBuf> {
+    if location.contains("://")
+        || location.starts_with("rest:")
+        || location.starts_with("opendal:")
+        || location.starts_with("remote:")
+        || location.starts_with("rclone:")
+    {
+        return None;
+    }
+    // rustic 支持 local:/path 写法，其余是裸路径
+    Some(PathBuf::from(location.strip_prefix("local:").unwrap_or(location)))
+}
+
+/// 某类文件的目录在不在（远程）：列成功即存在，404 才算不存在。
+fn dir_exists<S, T: RepoId>(repository: &Repository<S>) -> Result<bool, Failure> {
+    match repository.list::<T>() {
+        Ok(_) => Ok(true),
+        Err(error) if is_missing(&error) => Ok(false),
+        Err(error) => Err(describe_error(&error)),
+    }
 }
 
 // ==================== 查询快照 ====================
@@ -510,11 +789,11 @@ pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_native
 
 fn handle_list(ptr: *mut u8, capacity: usize) -> jint {
     let request = match read_frame_at(ptr, capacity, 0)
-        .and_then(|bytes| serde_json::from_slice::<ListRequest>(&bytes).map_err(|e| e.to_string()))
+        .and_then(|bytes| serde_json::from_slice::<ListRequest>(&bytes).map_err(|e| Failure::app(e.to_string())))
     {
         Ok(request) => request,
         Err(message) => {
-            write_list_response(ptr, capacity, ListResponse { ok: false, snapshots: Vec::new(), error: Some(message) });
+            write_list_response(ptr, capacity, ListResponse::err(message));
             return 1;
         }
     };
@@ -523,11 +802,7 @@ fn handle_list(ptr: *mut u8, capacity: usize) -> jint {
         Ok(mut snapshots) => {
             // 按实际容量裁剪：描述可能很长，500 条不一定塞得下
             loop {
-                let response = ListResponse {
-                    ok: true,
-                    snapshots: snapshots.clone(),
-                    error: None,
-                };
+                let response = ListResponse::ok(snapshots.clone());
 
                 match serde_json::to_vec(&response) {
                     Ok(json) if json.len() + 4 <= capacity => {
@@ -535,36 +810,32 @@ fn handle_list(ptr: *mut u8, capacity: usize) -> jint {
                         break;
                     }
                     Ok(_) if snapshots.is_empty() => {
-                        write_list_response(ptr, capacity, ListResponse {
-                            ok: true,
-                            snapshots: Vec::new(),
-                            error: None,
-                        });
+                        write_list_response(ptr, capacity, ListResponse::ok(Vec::new()));
                         break;
                     }
                     Ok(_) => {
                         snapshots.pop();
                     }
                     Err(_) => {
-                        write_list_response(ptr, capacity, ListResponse {
-                            ok: false,
-                            snapshots: Vec::new(),
-                            error: Some("序列化快照失败".to_string()),
-                        });
+                        write_list_response(
+                            ptr,
+                            capacity,
+                            ListResponse::err("序列化快照失败"),
+                        );
                         break;
                     }
                 }
             }
             0
         }
-        Err(message) => {
-            write_list_response(ptr, capacity, ListResponse { ok: false, snapshots: Vec::new(), error: Some(message) });
+        Err(failure) => {
+            write_list_response(ptr, capacity, ListResponse::err(failure));
             1
         }
     }
 }
 
-fn list_snapshots(request: &ListRequest) -> Result<Vec<SnapshotInfo>, String> {
+fn list_snapshots(request: &ListRequest) -> Result<Vec<SnapshotInfo>, Failure> {
     let repository = open_repo_cached()?;
 
     // 应用：label 形如 `<包名>:<类型>`，按前缀过滤（纯查找，不做语义处理）
@@ -643,7 +914,7 @@ fn repo_options() -> RepositoryOptions {
 fn repository_backends(
     location: &str,
     options: &BTreeMap<String, String>,
-) -> Result<RepositoryBackends, String> {
+) -> Result<RepositoryBackends, Failure> {
     let mut effective = location.to_string();
     let mut backend_options = options.clone();
 
@@ -652,7 +923,7 @@ fn repository_backends(
         // 随机 token 与端口；这里只做字符串拼接，不再加载或调用 librclone。
         let url = backend_options
             .remove("rest_url")
-            .ok_or_else(|| "缺少远程服务地址".to_string())?;
+            .ok_or_else(|| Failure::app("缺少远程服务地址"))?;
         effective = format!("rest:{url}");
 
         backend_options
@@ -661,9 +932,11 @@ fn repository_backends(
         backend_options
             .entry("http-connect-timeout".to_string())
             .or_insert_with(|| "5s".to_string());
+        // 两次读之间的空闲超时（不是总时长）：慢但持续的传输不会被打断，卡住才断。
+        // 上传也一样 —— 发完 body 要等响应，远端断了就卡在这一步。
         backend_options
             .entry("http-read-timeout".to_string())
-            .or_insert_with(|| "60s".to_string());
+            .or_insert_with(|| "20s".to_string());
     }
 
     BackendOptions::default()
@@ -677,7 +950,7 @@ fn repository_backends(
 ///
 /// 走 `new_with_progress`：备份时 rustic 内部的字节进度会经 [BridgeProgressBars]
 /// 写进共享内存。列表 / prune / check 这些操作没有挂进度端，emit 会静默跳过。
-fn open_repo(config: &RepoConfig) -> Result<rustic_core::Repository<rustic_core::OpenStatus>, String> {
+fn open_repo(config: &RepoConfig) -> Result<rustic_core::Repository<rustic_core::OpenStatus>, Failure> {
     let backends = repository_backends(&config.path, &config.options)?;
 
     Repository::new_with_progress(&repo_options(), &backends, BridgeProgressBars)
@@ -710,7 +983,7 @@ fn clear_repo_cache() {
 }
 
 /// 取仓库：命中缓存就直接复用（省掉 scrypt 派生），否则打开并缓存。
-fn open_repo_cached() -> Result<Arc<Repository<rustic_core::OpenStatus>>, String> {
+fn open_repo_cached() -> Result<Arc<Repository<rustic_core::OpenStatus>>, Failure> {
     let config = repo_config()?;
     let key = repo_key(&config);
 
@@ -765,7 +1038,7 @@ fn invalidate_indexed_repo() {
 }
 
 /// 取「已建索引」的仓库：命中缓存直接复用，省掉 scrypt 派生和读索引。
-fn open_indexed_repo_cached() -> Result<Arc<Repository<rustic_core::IndexedFullStatus>>, String> {
+fn open_indexed_repo_cached() -> Result<Arc<Repository<rustic_core::IndexedFullStatus>>, Failure> {
     let config = repo_config()?;
     let key = repo_key(&config);
 
@@ -824,7 +1097,7 @@ fn invalidate_backup_repo() {
 
 fn open_backup_repo_cached(
     batch: Option<&str>,
-) -> Result<Arc<Repository<rustic_core::IndexedIdsStatus>>, String> {
+) -> Result<Arc<Repository<rustic_core::IndexedIdsStatus>>, Failure> {
     let config = repo_config()?;
     // 没有批次标识就不缓存：单次备份本来也只会用一次
     let key = match batch {
@@ -959,6 +1232,8 @@ struct OverviewResponse {
     packages: Vec<PackageOverview>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
 }
 
 /// 快照属于哪一次备份：优先用 tag 里的时间戳，解析不出来退回快照时间。
@@ -975,7 +1250,7 @@ fn backup_stamp(snapshot: &SnapshotFile) -> i64 {
         .unwrap_or_else(|| snapshot.time.timestamp().as_millisecond())
 }
 
-fn build_overview() -> Result<Vec<PackageOverview>, String> {
+fn build_overview() -> Result<Vec<PackageOverview>, Failure> {
     let repository = open_repo_cached()?;
 
     let snapshots = repository
@@ -1103,18 +1378,20 @@ pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_native
                         ok: true,
                         packages,
                         error: None,
+                        reason: None,
                     },
                 );
                 0
             }
-            Err(message) => {
+            Err(failure) => {
                 write_overview_response(
                     ptr,
                     capacity,
                     OverviewResponse {
                         ok: false,
                         packages: Vec::new(),
-                        error: Some(message),
+                        reason: failure.reason_wire(),
+                        error: Some(failure.message),
                     },
                 );
                 1
@@ -1148,7 +1425,7 @@ pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_native
 
 fn handle_update_description(ptr: *mut u8, capacity: usize) -> jint {
     let request = match read_frame_at(ptr, capacity, 0).and_then(|bytes| {
-        serde_json::from_slice::<UpdateDescriptionRequest>(&bytes).map_err(|e| e.to_string())
+        serde_json::from_slice::<UpdateDescriptionRequest>(&bytes).map_err(|e| Failure::app(e.to_string()))
     }) {
         Ok(request) => request,
         Err(message) => {
@@ -1169,7 +1446,7 @@ fn handle_update_description(ptr: *mut u8, capacity: usize) -> jint {
     }
 }
 
-fn update_descriptions(request: &UpdateDescriptionRequest) -> Result<(), String> {
+fn update_descriptions(request: &UpdateDescriptionRequest) -> Result<(), Failure> {
     let _gate = enter_write_gate();
 
     if request.ids.is_empty() {
@@ -1183,7 +1460,7 @@ fn update_descriptions(request: &UpdateDescriptionRequest) -> Result<(), String>
         .map_err(|e| describe_error(&e))?;
 
     if snapshots.is_empty() {
-        return Err("snapshot not found".to_string());
+        return Err(Failure::app("snapshot not found"));
     }
 
     // 快照 id 是内容哈希，改完 description 会变成新 id，所以先记住旧 id 再删
@@ -1240,7 +1517,7 @@ pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_native
 ) -> jint {
     run_simple(env, buffer, |ptr, capacity| {
         let request = match read_frame_at(ptr, capacity, 0).and_then(|bytes| {
-            serde_json::from_slice::<DeleteRequest>(&bytes).map_err(|e| e.to_string())
+            serde_json::from_slice::<DeleteRequest>(&bytes).map_err(|e| Failure::app(e.to_string()))
         }) {
             Ok(request) => request,
             Err(message) => {
@@ -1262,7 +1539,7 @@ pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_native
     })
 }
 
-fn delete_snapshots(request: &DeleteRequest) -> Result<(), String> {
+fn delete_snapshots(request: &DeleteRequest) -> Result<(), Failure> {
     let _gate = enter_write_gate();
 
     if request.ids.is_empty() {
@@ -1299,13 +1576,15 @@ struct CleanupResponse {
     removed: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
 }
 
 /// 删掉「备份已经清空、但 `包名:icon` 还留着」的图标快照。
 ///
 /// 图标快照不属于任何一次备份（它没有时间戳分组），所以按备份删的时候碰不到它；
 /// 应用的所有备份都删光之后，这个图标就变成了仓库里的垃圾，需要单独回收。
-fn clean_orphan_icons() -> Result<u32, String> {
+fn clean_orphan_icons() -> Result<u32, Failure> {
     let _gate = enter_write_gate();
 
     let repository = open_repo_cached()?;
@@ -1378,18 +1657,20 @@ pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_native
                         ok: true,
                         removed,
                         error: None,
+                        reason: None,
                     },
                 );
                 0
             }
-            Err(message) => {
+            Err(failure) => {
                 write_cleanup_response(
                     ptr,
                     capacity,
                     CleanupResponse {
                         ok: false,
                         removed: 0,
-                        error: Some(message),
+                        reason: failure.reason_wire(),
+                        error: Some(failure.message),
                     },
                 );
                 1
@@ -1436,7 +1717,7 @@ fn prune_options() -> PruneOptions {
     options
 }
 
-fn prune_repo() -> Result<(), String> {
+fn prune_repo() -> Result<(), Failure> {
     let _gate = enter_write_gate();
 
     // 整理会重写 pack 和索引，缓存必须作废
@@ -1464,7 +1745,7 @@ fn prune_repo() -> Result<(), String> {
 /// 只算不删：估算这次整理能回收多少字节。
 ///
 /// 算法：整包删除的字节 + 重打包时被丢弃的未使用字节 + 无引用的包文件。
-fn prune_estimate() -> Result<u64, String> {
+fn prune_estimate() -> Result<u64, Failure> {
     // 只算不删，可以放心复用缓存（估算和真正整理之间通常只隔几秒）
     let repository = open_indexed_repo_cached()?;
 
@@ -1488,19 +1769,23 @@ struct EstimateResponse {
     bytes: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
 }
 
-fn write_estimate(ptr: *mut u8, capacity: usize, result: Result<u64, String>) {
+fn write_estimate(ptr: *mut u8, capacity: usize, result: Result<u64, Failure>) {
     let response = match result {
         Ok(bytes) => EstimateResponse {
             ok: true,
             bytes,
             error: None,
+            reason: None,
         },
-        Err(message) => EstimateResponse {
+        Err(failure) => EstimateResponse {
             ok: false,
             bytes: 0,
-            error: Some(message),
+            reason: failure.reason_wire(),
+            error: Some(failure.message),
         },
     };
 
@@ -1541,7 +1826,7 @@ pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_native
 ) -> jint {
     run_simple(env, buffer, |ptr, capacity| {
         let request = match read_frame_at(ptr, capacity, 0).and_then(|bytes| {
-            serde_json::from_slice::<RestoreRequest>(&bytes).map_err(|e| e.to_string())
+            serde_json::from_slice::<RestoreRequest>(&bytes).map_err(|e| Failure::app(e.to_string()))
         }) {
             Ok(request) => request,
             Err(message) => {
@@ -1571,7 +1856,7 @@ pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_native
     })
 }
 
-fn restore_snapshots(request: &RestoreRequest) -> Result<(), String> {
+fn restore_snapshots(request: &RestoreRequest) -> Result<(), Failure> {
     // 恢复只读仓库，但它要读的包可能正被整理仓库删掉，所以和写操作互斥
     let _gate = enter_write_gate();
 
@@ -1589,7 +1874,7 @@ fn restore_snapshots(request: &RestoreRequest) -> Result<(), String> {
             .map_err(|e| describe_error(&e))?
             .into_iter()
             .next()
-            .ok_or_else(|| format!("snapshot {} not found", item.id))?;
+            .ok_or_else(|| Failure::app(format!("备份里没有这个快照：{}", item.id)))?;
 
         // 字节进度的 stage 由调用方指定：恢复是逐个快照调进来的，
         // Rust 侧只认 id，不知道这是 apk 还是 data
@@ -1603,7 +1888,7 @@ fn restore_snapshots(request: &RestoreRequest) -> Result<(), String> {
             item.delete,
             &bytes,
         )
-        .map_err(|e| format!("restore {} failed: {e}", item.id))?;
+        .map_err(|e| e.context(format!("恢复 {} 失败：", item.id)))?;
     }
 
     Ok(())
@@ -1663,7 +1948,7 @@ fn restore_file<S: rustic_core::IndexedFull + Sync>(
     repository: &Repository<S>,
     node: &rustic_core::repofile::Node,
     target: &std::path::Path,
-) -> Result<(), String> {
+) -> Result<(), Failure> {
     use std::io::Write;
 
     lower_thread_priority_once();
@@ -1709,7 +1994,7 @@ fn restore_file<S: rustic_core::IndexedFull + Sync>(
                     continue;
                 }
 
-                handles.push(scope.spawn(move || -> Result<(), String> {
+                handles.push(scope.spawn(move || -> Result<(), Failure> {
                     lower_thread_priority_once();
 
                     let mut offset = start;
@@ -1726,15 +2011,15 @@ fn restore_file<S: rustic_core::IndexedFull + Sync>(
                 }));
             }
 
-            let mut failure: Option<String> = None;
+            let mut failure: Option<Failure> = None;
             for handle in handles {
                 match handle.join() {
                     Ok(Ok(())) => {}
-                    Ok(Err(message)) => {
-                        failure.get_or_insert(message);
+                    Ok(Err(error)) => {
+                        failure.get_or_insert(error);
                     }
                     Err(_) => {
-                        failure.get_or_insert_with(|| "恢复线程异常退出".to_string());
+                        failure.get_or_insert_with(|| Failure::app("恢复线程异常退出"));
                     }
                 }
             }
@@ -1783,7 +2068,7 @@ fn restore_mtime(path: &std::path::Path, secs: i64, nanos: u32) {
 fn join_inside_dest(
     dest: &std::path::Path,
     rel: &std::path::Path,
-) -> Result<std::path::PathBuf, String> {
+) -> Result<std::path::PathBuf, Failure> {
     use std::path::Component;
 
     let mut target = dest.to_path_buf();
@@ -1796,7 +2081,8 @@ fn join_inside_dest(
                 return Err(format!(
                     "快照里的路径不合法（越出恢复目标）：{}",
                     rel.display()
-                ));
+                )
+                .into());
             }
         }
     }
@@ -1812,7 +2098,7 @@ fn restore_snapshot<S: rustic_core::IndexedFull + Sync>(
     dest: &std::path::Path,
     delete: bool,
     bytes: &BytesProgress,
-) -> Result<(), String> {
+) -> Result<(), Failure> {
     // 空路径就是快照根节点
     let root = repository
         .node_from_path(snapshot.tree, std::path::Path::new(""))
@@ -1905,7 +2191,7 @@ fn restore_snapshot<S: rustic_core::IndexedFull + Sync>(
             .num_threads(restore_threads())
             .thread_name(|index| format!("restore-{index}"))
             .build()
-            .map_err(|e| format!("create restore thread pool failed: {e}"))?;
+            .map_err(|e| format!("无法创建恢复线程：{e}"))?;
 
         pool.install(|| {
             use rayon::prelude::*;
@@ -2005,7 +2291,7 @@ fn set_mode(_path: &std::path::Path, _mode: u32) {}
 fn remove_extras(
     dest: &std::path::Path,
     written: &std::collections::HashSet<std::path::PathBuf>,
-) -> Result<(), String> {
+) -> Result<(), Failure> {
     let mut roots: Vec<std::path::PathBuf> = Vec::new();
     for path in written {
         // 只认普通组件：这一步会真的删文件，不能给 `..` / 绝对路径任何机会
@@ -2045,7 +2331,7 @@ fn collect_extras(
     dir: &std::path::Path,
     written: &std::collections::HashSet<std::path::PathBuf>,
     out: &mut Vec<std::path::PathBuf>,
-) -> Result<(), String> {
+) -> Result<(), Failure> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(_) => return Ok(()),
@@ -2104,7 +2390,7 @@ pub extern "system" fn Java_com_cc_libackupnext_service_root_RusticServer_native
 
 fn handle_backup(ptr: *mut u8, capacity: usize) -> jint {
     let request = match read_frame_at(ptr, capacity, 0)
-        .and_then(|bytes| serde_json::from_slice::<BackupRequest>(&bytes).map_err(|e| e.to_string()))
+        .and_then(|bytes| serde_json::from_slice::<BackupRequest>(&bytes).map_err(|e| Failure::app(e.to_string())))
     {
         Ok(request) => request,
         Err(message) => {
@@ -2137,7 +2423,7 @@ fn handle_backup(ptr: *mut u8, capacity: usize) -> jint {
     }
 }
 
-fn backup_repo(request: &BackupRequest, progress: Arc<ProgressCtx>) -> Result<(), String> {
+fn backup_repo(request: &BackupRequest, progress: Arc<ProgressCtx>) -> Result<(), Failure> {
     // 整批备份占住写闸门：批量备份期间任何一笔 prune / 删除都要排队，
     // 否则刚写完还没进索引的包会被当成无引用数据回收掉
     let _gate = enter_write_gate();
@@ -2167,7 +2453,7 @@ fn backup_items(
     request: &BackupRequest,
     repository: &Repository<rustic_core::IndexedIdsStatus>,
     progress: Arc<ProgressCtx>,
-) -> Result<(), String> {
+) -> Result<(), Failure> {
     for item in &request.items {
         progress.emit(&item.stage, "running");
 
@@ -2183,7 +2469,7 @@ fn backup_items(
             let reason = item
                 .skip_reason
                 .clone()
-                .unwrap_or_else(|| format!("path not found: {}", item.sources.join(", ")));
+                .unwrap_or_else(|| format!("源路径不存在：{}", item.sources.join(", ")));
             progress.emit_skipped(&item.stage, &reason);
             continue;
         }
@@ -2194,7 +2480,7 @@ fn backup_items(
             let tags = item.tags.join(",");
             snapshot_options.tags = vec![tags
                 .parse::<StringList>()
-                .map_err(|e| format!("invalid tag `{tags}`: {e}"))?];
+                .map_err(|e| format!("标签格式不合法（{tags}）：{e}"))?];
         }
 
         snapshot_options.description.clone_from(&item.description);
@@ -2236,7 +2522,8 @@ fn backup_items(
 
         let snapshot = repository
             .backup(&backup_options, &paths, snapshot)
-            .map_err(|e| format!("backup {} failed: {}", item.stage, describe_error(&e)))?;
+            // 前缀不能吃掉类别：传输层失败照样要报成「连不上」
+            .map_err(|e| describe_error(&e).context(format!("备份 {} 失败：", item.stage)))?;
 
         // 0.14.0 起快照摘要带 error_count：源文件读不出来（SELinux 拒绝、权限不够、
         // 文件正在被写）时 rustic 只打日志、照样出快照、照样返回成功。不把这个数
@@ -2495,9 +2782,9 @@ impl ProgressBars for BridgeProgressBars {
 // ==================== 帧读写 ====================
 
 /// 读取指定偏移处的「大端 i32 长度 + JSON」帧。
-fn read_frame_at(ptr: *mut u8, capacity: usize, offset: usize) -> Result<Vec<u8>, String> {
+fn read_frame_at(ptr: *mut u8, capacity: usize, offset: usize) -> Result<Vec<u8>, Failure> {
     if offset + 4 > capacity {
-        return Err("shared memory too small".to_string());
+        return Err(Failure::app("共享内存太小"));
     }
 
     unsafe {
@@ -2505,12 +2792,12 @@ fn read_frame_at(ptr: *mut u8, capacity: usize, offset: usize) -> Result<Vec<u8>
         let length = i32::from_be_bytes([header[0], header[1], header[2], header[3]]);
 
         if length < 0 {
-            return Err(format!("invalid frame length: {length}"));
+            return Err(format!("数据长度非法：{length}").into());
         }
 
         let length = length as usize;
         if offset + 4 + length > capacity {
-            return Err("frame exceeds shared memory".to_string());
+            return Err(Failure::app("数据超出共享内存"));
         }
 
         Ok(std::slice::from_raw_parts(ptr.add(offset + 4), length).to_vec())
@@ -2566,81 +2853,75 @@ fn escape_json(value: &str) -> String {
         .replace('\n', " ")
 }
 
-// ==================== 远程仓库连接错误 ====================
+// ==================== 失败原因判定 ====================
 
-/// rclone serve restic 返回 4xx / 5xx、超时或连接失败时，rustic_backend 的
-/// `construct_backoff_error()` 会把对应的 reqwest 错误挂成 RusticError 的 source。
-/// 远程操作事先都测过连，所以这里不再区分状态码，一律当作远程仓库连接不上；
-/// 本地仓库不走 rest backend，source 链里不会有 reqwest::Error。
-/// 原始错误全文仍完整保留，只是前面补一句明确结论。
-struct RemoteBackendFailure {
-    status: Option<u16>,
-    endpoint: String,
-    reason: String,
-}
-
-impl RemoteBackendFailure {
-    fn headline(&self) -> String {
-        let mut detail = vec![self.reason.clone()];
-        if let Some(status) = self.status {
-            detail.push(format!("HTTP {status}"));
-        }
-        if !self.endpoint.is_empty() {
-            detail.push(self.endpoint.clone());
-        }
-        format!("Cannot connect to remote repository ({})", detail.join(" · "))
+/// 失败原因的唯一判定点（只有这里能看 error_code / io 类型 / source 链）。
+///
+/// 顺序：官方 error_code → reqwest（在 io 外层，先判才能拿到 401/403）→
+/// io kind → 文本兜底。认不出来返回 None，让主进程显示原文，不瞎猜。
+fn classify_error(error: &rustic_core::RusticError) -> Option<Reason> {
+    if error.is_incorrect_password() {
+        return Some(Reason::Password);
     }
-}
+    // C003：解密后校验不一致 —— 数据损坏
+    if error.is_code("C003") {
+        return Some(Reason::CorruptData);
+    }
 
-/// 只要 source 链里出现 reqwest::Error（HTTP 4xx / 5xx / 超时 / 连接失败），
-/// 就判定为远程仓库连接不上；不再按状态码区分。
-fn classify_backend_error(error: &rustic_core::RusticError) -> Option<RemoteBackendFailure> {
     let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(error);
     while let Some(current) = cause {
         if let Some(http) = current.downcast_ref::<reqwest::Error>() {
-            let status = http.status().map(|code| code.as_u16());
-            let reason = match status {
-                Some(code) => format!("Remote repository returned HTTP {code}"),
-                None if http.is_timeout() => "Request timed out".to_string(),
-                None if http.is_connect() => "Local repository service connection refused".to_string(),
-                None => "HTTP request failed".to_string(),
-            };
-
-            // rest_url 带本次会话的 basic-auth token，只留 host:port/path，
-            // 别让凭据进日志。
-            let endpoint = http
-                .url()
-                .map(|url| {
-                    let host = url.host_str().unwrap_or("127.0.0.1");
-                    let port = url.port().map(|p| format!(":{p}")).unwrap_or_default();
-                    format!("{host}{port}{}", url.path())
-                })
-                .unwrap_or_default();
-
-            return Some(RemoteBackendFailure {
-                status,
-                endpoint,
-                reason,
+            return Some(match http.status().map(|status| status.as_u16()) {
+                Some(401) | Some(403) => Reason::Auth,
+                _ if http.is_timeout() => Reason::Timeout,
+                // 404 也归这里：仓库结构在打开前已经由主进程查过，open 阶段还拿不到
+                // 响应就是这条 rest 通道不通
+                _ => Reason::Unreachable,
             });
+        }
+        if let Some(io) = current.downcast_ref::<std::io::Error>() {
+            // StorageFull 还没稳定，只能认 ENOSPC 和文本
+            if io.raw_os_error() == Some(28) || io.to_string().contains("No space left on device")
+            {
+                return Some(Reason::NoSpace);
+            }
+            return match io.kind() {
+                std::io::ErrorKind::TimedOut => Some(Reason::Timeout),
+                // 仓库里的文件缺失（keys / index / 快照 / pack）：数据不完整
+                std::io::ErrorKind::NotFound => Some(Reason::CorruptData),
+                // 权限错不单独归类：root 进程不会遇到，真出现说明环境异常，交给原文兜底
+                _ => None,
+            };
         }
         cause = current.source();
     }
 
-    // 上游若换了错误包装方式，source 链里取不到 reqwest::Error 时，
-    // 按 HTTP 状态/请求特征兜底，4xx 与 5xx 一视同仁。
+    // 上游若换了错误包装方式，source 链里取不到类型时按文本兜底，只认特征明显的写法。
     let text = error.to_string();
-    if text.contains("HTTP status")
-        || text.contains("status server error")
+    if text.contains("status server error")
         || text.contains("status client error")
         || text.contains("error sending request for url")
     {
-        return Some(RemoteBackendFailure {
-            status: None,
-            endpoint: String::new(),
-            reason: "HTTP request failed".to_string(),
-        });
+        return Some(Reason::Unreachable);
     }
     None
+}
+
+/// 目录/文件「不存在」：本地是 io NotFound，远程是 rest 的 404。
+///
+/// 必须把 404 认成「没有」，否则远程缺 keys 会被误报成「无法连接到远程服务器」。
+fn is_missing(error: &rustic_core::RusticError) -> bool {
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(current) = cause {
+        if let Some(http) = current.downcast_ref::<reqwest::Error>() {
+            return http.status().map(|status| status.as_u16()) == Some(404);
+        }
+        if let Some(io) = current.downcast_ref::<std::io::Error>() {
+            return io.kind() == std::io::ErrorKind::NotFound;
+        }
+        cause = current.source();
+    }
+    false
 }
 
 /// rustic 的错误全文里可能带 `http://user:pass@host/...` 形式的 rest_url，
@@ -2670,8 +2951,8 @@ fn redact_userinfo(text: &str) -> String {
     out
 }
 
-/// rustic 的 Display 里混了文档链接、issue 模板、Backtrace 等噪音，这里只保留错误本身。
-fn describe_error(error: &rustic_core::RusticError) -> String {
+/// 去掉 Display 里的文档链接 / issue 模板 / Backtrace，只留错误本身 + 原因。
+fn describe_error(error: &rustic_core::RusticError) -> Failure {
     let text = error.to_string();
     let mut out = String::new();
 
@@ -2709,21 +2990,20 @@ fn describe_error(error: &rustic_core::RusticError) -> String {
 
     let cleaned = out.trim().to_string();
     let full = if cleaned.is_empty() { text } else { cleaned };
-    let full = redact_userinfo(&full);
+    let message = redact_userinfo(&full);
 
-    // 远程 HTTP / 连接失败时，在完整原文前面补一句明确结论。
-    match classify_backend_error(error) {
-        Some(failure) => format!("{}\n{}", failure.headline(), full),
-        None => full,
+    Failure {
+        message,
+        reason: classify_error(error),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        backup_repo, clear_active_progress, describe_error, init_repo, read_frame_at,
+        backup_repo, clear_active_progress, describe_error, init_repo, read_frame_at, repo_layout,
         set_active_progress, set_current_stage, set_repo, BackupItem, BackupRequest, BytesProgress,
-        ProgressCtx, PROGRESS_COUNTER_SIZE, PROGRESS_OFFSET, PROGRESS_SLOT_COUNT,
+        ProgressCtx, Reason, PROGRESS_COUNTER_SIZE, PROGRESS_OFFSET, PROGRESS_SLOT_COUNT,
         PROGRESS_SLOT_SIZE,
     };
     use rustic_core::RusticProgress;
@@ -2736,11 +3016,14 @@ mod tests {
             rustic_core::ErrorKind::Other,
             "No space left on device",
         );
-        let text = describe_error(&err);
+        let failure = describe_error(&err);
+        let text = &failure.message;
         assert!(text.contains("No space left on device"), "{text}");
         assert!(!text.contains("Backtrace"), "{text}");
         assert!(!text.contains("disabled backtrace"), "{text}");
         assert!(!text.contains("RUST_BACKTRACE"), "{text}");
+        // 认不出原因时不能硬猜一个类别：主进程会拿原文兜底，编错了比不编更糟
+        assert_eq!(failure.reason, None, "{text}");
     }
 
     /// 凭据现在是进程级静态状态，测试必须串行跑，否则会互相覆盖仓库路径。
@@ -2749,7 +3032,7 @@ mod tests {
     fn setup_repo(path: &str) -> std::sync::MutexGuard<'static, ()> {
         let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_repo(path, "rustic", Default::default());
-        init_repo(path, "rustic", &Default::default()).expect("init 应该成功");
+        init_repo(path, "rustic", &Default::default(), true).expect("init 应该成功");
         guard
     }
 
@@ -2885,6 +3168,77 @@ mod tests {
         // 初始化后仓库目录里应该有 config 文件
         assert!(dir.join("config").exists(), "仓库缺少 config 文件");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 建一个空仓库并返回目录，供「结构」类测试复用。
+    fn init_temp_repo(prefix: &str, password: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("{prefix}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        init_repo(&dir.to_string_lossy(), password, &Default::default(), true)
+            .expect("首次建库应成功");
+        dir
+    }
+
+    /// 密码错：config 和 key 都在、只是解不开 —— 必须报密码。
+    #[test]
+    fn init_reports_wrong_password() {
+        let dir = init_temp_repo("rustic-pwd-test", "right-password");
+
+        let error = init_repo(
+            &dir.to_string_lossy(),
+            "wrong-password",
+            &Default::default(),
+            false,
+        )
+        .expect_err("密码错必须失败");
+
+        assert_eq!(error.reason, Some(Reason::Password), "{}", error.message);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 空目录：五类都不存在 —— 主进程据此走「建库」。
+    #[test]
+    fn repo_layout_reports_empty_dir() {
+        let dir = std::env::temp_dir().join(format!("rustic-layout-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let layout = repo_layout(&dir.to_string_lossy(), &Default::default()).unwrap();
+
+        assert!(!layout.config, "空目录不该有 config");
+        assert!(!layout.keys, "空目录不该有 keys");
+        assert!(!layout.data && !layout.index && !layout.snapshots);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 刚建好的仓库五类都在：rustic 的 init 会把 data / index / snapshots 建成空目录。
+    /// 主进程据此判「完整」→ 直接打开。
+    #[test]
+    fn repo_layout_after_init_reports_all_five() {
+        let dir = init_temp_repo("rustic-layout-test", "rustic");
+
+        let layout = repo_layout(&dir.to_string_lossy(), &Default::default()).unwrap();
+
+        assert!(layout.config, "config 应该存在");
+        assert!(layout.keys, "keys 应该存在");
+        assert!(layout.data, "data 应该存在（init 会建空目录）");
+        assert!(layout.index, "index 应该存在");
+        assert!(layout.snapshots, "snapshots 应该存在");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 删掉 keys：config 还在 —— 主进程据此报「仓库目录有缺失」，而不是密码错。
+    #[test]
+    fn repo_layout_sees_missing_keys() {
+        let dir = init_temp_repo("rustic-layout-nokeys", "rustic");
+        std::fs::remove_dir_all(dir.join("keys")).unwrap();
+
+        let layout = repo_layout(&dir.to_string_lossy(), &Default::default()).unwrap();
+
+        assert!(layout.config, "config 还在");
+        assert!(!layout.keys, "keys 已被删掉");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
