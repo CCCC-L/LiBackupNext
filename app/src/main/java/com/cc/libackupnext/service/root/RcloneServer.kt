@@ -89,10 +89,11 @@ object RcloneServer {
         // libsu 不会实例化 Application，:root 的日志只能在这里装（install 幂等）
         override fun onCreate() {
             AppLog.install(applicationContext)
+            // 降低 adj
+            RootOomGuard.protect()
         }
 
-        override fun onBind(intent: Intent): IBinder =
-            Impl(applicationContext).apply { onBind() }
+        override fun onBind(intent: Intent): IBinder = Impl(applicationContext).apply { onBind() }
     }
 
     private class Impl(private val context: Context) : IRcloneService.Stub() {
