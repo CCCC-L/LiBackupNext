@@ -79,7 +79,6 @@ class AppContainer(private val app: Application) {
     /** 仓库只读访问。 */
     val reader: RepoReader by lazy { RusticReaderGateway(session, repoPrefs) }
 
-    /** 写入网关实例：同时对外提供 [RepoWriter] 与 [DeviceGateway] 两个面。 */
     private val writerGateway: RusticWriterGateway by lazy {
         RusticWriterGateway(session, reader, repoPrefs, backupPrefs)
     }
@@ -88,7 +87,7 @@ class AppContainer(private val app: Application) {
     val writer: RepoWriter get() = writerGateway
 
     /** 本机设备操作（不碰仓库）：Wi-Fi、应用管理、备份期间的进程暂停。 */
-    val device: DeviceGateway by lazy { RootDeviceGateway(session) }
+    val device: DeviceGateway by lazy { RootDeviceGateway() }
 
     /** 仓库生命周期（初始化 / 切换 / 编辑）。 */
     val admin: RepoAdmin by lazy { RusticAdminGateway(session, repoPrefs) }

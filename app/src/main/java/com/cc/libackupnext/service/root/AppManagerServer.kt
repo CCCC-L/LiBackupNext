@@ -3,7 +3,6 @@ package com.cc.libackupnext.service.root
 import android.app.ActivityManagerHidden
 import android.app.ActivityThread
 import android.content.Context
-import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.IPackageManager
 import android.content.pm.PackageInfo
@@ -14,6 +13,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import android.net.wifi.WifiManager
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.ServiceManager
@@ -23,33 +23,41 @@ import android.system.Os
 import android.system.OsConstants
 import android.util.Log
 import androidx.core.graphics.createBitmap
-import com.cc.libackupnext.data.prefs.BackupPrefs
 import com.cc.libackupnext.data.AppInfo
+import com.cc.libackupnext.data.json.OkResponse
+import com.cc.libackupnext.data.json.StatDirsRequest
+import com.cc.libackupnext.data.json.StatDirsResponse
+import com.cc.libackupnext.service.IAppManagerService
+import com.cc.libackupnext.service.json.parseJson
+import com.cc.libackupnext.service.json.toJsonText
 import com.cc.libackupnext.util.AppLog
-import com.topjohnwu.superuser.ipc.RootService
 import dev.rikka.tools.refine.Refine
-import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
-import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
-import com.cc.libackupnext.service.root.RootServiceManager
-import com.cc.libackupnext.service.IAppManagerService
 
-object AppManagerService {
+/**
+ * `:root` 侧的应用管理服务：包枚举 / 图标 / 冻结 / 卸载 / 清数据 / 目录探测 / Wi-Fi。
+ *
+ * 主进程侧的入口是 [AppManagerClient]，那边负责绑定、超时和异常归一；这里只管
+ * 「拿到 binder 之后做什么」。两个文件之间唯一的协议是 `IAppManagerService`
+ * 和 [AppInfoPipe]（后者定义应用列表的管道格式）。
+ */
+object AppManagerServer {
 
-    private const val TAG = "AppManagerService"
-
-    /** 元数据列表头：读端看到 -1 说明服务端枚举失败，避免傻等 EOF。 */
-    private const val COUNT_ERROR = -1
+    private const val TAG = "AppManagerServer"
 
     /** 图标解码尺寸（px），与列表 48dp 的显示尺寸对齐，上限 192 防止内存浪费。 */
     private const val ICON_MIN_PX = 96
     private const val ICON_MAX_PX = 192
+
+    class Service : RootBinderService() {
+        override fun createBinder(context: Context): IBinder = Impl(context).apply { initialize() }
+    }
 
     private fun writeToPipe(block: (DataOutputStream) -> Unit): ParcelFileDescriptor? {
         val pipe = try {
@@ -78,25 +86,6 @@ object AppManagerService {
         return readEnd
     }
 
-    private fun <T> readFromPipe(pfd: ParcelFileDescriptor, block: (DataInputStream) -> T): T {
-        ParcelFileDescriptor.AutoCloseInputStream(pfd).use { raw ->
-            DataInputStream(BufferedInputStream(raw, 16 * 1024)).use { input ->
-                return block(input)
-            }
-        }
-    }
-
-    class Service : RootService() {
-        // libsu 不会实例化 Application，:root 的日志只能在这里装（install 幂等）
-        override fun onCreate() {
-            AppLog.install(applicationContext)
-            // 降低 adj
-            RootOomGuard.protect()
-        }
-
-        override fun onBind(intent: Intent): IBinder = Impl(applicationContext).apply { onBind() }
-    }
-
     private class Impl(private val mContext: Context) : IAppManagerService.Stub() {
 
         private lateinit var mSystemContext: Context
@@ -106,7 +95,7 @@ object AppManagerService {
         private lateinit var mPackageManagerService: IPackageManager
         private var mActivityManager: ActivityManagerHidden? = null
 
-        fun onBind() {
+        fun initialize() {
             mSystemContext = ActivityThread.systemMain().systemContext
             mUserManager =
                 Refine.unsafeCast(UserManagerHidden.get(mSystemContext.applicationContext))
@@ -139,22 +128,11 @@ object AppManagerService {
                 }
 
                 if (infos == null) {
-                    out.writeInt(COUNT_ERROR)
+                    out.writeInt(AppInfoPipe.COUNT_ERROR)
                     return@writeToPipe
                 }
 
-                out.writeInt(infos.size)
-                for (a in infos) {
-                    out.writeUTF(a.name)
-                    out.writeUTF(a.packageName)
-                    out.writeUTF(a.version)
-                    out.writeLong(a.versionCode)
-                    out.writeLong(a.installTime)
-                    out.writeLong(a.updateTime)
-                    out.writeInt(a.userId)
-                    out.writeBoolean(a.isSystem)
-                    out.writeBoolean(a.isFrozen)
-                }
+                AppInfoPipe.write(out, infos)
             }
         }
 
@@ -243,14 +221,16 @@ object AppManagerService {
         // ==================== 应用操作 ====================
 
         override fun forceStop(packageName: String, userId: Int) {
-            try {
-                val am = mActivityManager ?: throw IllegalStateException("ActivityManager 不可用")
-                am.forceStopPackageAsUser(packageName, userId)
-                return
-            } catch (t: Throwable) {
-                AppLog.w(TAG, "forceStopPackageAsUser failed, fallback to am", t)
-                throw IllegalStateException("强制停止失败")
+            val viaBinder = runCatching {
+                mActivityManager?.forceStopPackageAsUser(packageName, userId)
+                    ?: error("ActivityManager 不可用")
             }
+            if (viaBinder.isSuccess) return
+
+            // 拿不到 ActivityManager 或 binder 调用被拒，都退回命令。
+            // am force-stop 成功时没有输出，只能靠退出码判成败。
+            AppLog.w(TAG, "forceStopPackageAsUser failed, fallback to am", viaBinder.exceptionOrNull())
+            runShellChecked("am force-stop --user $userId $packageName", "强制停止失败")
         }
 
         override fun pauseApp(packageName: String, userId: Int): Boolean {
@@ -282,7 +262,6 @@ object AppManagerService {
 
             return count
         }
-
 
         /**
          * 找出「属于这个包」的进程。
@@ -336,16 +315,14 @@ object AppManagerService {
         }
 
         override fun clearAppData(packageName: String, userId: Int) {
-            // ActivityManager.clearApplicationUserData 只能作用于实例所属用户（root 服务是 user 0），
-            // 其他用户必须走命令，否则会清错用户的数据
-            if (userId == 0) {
-                try {
-                    if (mActivityManager?.clearApplicationUserData(packageName, null) == true) return
-                } catch (t: Throwable) {
-                    AppLog.w(TAG, "clearApplicationUserData failed", t)
-                    throw IllegalStateException("清空数据失败")
-                }
-            }
+            // 统一走 pm：ActivityManager.clearApplicationUserData 只能作用于服务自身所在的用户，
+            // 而且它连「包不存在」也返回 true，看不出失败。pm clear 失败时退出码同样是 0，
+            // 所以判据是输出里必须出现 Success。
+            runShellChecked(
+                command = "pm clear --user $userId $packageName",
+                failText = "清空数据失败",
+                expect = "Success"
+            )
         }
 
         override fun unInstall(packageName: String, userId: Int) {
@@ -381,124 +358,37 @@ object AppManagerService {
                 false
             }
         }
-    }
 
-    private val manager by lazy {
-        RootServiceManager<IAppManagerService>(Service::class.java) {
-            IAppManagerService.Stub.asInterface(it)
-        }
-    }
+        // ==================== 设备状态 ====================
 
-    suspend fun getService(): IAppManagerService = manager.getService()
-
-    /** 提前绑定 root 服务，避免真正拉列表时再等 su 握手。 */
-    suspend fun warmUp() {
-        runCatching { getService() }
-            .onFailure { AppLog.w(TAG, "warmUp failed", it) }
-    }
-
-    suspend fun getUsers(): List<UserInfo> {
-        return getService().users
-    }
-
-    suspend fun getInstalledAppsAsUser(userId: Int): List<AppInfo> {
-        val pfd = getService().getInstalledAppsAsUser(userId)
-            ?: throw IOException("root 服务没有返回数据流")
-
-        return readFromPipe(pfd) { input ->
-            val count = input.readInt()
-            if (count == COUNT_ERROR) {
-                throw IOException("root 服务读取应用列表失败")
-            }
-            if (count < 0) {
-                throw IOException("非法的应用数量: $count")
-            }
-            if (count > 10_000) {
-                throw IOException("应用数量异常: $count")
-            }
-
-            List(count) {
-                AppInfo(
-                    name = input.readUTF(),
-                    packageName = input.readUTF(),
-                    version = input.readUTF(),
-                    versionCode = input.readLong(),
-                    installTime = input.readLong(),
-                    updateTime = input.readLong(),
-                    userId = input.readInt(),
-                    isSystem = input.readBoolean(),
-                    isFrozen = input.readBoolean()
-                )
-            }
-        }
-    }
-
-    /** 主进程拿不到图标时的兜底，失败返回 null。 */
-    suspend fun getIcon(packageName: String, userId: Int): ByteArray? {
-        return try {
-            getService().getIcon(packageName, userId)
+        /**
+         * 批量判断目录是否存在。
+         *
+         * 主进程（普通 uid）只看得到自己用户的空间，别的用户的目录只能由 root 判；
+         * 传进来的路径是物理路径，`File.isDirectory` 直接读 /data/media/<userId>/…。
+         */
+        override fun statDirs(request: String): String = try {
+            val paths = request.parseJson<StatDirsRequest>().paths
+            val existing = paths.filter { it.isNotBlank() && File(it).isDirectory }
+            StatDirsResponse(ok = true, existing = existing).toJsonText()
         } catch (t: Throwable) {
-            Log.d(TAG, "getIcon($packageName, $userId) failed", t)
-            null
+            AppLog.e(TAG, "判断目录是否存在失败", t)
+            OkResponse(ok = false, error = t.message ?: "判断目录是否存在失败").toJsonText()
         }
-    }
 
-    // ==================== 应用操作（走 root 服务） ====================
+        @Suppress("DEPRECATION")
+        override fun setWifiEnabled(enabled: Boolean): String = try {
+            val manager = mContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                ?: return "拿不到 WifiManager"
 
-    suspend fun forceStop(packageName: String, userId: Int) {
-        getService().forceStop(packageName, userId)
-    }
-
-    /**
-     * 暂停应用：SIGSTOP 它在这个用户下的所有进程。
-     *
-     * @return 是否真的有进程被暂停（应用没在跑时返回 false）
-     */
-    suspend fun pauseApp(packageName: String, userId: Int): Boolean =
-        runCatching { getService().pauseApp(packageName, userId) }.getOrDefault(false)
-
-    /** 取消暂停：SIGCONT。失败忽略（进程可能已经退出了）。 */
-    suspend fun resumeApp(packageName: String, userId: Int) {
-        runCatching { getService().resumeApp(packageName, userId) }
-    }
-
-    /** 停止应用；应用没装或调用失败时忽略。 */
-    suspend fun stopQuietly(packageName: String, userId: Int) {
-        runCatching { getService().forceStop(packageName, userId) }
-    }
-
-    /**
-     * 启动时兜底：上次备份如果被强杀，目标应用可能还停在 SIGSTOP 状态，
-     * 这里按记录的清单恢复一遍，避免应用一直“卡死”。
-     */
-    suspend fun resumeAllPaused(prefs: BackupPrefs) {
-        val keys = prefs.pausedApps()
-        if (keys.isEmpty()) return
-
-        keys.forEach { key ->
-            val parts = key.split('|')
-            val packageName = parts.getOrNull(0).orEmpty()
-            val userId = parts.getOrNull(1)?.toIntOrNull() ?: return@forEach
-            if (packageName.isNotEmpty()) {
-                runCatching { getService().resumeApp(packageName, userId) }
+            when {
+                manager.isWifiEnabled == enabled -> ""
+                manager.setWifiEnabled(enabled) -> ""
+                else -> "系统拒绝了这次操作"
             }
+        } catch (t: Throwable) {
+            AppLog.w(TAG, "切换 Wi-Fi 失败", t)
+            t.message ?: "切换 Wi-Fi 失败"
         }
-        prefs.clearPausedApps()
-    }
-
-    suspend fun freeze(packageName: String, userId: Int) {
-        getService().freeze(packageName, userId)
-    }
-
-    suspend fun unFreeze(packageName: String, userId: Int) {
-        getService().unFreeze(packageName, userId)
-    }
-
-    suspend fun clearAppData(packageName: String, userId: Int) {
-        getService().clearAppData(packageName, userId)
-    }
-
-    suspend fun unInstall(packageName: String, userId: Int) {
-        getService().unInstall(packageName, userId)
     }
 }

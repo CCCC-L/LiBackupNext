@@ -1,8 +1,6 @@
 package com.cc.libackupnext.service.root
 
 import android.content.Context
-import android.content.Intent
-import android.net.wifi.WifiManager
 import android.os.IBinder
 import android.os.SharedMemory
 import android.util.Log
@@ -14,8 +12,6 @@ import com.cc.libackupnext.data.json.ExportSnapshotRequest
 import com.cc.libackupnext.data.json.InitRepoRequest
 import com.cc.libackupnext.data.json.OkResponse
 import com.cc.libackupnext.data.json.RestoreSnapshotsRequest
-import com.cc.libackupnext.data.json.StatDirsRequest
-import com.cc.libackupnext.data.json.StatDirsResponse
 import com.cc.libackupnext.data.json.SystemDataCountsResponse
 import com.cc.libackupnext.service.IBackupProgressCallback
 import com.cc.libackupnext.service.IRusticService
@@ -24,7 +20,6 @@ import com.cc.libackupnext.service.json.toJsonText
 import com.cc.libackupnext.service.root.sysdata.SystemDataExporter
 import com.cc.libackupnext.service.root.sysdata.SystemDataRestorer
 import com.cc.libackupnext.util.AppLog
-import com.topjohnwu.superuser.ipc.RootService
 import java.io.File
 import java.nio.ByteBuffer
 
@@ -44,7 +39,7 @@ private val APP_DATA_KINDS = listOf(
 private data class RestoreSpec(val dir: String, val gid: Int, val dirMode: String?)
 
 /**
- * root 侧的 rustic 服务：`RootService` + JNI 桥接 + 快照增删改查。
+ * root 侧的 rustic 服务：`RootBinderService` + JNI 桥接 + 快照增删改查。
  *
  * 主进程用的入口在 `service.gateway.RusticRepoGateway`：那边负责绑定服务、拼请求、
  * 把结果整理成 UI 能渲染的模型。
@@ -132,15 +127,8 @@ object RusticServer {
      */
     private external fun nativeSetRepo(path: String, password: String, options: String): Int
 
-    class Service : RootService() {
-        // libsu 不会实例化 Application，:root 的日志只能在这里装（install 幂等）
-        override fun onCreate() {
-            AppLog.install(applicationContext)
-            // 降低 adj
-            RootOomGuard.protect()
-        }
-
-        override fun onBind(intent: Intent): IBinder = Impl(applicationContext).apply { onBind() }
+    class Service : RootBinderService() {
+        override fun createBinder(context: Context): IBinder = Impl(context).apply { initialize() }
     }
 
     private class Impl(private val context: Context) : IRusticService.Stub() {
@@ -175,7 +163,7 @@ object RusticServer {
             failText: String = "查询失败"
         ): String = runQueryNative(request, native, nativeError, failText)
 
-        fun onBind() {
+        fun initialize() {
             nativeError = runCatching { loadRusticBridge() }
                 .exceptionOrNull()
                 ?.let { t ->
@@ -291,36 +279,6 @@ object RusticServer {
             OkResponse(ok = false, error = t.message ?: "统计失败").toJsonText()
         }
 
-        /**
-         * 批量判断目录是否存在。
-         *
-         * 主进程（普通 uid）只看得到自己用户的空间，别的用户的目录只能由 root 判；
-         * 传进来的路径是物理路径，`File.isDirectory` 直接读 /data/media/<userId>/…。
-         */
-        override fun statDirs(request: String): String = try {
-            val paths = request.parseJson<StatDirsRequest>().paths
-            val existing = paths.filter { it.isNotBlank() && File(it).isDirectory }
-            StatDirsResponse(ok = true, existing = existing).toJsonText()
-        } catch (t: Throwable) {
-            AppLog.e(TAG, "判断目录是否存在失败", t)
-            OkResponse(ok = false, error = t.message ?: "判断目录是否存在失败").toJsonText()
-        }
-
-        @Suppress("DEPRECATION")
-        override fun setWifiEnabled(enabled: Boolean): String = try {
-            val manager = context.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-                ?: return "拿不到 WifiManager"
-
-            when {
-                manager.isWifiEnabled == enabled -> ""
-                manager.setWifiEnabled(enabled) -> ""
-                else -> "系统拒绝了这次操作"
-            }
-        } catch (t: Throwable) {
-            AppLog.e(TAG, "切换 Wi-Fi 失败", t)
-            t.message ?: "切换 Wi-Fi 失败"
-        }
-
         override fun restoreSnapshots(request: String, callback: IBackupProgressCallback?): String {
             nativeError?.let { return it }
             val op = opOf(request)
@@ -414,7 +372,9 @@ object RusticServer {
 
                     if (installedUid.isFailure) {
                         emit(SnapshotKind.APK, "failed")
-                        return installedUid.exceptionOrNull()?.message ?: "安装失败"
+                        // installApks 只给原因，「安装失败：」前缀由这里拼
+                        val reason = installedUid.exceptionOrNull()?.message?.takeIf { it.isNotBlank() }
+                        return "安装失败：${reason ?: "未知错误"}"
                     }
 
                     emit(SnapshotKind.APK, "done")

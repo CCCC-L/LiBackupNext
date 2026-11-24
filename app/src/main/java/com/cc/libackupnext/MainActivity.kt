@@ -30,7 +30,8 @@ import androidx.core.content.ContextCompat
 import com.cc.libackupnext.data.FolderPickerLauncher
 import com.cc.libackupnext.data.ReleaseInfo
 import com.cc.libackupnext.service.display.screenOnDecision
-import com.cc.libackupnext.service.root.AppManagerService
+import com.cc.libackupnext.service.root.AppManagerClient
+import com.cc.libackupnext.service.usecase.PausedAppRecovery
 import com.cc.libackupnext.service.root.RootManager
 import com.cc.libackupnext.service.update.UpdateChecker
 import com.cc.libackupnext.ui.HomeTab
@@ -150,7 +151,7 @@ private fun AppRoot(crashRecovery: Boolean) {
     DisposableEffect(Unit) {
         AppLog.recoveryHook = {
             scope.launch(Dispatchers.IO) {
-                runCatching { AppManagerService.resumeAllPaused(container.backupPrefs) }
+                runCatching { PausedAppRecovery.resumeAll(container.backupPrefs) }
                 runCatching { container.backupPrefs.clearPausedApps() }
             }
         }
@@ -191,9 +192,9 @@ private fun AppRoot(crashRecovery: Boolean) {
             // 不再「先断开再绑定」：libsu 的 :root 进程自己盯着 APK，包一换就退出，
             // 升级后跑旧 dex 的问题它已经解决了；主动断一次只会白拆一个进程。
             scope.launch(Dispatchers.IO) {
-                AppManagerService.warmUp()
+                AppManagerClient.warmUp()
                 // 上次备份如果被强杀，目标应用可能还停在 SIGSTOP 状态，这里恢复
-                runCatching { AppManagerService.resumeAllPaused(container.backupPrefs) }
+                runCatching { PausedAppRecovery.resumeAll(container.backupPrefs) }
             }
         }
         granted

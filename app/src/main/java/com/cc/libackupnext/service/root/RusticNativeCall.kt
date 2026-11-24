@@ -37,6 +37,7 @@ internal fun failureJson(response: OkResponse?, fallback: String): String = OkRe
  * @param failText 失败时的文案前缀，例如「修改备注失败」
  * @param onProgress 进度回调。传了就在 native 执行期间轮询共享内存的进度区
  *   （恢复的字节进度写在那里，和备份同一套布局）
+ * @param channel 用哪块共享内存，默认 rustic；rclone 侧传 [RCLONE_CHANNEL]
  */
 internal fun runSimpleNative(
     request: String,
@@ -44,13 +45,14 @@ internal fun runSimpleNative(
     nativeError: String?,
     failText: String = "操作失败",
     onProgress: IBackupProgressCallback? = null,
+    channel: NativeChannel = RUSTIC_CHANNEL,
 ): String {
     nativeError?.let { return failureJson(null, it) }
     val op = opOf(request)
     val startedAt = System.currentTimeMillis()
 
     return try {
-        val shared = SharedMemory.create(RUSTIC_SHARED_MEMORY_NAME, RUSTIC_BUFFER_SIZE)
+        val shared = SharedMemory.create(channel.name, channel.size)
         try {
             val buffer = shared.mapReadWrite()
             writeFrameAt(buffer, 0, request)
@@ -93,12 +95,14 @@ internal fun runSimpleNative(
  *
  * @param nativeError native 库没加载成功时的固定错误；非空就包成 ok=false 的响应
  * @param failText 失败时的文案前缀，例如「查询失败」
+ * @param channel 用哪块共享内存，默认 rustic；rclone 侧传 [RCLONE_CHANNEL]
  */
 internal fun runQueryNative(
     request: String,
     native: (ByteBuffer) -> Int,
     nativeError: String?,
     failText: String = "查询失败",
+    channel: NativeChannel = RUSTIC_CHANNEL,
 ): String {
     nativeError?.let { error ->
         return OkResponse(ok = false, error = error).toJsonText()
@@ -107,7 +111,7 @@ internal fun runQueryNative(
     val startedAt = System.currentTimeMillis()
 
     return try {
-        val shared = SharedMemory.create(RUSTIC_SHARED_MEMORY_NAME, RUSTIC_BUFFER_SIZE)
+        val shared = SharedMemory.create(channel.name, channel.size)
         try {
             val buffer = shared.mapReadWrite()
             writeFrameAt(buffer, 0, request)

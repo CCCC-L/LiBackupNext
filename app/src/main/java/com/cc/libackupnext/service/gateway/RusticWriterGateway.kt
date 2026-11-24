@@ -1,15 +1,14 @@
 package com.cc.libackupnext.service.gateway
 
-import com.cc.libackupnext.data.prefs.BackupPrefs
-import com.cc.libackupnext.data.prefs.RepoPrefs
+import com.cc.libackupnext.data.AppInfo
 import com.cc.libackupnext.data.BackupEntry
 import com.cc.libackupnext.data.BackupGroup
+import com.cc.libackupnext.data.BackupProgress
 import com.cc.libackupnext.data.BackupRequest
 import com.cc.libackupnext.data.BackupSnapshot
 import com.cc.libackupnext.data.BackupTarget
 import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.SnapshotOverride
-import com.cc.libackupnext.data.kind
 import com.cc.libackupnext.data.json.BackupOptions
 import com.cc.libackupnext.data.json.CleanupResponse
 import com.cc.libackupnext.data.json.DeleteSnapshotsRequest
@@ -18,8 +17,9 @@ import com.cc.libackupnext.data.json.RestoreKindItem
 import com.cc.libackupnext.data.json.RestoreSnapshotsRequest
 import com.cc.libackupnext.data.json.SnapshotOverrideDto
 import com.cc.libackupnext.data.json.UpdateDescriptionRequest
-import com.cc.libackupnext.data.AppInfo
-import com.cc.libackupnext.data.BackupProgress
+import com.cc.libackupnext.data.kind
+import com.cc.libackupnext.data.prefs.BackupPrefs
+import com.cc.libackupnext.data.prefs.RepoPrefs
 import com.cc.libackupnext.service.IBackupProgressCallback
 import com.cc.libackupnext.service.gateway.RusticSession.Companion.EMPTY_REQUEST
 import com.cc.libackupnext.service.gateway.RusticSession.Companion.TAG
@@ -31,13 +31,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * 仓库的写入实现 + 本机设备操作。
+ * 仓库的写入实现。
  *
  * 每个方法对应**一次 IPC**，参数就是这次命令需要的东西。
  * 不判断「该不该写」、不做暂停 / 清理 / 导出 —— 那些在 `service/usecase`。
- *
- * [setWifiEnabled] 放在这里而不是单独的类：它和写操作一样是「发一条命令、看返回的
- * error 字符串」，共用同一套错误归一化；区别只是不注入仓库凭据（用 [RusticSession.binder]）。
  */
 internal class RusticWriterGateway(
     private val session: RusticSession,

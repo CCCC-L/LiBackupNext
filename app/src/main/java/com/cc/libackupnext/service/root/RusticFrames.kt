@@ -3,17 +3,36 @@ package com.cc.libackupnext.service.root
 import java.nio.ByteBuffer
 
 /**
- * 共享内存帧协议：请求 / 响应区 + 进度区。
+ * 主进程与 `:root` 之间的共享内存帧协议（rustic / rclone 共用）。
  *
- * 这是主进程与 `:root` 之间的**唯一**数据通道 —— 两边各映射同一块匿名共享内存，
- * 谁也不用序列化整块 buffer，只读写自己那一段。协议格式必须和 Rust 侧一致，
- * 改动要同步 `rustic_server` 的解析代码。
+ * 两边各映射同一块匿名共享内存，谁也不用序列化整块 buffer，只读写自己那一段。
+ * 帧格式是「大端 i32 长度 + UTF-8 JSON」，必须和 Rust 侧一致，改动要同步
+ * `rustic_server` / `rclone_bridge` 的解析代码。
+ *
+ * 每个通道有自己的名字和容量，两块内存互不相干，同名不会互相干扰。
  */
+
+/** 一块共享内存通道。 */
+internal class NativeChannel(val name: String, val size: Int)
 
 /** 请求 / 响应区 512KB + 进度区 64KB：快照列表要一次塞进响应里。 */
 internal const val RUSTIC_BUFFER_SIZE = 576 * 1024
 
 internal const val RUSTIC_SHARED_MEMORY_NAME = "libackup-rustic"
+
+/** rustic 的通道。 */
+internal val RUSTIC_CHANNEL = NativeChannel(RUSTIC_SHARED_MEMORY_NAME, RUSTIC_BUFFER_SIZE)
+
+/**
+ * rclone 的通道。
+ *
+ * 只用请求 / 响应区，进度区空着。容量和 rustic 一致 —— native 侧可能对缓冲区大小
+ * 有假设，这里不图省那 64KB。
+ */
+internal val RCLONE_CHANNEL = NativeChannel("libackup-rclone", RUSTIC_BUFFER_SIZE)
+
+// ==================== 进度区（只有 rustic 用） ====================
+// 布局：4 字节计数器 + N 个 256 字节的槽位；Rust 侧每产生一条进度就写一格并自增。
 
 internal const val PROGRESS_OFFSET = 512 * 1024
 internal const val PROGRESS_COUNTER_SIZE = 4

@@ -273,41 +273,40 @@ internal fun packageUid(context: Context, packageName: String, userId: Int): Int
 private val INSTALL_SESSION_ID = Regex("""\[(\d+)]""")
 
 /**
- * 把快照里的 APK 装到指定用户；失败时带上 pm 的输出。
+ * 把快照里的 APK 装到指定用户。
+ *
+ * 失败时返回的异常只带原因（pm 的输出），「安装失败：」前缀由调用方拼 ——
+ * 和 [runShellChecked] 的约定一致，免得同一条文案里出现两次「失败」。
  */
 internal fun installApks(apks: List<File>, userId: Int): Result<Int> {
     if (apks.isEmpty()) {
         return Result.failure(IllegalStateException("没有可安装的 APK"))
     }
 
-    val createOutput = runPm("pm install-create -r -d --user $userId")
-    val session = INSTALL_SESSION_ID.find(createOutput)?.groupValues?.get(1)
-        ?: return Result.failure(IllegalStateException("创建安装会话失败：$createOutput"))
+    return runCatching {
+        // pm 系列失败时退出码也可能是 0，成败一律看输出里的关键字
+        val createOutput = runShellChecked("pm install-create -r -d --user $userId", "创建安装会话失败")
+        val session = INSTALL_SESSION_ID.find(createOutput)?.groupValues?.get(1)
+            ?: throw IllegalStateException("会话 id 缺失：$createOutput")
 
-    for (apk in apks) {
-        val path = "'" + apk.absolutePath.replace("'", "'\\''") + "'"
-        val output = runPm("pm install-write -S ${apk.length()} $session '${apk.name}' $path")
-        if (!output.contains("Success", ignoreCase = true)) {
-            // 写失败就把会话丢掉，别在系统里留个半截 session
-            runPm("pm install-abandon $session")
-            return Result.failure(IllegalStateException("写入 APK 失败：$output"))
+        for (apk in apks) {
+            val path = "'" + apk.absolutePath.replace("'", "'\\''") + "'"
+            try {
+                runShellChecked(
+                    command = "pm install-write -S ${apk.length()} $session '${apk.name}' $path",
+                    failText = "写入 APK 失败",
+                    expect = "Success",
+                )
+            } catch (t: Throwable) {
+                // 写失败就把会话丢掉，别在系统里留个半截 session
+                runShell("pm install-abandon $session")
+                throw t
+            }
         }
+
+        runShellChecked("pm install-commit $session", "安装失败", expect = "Success")
+        0
     }
-
-    val commitOutput = runPm("pm install-commit $session")
-    if (!commitOutput.contains("Success", ignoreCase = true)) {
-        return Result.failure(IllegalStateException("安装失败：$commitOutput"))
-    }
-
-    return Result.success(0)
-}
-
-/** 跑一条 pm 命令，返回合并后的输出（失败也返回文本，由调用方判断）。 */
-private fun runPm(command: String): String = try {
-    val result = Shell.cmd(command).exec()
-    (result.out + result.err).joinToString("\n").trim().ifBlank { "pm 没有输出" }
-} catch (t: Throwable) {
-    "执行失败：${t.message ?: t.javaClass.simpleName}"
 }
 
 /** 外部存储（/data/media 与 SD 卡）的属组：media_rw。 */

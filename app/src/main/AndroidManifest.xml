@@ -52,7 +52,7 @@
          这里沿用外部类名声明，lint 的 Instantiatable 检查对此报错，按现状忽略 -->
     <service
       android:exported="false"
-      android:name=".service.root.AppManagerService"
+      android:name=".service.root.AppManagerServer"
        android:process=":root"
        tools:ignore="Instantiatable"/>
 
