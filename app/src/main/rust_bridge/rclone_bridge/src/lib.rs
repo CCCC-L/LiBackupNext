@@ -289,6 +289,35 @@ pub extern "system" fn Java_com_cc_libackupnext_service_root_RcloneServer_native
     })
 }
 
+/// `RcloneServer.nativeTransferStats(buffer)`：读 rclone 的传输统计。
+///
+/// 响应：`{"ok":true,"bytes":N,"speed":S}` 或 `{"ok":false,"error":"..."}`
+///
+/// `core/stats` 是进程内累计值，这里不做减法，基线由读端自己减。
+#[no_mangle]
+pub extern "system" fn Java_com_cc_libackupnext_service_root_RcloneServer_nativeTransferStats<'local>(
+    env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    buffer: JByteBuffer<'local>,
+) -> jint {
+    with_buffer(env, buffer, |ptr, capacity| match rpc("core/stats", &json!({})) {
+        Ok(value) => {
+            let bytes = value.get("bytes").and_then(Value::as_u64).unwrap_or(0);
+            let speed = value.get("speed").and_then(Value::as_f64).unwrap_or(0.0);
+            write_json(
+                ptr,
+                capacity,
+                &json!({ "ok": true, "bytes": bytes, "speed": speed }),
+            );
+            0
+        }
+        Err(message) => {
+            write_error(ptr, capacity, &message);
+            1
+        }
+    })
+}
+
 // ==================== librclone FFI ====================
 //
 // librclone 的进程内 FFI 封装。

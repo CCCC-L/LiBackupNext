@@ -66,6 +66,12 @@ object DefaultOperationPlanner : OperationPlanner {
                     current = progress.current
                 )
 
+                // 传输帧同理：只动传输相关的两个数，不碰步骤状态
+                progress.state == BackupProgress.STATE_TRANSFER -> step.copy(
+                    transferred = progress.transferred,
+                    transferSpeed = progress.transferSpeed
+                )
+
                 else -> step.copy(
                     status = statusOf(progress.state, step.status),
                     files = progress.files,

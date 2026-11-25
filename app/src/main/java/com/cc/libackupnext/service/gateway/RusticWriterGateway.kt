@@ -1,5 +1,6 @@
 package com.cc.libackupnext.service.gateway
 
+import android.os.SystemClock
 import com.cc.libackupnext.data.AppInfo
 import com.cc.libackupnext.data.BackupEntry
 import com.cc.libackupnext.data.BackupGroup
@@ -25,9 +26,15 @@ import com.cc.libackupnext.service.gateway.RusticSession.Companion.EMPTY_REQUEST
 import com.cc.libackupnext.service.gateway.RusticSession.Companion.TAG
 import com.cc.libackupnext.service.json.parseJson
 import com.cc.libackupnext.service.json.toJsonText
+import com.cc.libackupnext.service.rclone.RcloneClient
 import com.cc.libackupnext.util.AppLog
 import com.topjohnwu.superuser.Shell
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -43,6 +50,52 @@ internal class RusticWriterGateway(
     private val backupPrefs: BackupPrefs,
 ) : RepoWriter {
 
+    private companion object {
+        /** 传输统计的轮询间隔：rclone 自己的 stats 也是秒级刷新，再密没有新信息。 */
+        const val TRANSFER_POLL_INTERVAL_MS = 500L
+    }
+
+    /** 当前步骤名：传输帧只带字节数，步骤名靠进度回调补。binder 线程写、轮询协程读，故 `@Volatile`。 */
+    @Volatile
+    private var transferStage: String = ""
+
+    /** 是否已收到第一条字节进度帧：在那之前还在下载索引，取基线会虚高。 */
+    @Volatile
+    private var transferStarted: Boolean = false
+
+    /** 起一个轮询协程合成传输帧；本地仓库不需要，返回 null。 */
+    private fun CoroutineScope.startTransferMonitor(
+        onProgress: (BackupProgress) -> Unit
+    ): Job? {
+        transferStage = ""
+        transferStarted = false
+        if (!repoPrefs.isRemote) return null
+        return launch {
+            try {
+                pollTransfer(onProgress)
+            } catch (t: CancellationException) {
+                // 操作结束时的正常退出，不能吞：吞了 while 会继续转
+                throw t
+            } catch (t: Throwable) {
+                // 轮询失败只是少了「已上传 / 已下载」这一行，绝不能拖垮操作本身
+                AppLog.w(TAG, "传输统计轮询失败", t)
+            }
+        }
+    }
+
+    /** 进度回调：记下当前步骤和「已进入字节进度」，再把帧原样交给调用方。备份和恢复共用。 */
+    private fun progressCallback(onProgress: (BackupProgress) -> Unit) =
+        object : IBackupProgressCallback.Stub() {
+            override fun onProgress(progress: String) {
+                runCatching {
+                    val parsed = progress.parseJson<BackupProgress>()
+                    if (parsed.stage.isNotBlank()) transferStage = parsed.stage
+                    if (parsed.state == BackupProgress.STATE_PROGRESS) transferStarted = true
+                    onProgress(parsed)
+                }
+            }
+        }
+
     override suspend fun write(
         request: BackupRequest,
         overrides: Map<String, SnapshotOverride>,
@@ -55,12 +108,10 @@ internal class RusticWriterGateway(
     ): Result<Unit> = withContext(Dispatchers.IO) {
         val op = AppLog.startOperation("backup", request.packageName)
         val startedAt = System.currentTimeMillis()
+        // 传输帧和 rustic 的字节帧走同一条回调，读端按 state 区分
+        val transferMonitor = startTransferMonitor(onProgress)
         try {
-            val callback = object : IBackupProgressCallback.Stub() {
-                override fun onProgress(progress: String) {
-                    runCatching { onProgress(progress.parseJson<BackupProgress>()) }
-                }
-            }
+            val callback = progressCallback(onProgress)
 
             // 目录 / 系统数据都没有图标，跳过这一步（系统数据也就不用去仓库里查了）
             val isDir = request.packageName.startsWith('/')
@@ -133,6 +184,56 @@ internal class RusticWriterGateway(
             AppLog.e(TAG, "backup failed", t, op)
             AppLog.finishOperation(op, "backup", request.packageName, startedAt, "failed: ${t.message}")
             Result.failure(session.remote.failure(t))
+        } finally {
+            transferMonitor?.cancel()
+        }
+    }
+
+    /**
+     * 轮询 `core/stats` 合成传输帧。
+     *
+     * rustic 的字节进度到打包器为止，上传慢时分子静止；`core/stats` 的累计字节才是真实过网量，
+     * 减基线得本次传输量，换步骤时重置基线。
+     */
+    private suspend fun pollTransfer(onProgress: (BackupProgress) -> Unit) {
+        var baseline = -1L
+        var stage = ""
+        var lastBytes = 0L
+        var lastAt = 0L
+
+        while (true) {
+            delay(TRANSFER_POLL_INTERVAL_MS)
+            // 索引还没读完 / 还没有可挂的步骤：取基线会算错，等下一轮
+            if (!transferStarted) continue
+            val current = transferStage
+            if (current.isBlank()) continue
+            val stats = RcloneClient.transferStats() ?: continue
+            val now = SystemClock.elapsedRealtime()
+
+            if (baseline < 0 || current != stage) {
+                stage = current
+                baseline = stats.bytes
+                lastBytes = 0
+                lastAt = now
+            }
+            val transferred = (stats.bytes - baseline).coerceAtLeast(0)
+            val elapsed = now - lastAt
+            val speed = if (elapsed > 0) {
+                ((transferred - lastBytes) * 1000 / elapsed).coerceAtLeast(0)
+            } else {
+                0
+            }
+            lastBytes = transferred
+            lastAt = now
+
+            onProgress(
+                BackupProgress(
+                    stage = stage,
+                    state = BackupProgress.STATE_TRANSFER,
+                    transferred = transferred,
+                    transferSpeed = speed
+                )
+            )
         }
     }
 
@@ -143,6 +244,8 @@ internal class RusticWriterGateway(
     ): Result<Unit> = withContext(Dispatchers.IO) {
         val op = AppLog.startOperation("restore", app.packageName)
         val startedAt = System.currentTimeMillis()
+        // 远程恢复同样会「卡」：restore 的字节进度是文件粒度，实时下载量只能靠传输帧
+        val transferMonitor = startTransferMonitor(onProgress)
         try {
             val request = RestoreSnapshotsRequest(
                 op = op,
@@ -155,11 +258,7 @@ internal class RusticWriterGateway(
                     }
                 }
             )
-            val callback = object : IBackupProgressCallback.Stub() {
-                override fun onProgress(progress: String) {
-                    runCatching { onProgress(progress.parseJson<BackupProgress>()) }
-                }
-            }
+            val callback = progressCallback(onProgress)
 
             val failure = parseRusticReply(
                 session.remote.call {
@@ -182,6 +281,8 @@ internal class RusticWriterGateway(
             AppLog.e(TAG, "restore failed", t, op)
             AppLog.finishOperation(op, "restore", app.packageName, startedAt, "failed: ${t.message}")
             Result.failure(session.remote.failure(t))
+        } finally {
+            transferMonitor?.cancel()
         }
     }
 

@@ -12,12 +12,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * 进度模型的纯函数测试：不起 Android、不碰仓库、不绑 root 服务。
- *
- * 这些逻辑原来长在 `RusticClient` 里，跟绑定服务和拼请求混在一起，
- * 一行都测不了。搬进 [DefaultOperationPlanner] 之后才有这组用例 —— 这也是拆分的直接收益。
- */
+/** 进度模型的纯函数测试：不起 Android、不碰仓库、不绑 root 服务。 */
 class OperationPlanTest {
 
     // ==================== 造数据 ====================
@@ -121,6 +116,36 @@ class OperationPlanTest {
             BackupStepStatus.RUNNING,
             unknown.first { it.kind == SnapshotKind.APK }.status
         )
+    }
+
+    /**
+     * 传输帧只带过网字节和速度：不改步骤状态，也不能碰 total / current（源字节），否则百分比乱跳。
+     */
+    @Test
+    fun `传输帧只更新过网字节，不动步骤状态和源字节进度`() {
+        val stage = SnapshotKind.DATA.key
+        var steps = DefaultOperationPlanner.backupSteps(setOf(BackupGroup.DATA))
+        steps = DefaultOperationPlanner.applyProgress(steps, progress(stage, "running"))
+        steps = DefaultOperationPlanner.applyProgress(
+            steps,
+            BackupProgress(stage = stage, state = BackupProgress.STATE_PROGRESS, total = 1000, current = 400)
+        )
+        steps = DefaultOperationPlanner.applyProgress(
+            steps,
+            BackupProgress(
+                stage = stage,
+                state = BackupProgress.STATE_TRANSFER,
+                transferred = 300,
+                transferSpeed = 5_000_000
+            )
+        )
+
+        val data = steps.single { it.kind == SnapshotKind.DATA }
+        assertEquals(BackupStepStatus.RUNNING, data.status)
+        assertEquals(1000L, data.total)
+        assertEquals(400L, data.current)
+        assertEquals(300L, data.transferred)
+        assertEquals(5_000_000L, data.transferSpeed)
     }
 
     // ==================== 失败标记 ====================

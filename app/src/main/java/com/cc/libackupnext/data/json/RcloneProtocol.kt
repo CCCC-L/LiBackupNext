@@ -41,3 +41,12 @@ data class EnsureServeResponse(
 /** rustic_backend 的 options；rest_url 只在本次会话有效，绝不落盘。 */
 @Serializable
 data class BackendOptions(@SerialName("rest_url") val restUrl: String)
+
+/** `core/stats` 的裁剪结果。`bytes` 是进程内累计值，不是本次备份量 —— 调用方自己减基线。 */
+@Serializable
+data class TransferStatsResponse(
+    val ok: Boolean = false,
+    val bytes: Long = 0,
+    val speed: Double = 0.0,
+    val error: String? = null
+)

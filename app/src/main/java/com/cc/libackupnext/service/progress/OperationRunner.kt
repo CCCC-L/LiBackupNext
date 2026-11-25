@@ -54,9 +54,14 @@ class OperationRunner(private val planner: OperationPlanner) {
         var current = steps
         onSteps(current)
 
+        // 字节帧来自 binder 线程、传输帧来自轮询协程，都要读改写 steps，不加锁会互相覆盖
+        val lock = Any()
+
         val result = execute { progress ->
-            current = planner.applyProgress(current, progress)
-            onSteps(current)
+            synchronized(lock) {
+                current = planner.applyProgress(current, progress)
+                onSteps(current)
+            }
         }
 
         return result.fold(

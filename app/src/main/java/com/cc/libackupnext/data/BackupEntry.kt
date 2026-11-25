@@ -55,7 +55,11 @@ data class BackupStep(
     /** 这一步的字节总量；0 表示 rustic 还没扫出来，进度条只能用不确定态。 */
     val total: Long = 0,
     /** 这一步已处理的字节数。 */
-    val current: Long = 0
+    val current: Long = 0,
+    /** 已过网字节（加密后的实际传输量），本地仓库恒为 0。 */
+    val transferred: Long = 0,
+    /** 传输速度，字节/秒；0 表示当前没有在传。 */
+    val transferSpeed: Long = 0
 )
 
 /** 某个包在仓库里的备份概况：备份次数 + 最近一次备份。 */

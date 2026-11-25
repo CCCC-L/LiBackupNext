@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -21,20 +22,22 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import com.cc.libackupnext.data.BackupStep
-import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.data.BackupStepStatus
+import com.cc.libackupnext.data.SnapshotKind
 import com.cc.libackupnext.service.gateway.BackendErrors
 import com.cc.libackupnext.ui.component.AppSurfaceDialog
 import com.cc.libackupnext.ui.util.formatSize
@@ -107,7 +110,8 @@ fun BackupProgressDialog(
         ProgressHeader(
             subtitle = subtitle,
             sections = sections,
-            running = running
+            running = running,
+            isRestore = isRestore
         )
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -227,9 +231,37 @@ fun BackupProgressDialog(
 private fun ProgressHeader(
     subtitle: String,
     sections: List<ProgressSection>,
-    running: Boolean
+    running: Boolean,
+    isRestore: Boolean
 ) {
-    Text(text = subtitle, style = MaterialTheme.typography.bodySmall)
+    // 副标题行右侧要挂当前步骤的传输量
+    val step = if (running) runningStep(sections) else null
+    val transferred = step?.transferred ?: 0L
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = subtitle,
+            style = MaterialTheme.typography.bodySmall,
+            // 应用名可能很长：传输量优先占位，副标题自己省略
+            modifier = Modifier.weight(1f, fill = false),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        // 只有远程仓库有传输量：rustic 的字节进度到打包器为止，一个 pack 传完之前 current 不动
+        if (transferred > 0) {
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = transferText(transferred, step?.transferSpeed ?: 0L, isRestore),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+        }
+    }
 
     val startedAt = remember { SystemClock.elapsedRealtime() }
     var now by remember { mutableLongStateOf(startedAt) }
@@ -244,7 +276,6 @@ private fun ProgressHeader(
     val elapsed = (now - startedAt).coerceAtLeast(0)
 
     if (running) {
-        val step = runningStep(sections)
         val total = step?.total ?: 0L
         val current = step?.current ?: 0L
         val hasLength = total > 0
@@ -361,6 +392,16 @@ private fun formatElapsed(millis: Long): String {
         String.format(Locale.US, "%d:%02d:%02d", hours, minutes, seconds)
     } else {
         String.format(Locale.US, "%d:%02d", minutes, seconds)
+    }
+}
+
+/** 传输量文案：`已上传 680.0 MB · 8.4 MB/s`。速度为 0 时不写，免得看起来像停了。 */
+private fun transferText(transferred: Long, speed: Long, isRestore: Boolean): String {
+    val verb = if (isRestore) "已下载" else "已上传"
+    return if (speed > 0) {
+        "$verb ${formatSize(transferred)} · ${formatSize(speed)}/s"
+    } else {
+        "$verb ${formatSize(transferred)}"
     }
 }
 

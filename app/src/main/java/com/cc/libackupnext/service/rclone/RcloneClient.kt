@@ -7,6 +7,7 @@ import com.cc.libackupnext.data.json.EnsureServeResponse
 import com.cc.libackupnext.data.json.ListDirsRequest
 import com.cc.libackupnext.data.json.ListDirsResponse
 import com.cc.libackupnext.data.json.OkResponse
+import com.cc.libackupnext.data.json.TransferStatsResponse
 import com.cc.libackupnext.service.gateway.DirectoryBrowser
 import com.cc.libackupnext.service.json.parseJson
 import com.cc.libackupnext.service.json.toJsonText
@@ -175,5 +176,16 @@ object RcloneClient : DirectoryBrowser {
             call("stopServe") { it.stopServe() }
             Unit
         }
+    }
+
+    /**
+     * 读一次传输统计，拿不到返回 null。
+     *
+     * 轮询用：不抛异常、不走 [call]，否则 500ms 一次的失败会刷满日志。
+     */
+    suspend fun transferStats(): TransferStatsResponse? = withContext(Dispatchers.IO) {
+        runCatching {
+            getService().transferStats().parseJson<TransferStatsResponse>()
+        }.getOrNull()?.takeIf { it.ok }
     }
 }
