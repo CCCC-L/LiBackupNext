@@ -31,7 +31,7 @@ use rustic_core::{
     ProgressBars, ProgressType, Repository, RepositoryBackends, RepositoryOptions, RusticProgress,
     SnapshotOptions, StringList,
 };
-use rustic_core::repofile::{IndexId, KeyId, PackId, RepoId, SnapshotFile, SnapshotId};
+use rustic_core::repofile::SnapshotFile;
 use rustic_core::repofile::NodeType;
 use rustic_core::{LimitOption, PruneOptions};
 use serde::{Deserialize, Serialize};
@@ -679,7 +679,7 @@ fn init_empty_repo(
 
 /// 查五类文件在不在（不打开仓库，不需要密码）。
 ///
-/// **必须查「目录在不在」而不是「里面有没有东西」**：init 会把 data/index/snapshots
+/// 本地必须查「目录在不在」而不是「里面有没有东西」：init 会把 data/index/snapshots
 /// 建成空目录，用 list 查内容会把刚建好的仓库判成「什么都没有」。
 fn repo_layout(path: &str, options: &BTreeMap<String, String>) -> Result<RepoLayout, Failure> {
     // 本地仓库直接看文件系统：backend 的 list 对不存在的目录只记日志、返回空，
@@ -694,21 +694,23 @@ fn repo_layout(path: &str, options: &BTreeMap<String, String>) -> Result<RepoLay
         });
     }
 
-    // 远程仓库只能列目录：列成功 = 目录存在（哪怕是空），404 = 不存在
+    // 远程只有 config 可信：restic 协议（rclone serve 同样）对不存在的目录返回
+    // 200 + 空列表，keys/data/index/snapshots 的「列成功 = 存在」全是假阳性，
+    // 空目录会被判成缺件。config 在 = 完整仓库，不在 = 空目录（建不建库由主进程定）。
     let backends = repository_backends(path, options)?;
     let repository =
         Repository::new(&repo_options(), &backends).map_err(|e| describe_error(&e))?;
 
+    let complete = repository
+        .config_id()
+        .map_err(|e| describe_error(&e))?
+        .is_some();
     Ok(RepoLayout {
-        // config 是根目录下的单个文件，config_id 自带 head / 404 语义
-        config: repository
-            .config_id()
-            .map_err(|e| describe_error(&e))?
-            .is_some(),
-        keys: dir_exists::<_, KeyId>(&repository)?,
-        data: dir_exists::<_, PackId>(&repository)?,
-        index: dir_exists::<_, IndexId>(&repository)?,
-        snapshots: dir_exists::<_, SnapshotId>(&repository)?,
+        config: complete,
+        keys: complete,
+        data: complete,
+        index: complete,
+        snapshots: complete,
     })
 }
 
@@ -724,15 +726,6 @@ fn local_root(location: &str) -> Option<PathBuf> {
     }
     // rustic 支持 local:/path 写法，其余是裸路径
     Some(PathBuf::from(location.strip_prefix("local:").unwrap_or(location)))
-}
-
-/// 某类文件的目录在不在（远程）：列成功即存在，404 才算不存在。
-fn dir_exists<S, T: RepoId>(repository: &Repository<S>) -> Result<bool, Failure> {
-    match repository.list::<T>() {
-        Ok(_) => Ok(true),
-        Err(error) if is_missing(&error) => Ok(false),
-        Err(error) => Err(describe_error(&error)),
-    }
 }
 
 // ==================== 查询快照 ====================
@@ -2905,23 +2898,6 @@ fn classify_error(error: &rustic_core::RusticError) -> Option<Reason> {
         return Some(Reason::Unreachable);
     }
     None
-}
-
-/// 目录/文件「不存在」：本地是 io NotFound，远程是 rest 的 404。
-///
-/// 必须把 404 认成「没有」，否则远程缺 keys 会被误报成「无法连接到远程服务器」。
-fn is_missing(error: &rustic_core::RusticError) -> bool {
-    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(error);
-    while let Some(current) = cause {
-        if let Some(http) = current.downcast_ref::<reqwest::Error>() {
-            return http.status().map(|status| status.as_u16()) == Some(404);
-        }
-        if let Some(io) = current.downcast_ref::<std::io::Error>() {
-            return io.kind() == std::io::ErrorKind::NotFound;
-        }
-        cause = current.source();
-    }
-    false
 }
 
 /// rustic 的错误全文里可能带 `http://user:pass@host/...` 形式的 rest_url，

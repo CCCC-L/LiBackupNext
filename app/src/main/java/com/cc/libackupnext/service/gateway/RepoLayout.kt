@@ -5,6 +5,9 @@ package com.cc.libackupnext.service.gateway
  *
  * 缺 config 或 keys 时硬 open 会报成「密码错」（本地 backend 列不存在的目录
  * 只记日志、返回空列表），用户会以为自己密码记错了。
+ *
+ * 远程只有 config 可信（restic 协议对不存在的目录返回 200 + 空列表）：
+ * config 在 = 全 true，不在 = 全 false，五类独立判定只对本地成立。
  */
 internal data class RepoLayout(
     val config: Boolean,
