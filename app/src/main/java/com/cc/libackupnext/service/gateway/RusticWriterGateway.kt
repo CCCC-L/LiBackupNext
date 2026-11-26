@@ -83,14 +83,21 @@ internal class RusticWriterGateway(
         }
     }
 
-    /** 进度回调：记下当前步骤和「已进入字节进度」，再把帧原样交给调用方。备份和恢复共用。 */
-    private fun progressCallback(onProgress: (BackupProgress) -> Unit) =
+    /**
+     * 进度回调：记下当前步骤和「已进入字节进度」，再把帧原样交给调用方。备份和恢复共用。
+     * [onTransportFailure] 在后端判出传输层错误时触发，用来停掉上传量轮询。
+     */
+    private fun progressCallback(
+        onProgress: (BackupProgress) -> Unit,
+        onTransportFailure: () -> Unit = {}
+    ) =
         object : IBackupProgressCallback.Stub() {
             override fun onProgress(progress: String) {
                 runCatching {
                     val parsed = progress.parseJson<BackupProgress>()
                     if (parsed.stage.isNotBlank()) transferStage = parsed.stage
                     if (parsed.state == BackupProgress.STATE_PROGRESS) transferStarted = true
+                    if (parsed.state == BackupProgress.STATE_INTERRUPTED) onTransportFailure()
                     onProgress(parsed)
                 }
             }
@@ -111,7 +118,8 @@ internal class RusticWriterGateway(
         // 传输帧和 rustic 的字节帧走同一条回调，读端按 state 区分
         val transferMonitor = startTransferMonitor(onProgress)
         try {
-            val callback = progressCallback(onProgress)
+            // 断连一判出来就停掉上传量轮询，条和「已上传」都停在那一刻
+            val callback = progressCallback(onProgress) { transferMonitor?.cancel() }
 
             // 目录 / 系统数据都没有图标，跳过这一步（系统数据也就不用去仓库里查了）
             val isDir = request.packageName.startsWith('/')
@@ -258,7 +266,7 @@ internal class RusticWriterGateway(
                     }
                 }
             )
-            val callback = progressCallback(onProgress)
+            val callback = progressCallback(onProgress) { transferMonitor?.cancel() }
 
             val failure = parseRusticReply(
                 session.remote.call {

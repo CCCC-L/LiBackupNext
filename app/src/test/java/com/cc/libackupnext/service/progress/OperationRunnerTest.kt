@@ -119,4 +119,53 @@ class OperationRunnerTest {
             observed.first { it.kind == SnapshotKind.OBB }.status
         )
     }
+
+    /** 中断帧一进来就回调；之后涌进来的字节帧必须丢掉，否则条会在等 native 时继续涨。 */
+    @Test
+    fun `中断帧立刻回调，并且之后的进度帧不再推进`() = runBlocking {
+        var observed: List<BackupStep> = emptyList()
+        val reasons = mutableListOf<String>()
+
+        val outcome = runner.run(
+            steps = apkSteps(),
+            onSteps = { observed = it },
+            onInterrupted = { reasons += it }
+        ) { onProgress ->
+            onProgress(BackupProgress(stage = "apk", state = "running"))
+            onProgress(
+                BackupProgress(
+                    stage = "apk",
+                    state = BackupProgress.STATE_PROGRESS,
+                    total = 1_000,
+                    current = 400
+                )
+            )
+            onProgress(
+                BackupProgress(
+                    stage = "apk",
+                    state = BackupProgress.STATE_INTERRUPTED,
+                    reason = "unreachable"
+                )
+            )
+            // 断连之后 rustic 还在读源文件，字节帧照来：必须被丢掉
+            onProgress(
+                BackupProgress(
+                    stage = "apk",
+                    state = BackupProgress.STATE_PROGRESS,
+                    total = 1_000,
+                    current = 999
+                )
+            )
+            Result.failure<Unit>(RemoteInterruptedException("无法连接到远程服务器"))
+        }
+
+        // 只回调一次，且文案查表而不是把 wire 原样给出去
+        assertEquals(listOf("无法连接到远程服务器"), reasons)
+        val apk = observed.first { it.kind == SnapshotKind.APK }
+        assertEquals(400L, apk.current)
+        // 状态保持 RUNNING：一标失败，进度区就找不到「当前步骤」，条会退回不确定态
+        assertEquals(BackupStepStatus.RUNNING, apk.status)
+        assertEquals("无法连接到远程服务器", apk.reason)
+        assertTrue(outcome is OperationOutcome.Interrupted)
+    }
 }

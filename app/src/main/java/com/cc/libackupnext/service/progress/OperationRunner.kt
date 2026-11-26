@@ -3,6 +3,7 @@ package com.cc.libackupnext.service.progress
 import com.cc.libackupnext.data.BackupStep
 import com.cc.libackupnext.data.BackupProgress
 import com.cc.libackupnext.service.gateway.BackendErrors
+import com.cc.libackupnext.service.gateway.RemoteInterruptedException
 
 /**
  * 一次操作（备份 / 覆盖 / 恢复）跑完之后的分类结果。
@@ -38,17 +39,22 @@ sealed interface OperationOutcome {
  *
  * 刻意**不碰通知**：通知需要 Context、应用名、批次序号，属于 UI 关注点。
  * 调用方在 `onProgress` 里顺带更新通知即可，runner 只管步骤模型和结果分类。
+ *
+ * 断连两条路：快路是后端写 `interrupted` 帧，这里立刻回调并冻结进度；慢路是
+ * `execute` 最终返回断连异常。
  */
 class OperationRunner(private val planner: OperationPlanner) {
 
     /**
      * @param steps 这次操作的初始步骤（备份用 backupSteps，恢复用 restoreSteps）
      * @param onSteps 步骤变化回调；调用方负责把它写进 Compose 状态
+     * @param onInterrupted 后端判出「连不上」时立刻回调一次（给用户的那句话）
      * @param execute 真正执行的地方，回调参数用来上报进度
      */
     suspend fun <T> run(
         steps: List<BackupStep>,
         onSteps: (List<BackupStep>) -> Unit,
+        onInterrupted: (String) -> Unit = {},
         execute: suspend (onProgress: (BackupProgress) -> Unit) -> Result<T>,
     ): OperationOutcome {
         var current = steps
@@ -57,15 +63,32 @@ class OperationRunner(private val planner: OperationPlanner) {
         // 字节帧来自 binder 线程、传输帧来自轮询协程，都要读改写 steps，不加锁会互相覆盖
         val lock = Any()
 
+        // 收到中断帧后一律丢弃：断连时 rustic 还在读源文件，不丢条会一直涨
+        var interrupted = false
+        var interruptedText: String? = null
+
         val result = execute { progress ->
             synchronized(lock) {
+                if (interrupted) return@synchronized
                 current = planner.applyProgress(current, progress)
                 onSteps(current)
+                // 先推进度再通知，调用方看到结论时条已经停住
+                if (progress.state == BackupProgress.STATE_INTERRUPTED) {
+                    interrupted = true
+                    interruptedText = progress.interruptedText
+                    onInterrupted(progress.interruptedText)
+                }
             }
         }
 
         return result.fold(
-            onSuccess = { OperationOutcome.Success },
+            onSuccess = {
+                // 理论上不会发生（cancel 后写不进仓库）；真出现也按断连收尾，
+                // 免得界面刚报完错又翻成「成功」
+                interruptedText
+                    ?.let { OperationOutcome.Interrupted(RemoteInterruptedException(it)) }
+                    ?: OperationOutcome.Success
+            },
             onFailure = { error ->
                 if (BackendErrors.isConnectionLost(error)) {
                     // 断连不标失败：进度条保持原样，用户看到的是「连接中断」而不是「这一步失败了」

@@ -29,6 +29,10 @@ data class BackupProgress(
     val transferred: Long = 0,
     val transferSpeed: Long = 0
 ) {
+    /** 中断帧给用户的那句话：wire 查 [FailureReason]，认不出按「连不上」兜底。 */
+    val interruptedText: String
+        get() = FailureReason.of(reason)?.text ?: FailureReason.UNREACHABLE.text
+
     companion object {
         /** 字节进度帧的状态名。 */
         const val STATE_PROGRESS = "progress"
@@ -39,5 +43,11 @@ data class BackupProgress(
          * 单位是过网的加密字节，和 [total] / [current] 的源字节不是同一个量，所以单独一个 state。
          */
         const val STATE_TRANSFER = "transfer"
+
+        /**
+         * 中断帧：Rust 侧判出传输层错误的那一刻就写进来，不必等 `nativeBackup` 返回。
+         * [reason] 是 wire；收到之后后续进度帧全部丢弃，条冻结在判定时的位置。
+         */
+        const val STATE_INTERRUPTED = "interrupted"
     }
 }

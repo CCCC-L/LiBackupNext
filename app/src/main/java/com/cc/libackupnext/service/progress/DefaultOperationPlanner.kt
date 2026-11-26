@@ -72,6 +72,12 @@ object DefaultOperationPlanner : OperationPlanner {
                     transferSpeed = progress.transferSpeed
                 )
 
+                // 后端已判出「连不上」：只换 reason 文案。状态保持 RUNNING ——
+                // 标失败会让进度区找不到当前步骤，条退回不确定态
+                progress.state == BackupProgress.STATE_INTERRUPTED -> step.copy(
+                    reason = progress.interruptedText
+                )
+
                 else -> step.copy(
                     status = statusOf(progress.state, step.status),
                     files = progress.files,

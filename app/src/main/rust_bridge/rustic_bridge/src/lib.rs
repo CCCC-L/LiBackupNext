@@ -18,7 +18,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -34,6 +34,10 @@ use rustic_core::{
 use rustic_core::repofile::SnapshotFile;
 use rustic_core::repofile::NodeType;
 use rustic_core::{LimitOption, PruneOptions};
+// ErrorReportingBackend 委托读写时要用到的类型。0.14 起 backend / id 是 pub(crate)，
+// 只能从 crate 根部导入。
+use rustic_core::{BytesList, FileType, Id, ReadBackend, WriteBackend};
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use std::ffi::c_void;
@@ -353,6 +357,13 @@ impl Reason {
             Reason::NoSpace => "no_space",
             Reason::CorruptData => "corrupt_data",
         }
+    }
+
+    /// 传输层原因：和 Kotlin 的 `FailureReason.isTransport` 逐字对应。
+    /// 只有这三类要立刻写 `interrupted` 帧并停掉写操作；密码错 / 数据损坏 / 磁盘满
+    /// 是正常失败，走原来的响应路径即可。
+    fn is_transport(self) -> bool {
+        matches!(self, Reason::Unreachable | Reason::Auth | Reason::Timeout)
     }
 }
 
@@ -898,12 +909,165 @@ fn repo_options() -> RepositoryOptions {
     options
 }
 
-/// 按仓库 location + options 构造后端。init / 打开 / 备份缓存都复用这一个工厂。
-///
-/// `remote:` 是本项目自己定义的逻辑前缀（持久化在 AppPrefs 里，不含端口和凭据）：
-/// 先让 librclone 起一个只监听 127.0.0.1 的 restic 服务，再换成 `rest:<url>`
+/// cancel 之后的短路错误：文本带 rest 请求特征，`classify_error` 会归成 Unreachable，
+/// 所以即使中断帧没赶上、由 JNI 的响应路径先返回，主进程仍按断连处理。
+fn cancelled_error() -> Box<rustic_core::RusticError> {
+    rustic_core::RusticError::new(
+        rustic_core::ErrorKind::Other,
+        "error sending request for url (cancelled)",
+    )
+}
+
+/// 远程仓库后端的包装层：传输层错误一出现就写 `interrupted` 帧并置 `cancel`，
+/// 让后续读写立刻失败、archiver 快速收尾，不必等源字节读满。
+/// 只提供机制，不做业务判定 —— 什么算断连由 `classify_error` 决定。
+struct ErrorReportingBackend {
+    inner: Arc<dyn WriteBackend>,
+    cancel: AtomicBool,
+}
+
+impl ErrorReportingBackend {
+    fn new(inner: Arc<dyn WriteBackend>) -> Self {
+        Self {
+            inner,
+            cancel: AtomicBool::new(false),
+        }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancel.load(Ordering::SeqCst)
+    }
+
+    /// 认不出来的错误（密码错 / 数据损坏 / 磁盘满）不上报、不取消：它们是正常失败。
+    fn report(&self, error: &rustic_core::RusticError) {
+        let reason = match classify_error(error) {
+            Some(reason) if reason.is_transport() => reason,
+            _ => return,
+        };
+        // 先落帧再置 cancel：置位后调用会被短路，帧必须已经写进缓冲区。
+        // ACTIVE_PROGRESS 为空说明这次不是备份 / 恢复（列目录、改备注等），静默跳过。
+        if let Ok(guard) = ACTIVE_PROGRESS.lock() {
+            if let Some(ctx) = guard.as_ref() {
+                ctx.emit_interrupted(&current_stage(), reason.wire());
+            }
+        }
+        self.cancel.store(true, Ordering::SeqCst);
+    }
+
+    fn observe<T>(&self, result: rustic_core::RusticResult<T>) -> rustic_core::RusticResult<T> {
+        if let Err(error) = &result {
+            self.report(error);
+        }
+        result
+    }
+}
+
+impl ReadBackend for ErrorReportingBackend {
+    fn location(&self) -> String {
+        self.inner.location()
+    }
+
+    fn list_with_size(
+        &self,
+        tpe: FileType,
+    ) -> rustic_core::RusticResult<Vec<(Id, u32)>> {
+        if self.is_cancelled() {
+            return Err(cancelled_error());
+        }
+        self.observe(self.inner.list_with_size(tpe))
+    }
+
+    fn read_full(
+        &self,
+        tpe: FileType,
+        id: &Id,
+    ) -> rustic_core::RusticResult<Bytes> {
+        if self.is_cancelled() {
+            return Err(cancelled_error());
+        }
+        self.observe(self.inner.read_full(tpe, id))
+    }
+
+    fn read_partial(
+        &self,
+        tpe: FileType,
+        id: &Id,
+        cacheable: bool,
+        offset: u32,
+        length: u32,
+    ) -> rustic_core::RusticResult<Bytes> {
+        if self.is_cancelled() {
+            return Err(cancelled_error());
+        }
+        self.observe(self.inner.read_partial(tpe, id, cacheable, offset, length))
+    }
+
+    fn warmup_path(&self, tpe: FileType, id: &Id) -> String {
+        self.inner.warmup_path(tpe, id)
+    }
+
+    fn list(&self, tpe: FileType) -> rustic_core::RusticResult<Vec<Id>> {
+        if self.is_cancelled() {
+            return Err(cancelled_error());
+        }
+        self.observe(self.inner.list(tpe))
+    }
+
+    fn needs_warm_up(&self) -> bool {
+        self.inner.needs_warm_up()
+    }
+
+    fn warm_up(
+        &self,
+        tpe: FileType,
+        id: &Id,
+    ) -> rustic_core::RusticResult<()> {
+        if self.is_cancelled() {
+            return Err(cancelled_error());
+        }
+        self.observe(self.inner.warm_up(tpe, id))
+    }
+}
+
+impl WriteBackend for ErrorReportingBackend {
+    fn create(&self) -> rustic_core::RusticResult<()> {
+        if self.is_cancelled() {
+            return Err(cancelled_error());
+        }
+        self.observe(self.inner.create())
+    }
+
+    fn write_bytes(
+        &self,
+        tpe: FileType,
+        id: &Id,
+        cacheable: bool,
+        content: BytesList,
+    ) -> rustic_core::RusticResult<()> {
+        if self.is_cancelled() {
+            return Err(cancelled_error());
+        }
+        self.observe(self.inner.write_bytes(tpe, id, cacheable, content))
+    }
+
+    fn remove(
+        &self,
+        tpe: FileType,
+        id: &Id,
+        cacheable: bool,
+    ) -> rustic_core::RusticResult<()> {
+        if self.is_cancelled() {
+            return Err(cancelled_error());
+        }
+        self.observe(self.inner.remove(tpe, id, cacheable))
+    }
+}
+
 /// 交给 rustic_backend 现成的 RestBackend。自定义 option 不会透传给后端。
 /// 其余前缀（本地路径 / rest: / opendal:）照旧由 rustic_backend 分派。
+///
+/// `remote:` 是本项目的逻辑前缀（不含端口和凭据）：先让 librclone 起一个只监听
+/// 127.0.0.1 的 restic 服务，再换成 `rest:<url>`。
 fn repository_backends(
     location: &str,
     options: &BTreeMap<String, String>,
@@ -932,11 +1096,20 @@ fn repository_backends(
             .or_insert_with(|| "20s".to_string());
     }
 
-    BackendOptions::default()
+    let backends = BackendOptions::default()
         .repository(effective.as_str())
         .options(backend_options)
         .to_backends()
-        .map_err(|e| describe_error(&e))
+        .map_err(|e| describe_error(&e))?;
+
+    // 只有远程仓库需要「错误一产生就送达」：本地仓库没有连接可断，
+    // 包一层只是多一次间接调用。repo_hot 原样透传，不改写冷热分层语义。
+    if location.starts_with("remote:") {
+        let wrapped = Arc::new(ErrorReportingBackend::new(backends.repository()));
+        Ok(RepositoryBackends::new(wrapped, backends.repo_hot()))
+    } else {
+        Ok(backends)
+    }
 }
 
 /// 打开仓库（不需要索引，列表/改备注都够用）。
@@ -2586,6 +2759,13 @@ impl ProgressCtx {
 
     fn emit_skipped(&self, stage: &str, reason: &str) {
         self.write_event(stage, "skipped", None, None, Some(reason));
+    }
+
+    /// 传输层错误：后端已经判出「连不上」，立刻写一条帧让主进程停掉进度。
+    /// `reason` 是 `FailureReason.wire`，文案由主进程查表，不在这里拼中文。
+    /// 和字节帧走同一个环形缓冲，读端 60ms 内就能拿到。
+    fn emit_interrupted(&self, stage: &str, reason: &str) {
+        self.write_event(stage, "interrupted", None, None, Some(reason));
     }
 
     fn write_event(

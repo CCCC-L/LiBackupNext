@@ -19,5 +19,8 @@ rayon = "1"
 # 返回的 5xx）。版本与 rustic_backend 用的一致，Cargo 会复用同一份 crate 实例，
 # 否则 TypeId 不同，downcast 永远不命中；default-features 关掉不引入额外能力。
 reqwest = { version = "0.13.2", default-features = false }
+# ErrorReportingBackend 实现 ReadBackend 时要用 bytes::Bytes；rustic_core 已经依赖它，
+# 这里只是显式声明，Cargo 会复用同一份版本。
+bytes = "1"
 libc = "0.2"
 jiff = "0.2"
