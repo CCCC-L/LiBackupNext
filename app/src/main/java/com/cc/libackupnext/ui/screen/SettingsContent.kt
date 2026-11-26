@@ -251,7 +251,7 @@ fun SettingsContent(
                 SettingsCard(
                     shape = shape,
                     title = if (exporting) "正在导出日志…" else "导出日志",
-                    subtitle = "用系统文件选择器保存到指定位置，含设备 / 系统 / 版本信息、操作索引与崩溃报告",
+                    subtitle = "用系统文件选择器保存到指定位置；导出后本地日志会清空",
                     onClick = {
                         if (!exporting) exportLogs.launch(LogReport.suggestedFileName())
                     }

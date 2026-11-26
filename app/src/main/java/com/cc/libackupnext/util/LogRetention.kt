@@ -39,6 +39,27 @@ internal object LogRetention {
         return expired + overflow
     }
 
+    /**
+     * 导出后清空：`*.log` 是两个进程正开着的写入目标，只能截断（删了写入会落进已 unlink 的 inode）；
+     * 崩溃报告和轮转备份直接删；[pendingName] 是崩溃标记不是日志，保留。
+     */
+    fun clearPlan(names: List<String>, pendingName: String): ClearPlan {
+        val truncate = ArrayList<String>()
+        val delete = ArrayList<String>()
+        names.forEach { name ->
+            when {
+                name == pendingName -> Unit
+                name.endsWith(LOG_SUFFIX) -> truncate += name
+                else -> delete += name
+            }
+        }
+        return ClearPlan(truncate, delete)
+    }
+
+    private const val LOG_SUFFIX = ".log"
+
+    data class ClearPlan(val truncate: List<String>, val delete: List<String>)
+
     /** 只要名字和时间：不引入 [java.io.File]，单测里不用造真实文件。 */
     data class CrashFile(val name: String, val modifiedAt: Long)
 }

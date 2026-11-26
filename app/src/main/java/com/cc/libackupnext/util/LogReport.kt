@@ -15,6 +15,8 @@ import java.util.zip.ZipOutputStream
  *
  * 不需要 FileProvider，也不需要临时文件。日志本来就是实时落盘的，
  * 所以功能异常（没崩溃、结果不对）之后随时导出都是完整的。
+ *
+ * 包写成功后清空本地日志：这次的内容已经完整进了包，留着只会让下次导出再打一遍。
  * 调用方负责放到 IO 线程。
  */
 object LogReport {
@@ -34,10 +36,12 @@ object LogReport {
             put(zip, "environment.txt", AppLog.environmentText())
             put(zip, "operations.txt", AppLog.operationsText())
 
-            // logs/ 下全量打包；operations.log* 内容已在 operations.txt，不重复。
+            // logs/ 下全量打包；operations.log* 内容已在 operations.txt，不重复；0 字节的跳过。
             AppLog.logFiles()
                 .filter {
-                    it.name != "pending_crash" && !it.name.startsWith("operations.log")
+                    it.name != AppLog.PENDING_CRASH &&
+                            !it.name.startsWith("operations.log") &&
+                            it.length() > 0
                 }
                 .forEach { file ->
                     put(
@@ -50,6 +54,9 @@ object LogReport {
             // 有 root 就能拿到完整 logcat（含 :root 进程与 native 崩溃线索）
             put(zip, "logcat.txt", AppLog.sanitize(readLogcat()))
         }
+
+        // 包已落地才清：SAF 写失败时日志原样保留。
+        AppLog.clearLogs()
     }
 
     private fun put(zip: ZipOutputStream, name: String, text: String) {

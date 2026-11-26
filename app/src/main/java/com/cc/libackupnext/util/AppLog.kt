@@ -44,6 +44,9 @@ object AppLog {
     /** 崩溃续命后重建 Activity 用的标记：跳过引导页、直落设置 tab。 */
     const val EXTRA_CRASH_RECOVERY = "libackup.crash_recovery"
 
+    /** logs/ 下的崩溃标记：状态不是日志，打包和清空都跳过。 */
+    const val PENDING_CRASH = "pending_crash"
+
     private const val LOG_DIR = "logs"
     private const val MAX_MESSAGE = 2000
     private const val MAX_STACK = 16000
@@ -158,7 +161,7 @@ object AppLog {
         logDir = File(appContext.filesDir, LOG_DIR)
         logFile = File(logDir, "$process.log")
         operationsFile = File(logDir, "operations.log")
-        pendingFile = File(logDir, "pending_crash")
+        pendingFile = File(logDir, PENDING_CRASH)
 
         runCatching { logDir.mkdirs() }
         makeSharedWritable(logDir, MODE_DIR)
@@ -526,6 +529,23 @@ object AppLog {
     fun logFiles(): List<File> = runCatching {
         logDir.listFiles()?.filter { it.isFile }?.sortedBy { it.name }.orEmpty()
     }.getOrDefault(emptyList())
+
+    /**
+     * 清空日志：`*.log` 截断为 0（O_APPEND 接着写，流不用重开），崩溃报告和轮转备份删除。
+     * `pending_crash` 一并消费 —— 它的提示是「日志已保存，去导出」，日志清了提示就成了假话。
+     */
+    fun clearLogs() {
+        synchronized(writeLock) {
+            val plan = LogRetention.clearPlan(logFiles().map { it.name }, pendingFile.name)
+            plan.truncate.forEach { name ->
+                runCatching { FileOutputStream(File(logDir, name), false).close() }
+            }
+            plan.delete.forEach { name ->
+                runCatching { File(logDir, name).delete() }
+            }
+            consumePendingCrash()
+        }
+    }
 
     fun setVerbose(enabled: Boolean) {
         verbose = enabled

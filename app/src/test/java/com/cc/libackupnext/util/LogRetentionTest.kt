@@ -131,4 +131,45 @@ class LogRetentionTest {
             LogRetention.crashesToDelete(emptyList(), 10, now, 7 * day).isEmpty()
         )
     }
+
+    // ==================== 导出后清空 ====================
+
+    private fun plan(vararg names: String) =
+        LogRetention.clearPlan(names.toList(), pendingName = "pending_crash")
+
+    @Test
+    fun `正在写的日志只截断不删，崩溃报告和轮转备份直接删`() {
+        val plan = plan(
+            "main.log",
+            "root.log",
+            "operations.log",
+            "main.log.1",
+            "root.log.2",
+            "crash-1700000000000-1234-main.txt"
+        )
+
+        // 删文件会让两个进程继续往已 unlink 的 inode 写，日志直接丢
+        assertEquals(setOf("main.log", "root.log", "operations.log"), plan.truncate.toSet())
+        assertEquals(
+            setOf("main.log.1", "root.log.2", "crash-1700000000000-1234-main.txt"),
+            plan.delete.toSet()
+        )
+    }
+
+    @Test
+    fun `崩溃标记既不清也不删，留着下次启动提示`() {
+        val plan = plan("pending_crash", "main.log")
+
+        assertTrue("pending_crash" !in plan.truncate)
+        assertTrue("pending_crash" !in plan.delete)
+        assertEquals(listOf("main.log"), plan.truncate)
+    }
+
+    @Test
+    fun `目录为空时两个列表都为空`() {
+        val plan = plan()
+
+        assertTrue(plan.truncate.isEmpty())
+        assertTrue(plan.delete.isEmpty())
+    }
 }
