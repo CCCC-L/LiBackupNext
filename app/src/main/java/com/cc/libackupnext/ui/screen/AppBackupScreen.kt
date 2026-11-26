@@ -383,14 +383,7 @@ fun AppBackupScreen(
         scope.launch {
             val outcome = runner.run(
                 steps = steps,
-                onSteps = { backupSteps.value = it },
-                // 断连一判出来就出结论，不等 nativeBackup 返回（条已冻结）
-                onInterrupted = { reason ->
-                    scope.launch {
-                        connectionInterrupted = true
-                        backupError = reason
-                    }
-                }
+                onSteps = { backupSteps.value = it }
             ) { onProgress ->
                 // 进度同时喂给通知：stepIndex 从初始步骤表里查，顺序不会变
                 val report: (BackupProgress) -> Unit = { progress ->
@@ -561,14 +554,7 @@ fun AppBackupScreen(
         scope.launch {
             val outcome = runner.run(
                 steps = steps,
-                onSteps = { backupSteps.value = it },
-                // 同备份：断连一判出来就出结论，不等 native 返回
-                onInterrupted = { reason ->
-                    scope.launch {
-                        connectionInterrupted = true
-                        backupError = reason
-                    }
-                }
+                onSteps = { backupSteps.value = it }
             ) { onProgress ->
                 restoreCase.restore(
                     app = displayApp,

@@ -92,6 +92,10 @@ fun BackupProgressDialog(
     // 有文件读不出来就不能说「成功」：快照是建出来了，但里面少了东西
     val unreadable = unreadableFiles(sections)
 
+    // 断连结论一给出就按「已结束」渲染：不等 :root 里的 nativeBackup 收尾
+    // （cancel 只让后续读写立刻失败，在途请求还得等自己的超时）。
+    val effectiveRunning = running && !connectionInterrupted
+
     AppSurfaceDialog(
         onDismissRequest = { /* 运行过程中不允许关闭 */ },
         properties = DialogProperties(
@@ -110,7 +114,7 @@ fun BackupProgressDialog(
         ProgressHeader(
             subtitle = subtitle,
             sections = sections,
-            running = running,
+            running = effectiveRunning,
             isRestore = isRestore
         )
 
@@ -210,7 +214,7 @@ fun BackupProgressDialog(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.End
         ) {
-            TextButton(onClick = onDismiss, enabled = !running) {
+            TextButton(onClick = onDismiss, enabled = !effectiveRunning) {
                 Text("关闭")
             }
         }

@@ -21,13 +21,17 @@ interface IRcloneService {
    */
   String ensureServe(String request);
 
-  /** 停掉当前的 serve restic，返回 {ok:true} 或 {ok:false, error:"..."}。 */
-  String stopServe();
-
   /**
    * 读 rclone 的传输统计（`core/stats` 累计值）；调用方自己减基线得本次传输量。
    *
    * @return JSON：{ok:true, bytes:N, speed:S} 或 {ok:false, error:"..."}
    */
   String transferStats();
+
+  /**
+   * 读回全局超时配置，确认 `options/set` 生效（rclone 对不认识的字段静默忽略）。
+   *
+   * @return JSON：{ok:true, timeout:"30s", contimeout:"10s", low_level_retries:0}
+   */
+  String configReport();
 }

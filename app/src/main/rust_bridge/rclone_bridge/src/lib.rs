@@ -276,19 +276,6 @@ fn handle_ensure_serve(ptr: *mut u8, capacity: usize) -> jint {
     }
 }
 
-#[no_mangle]
-pub extern "system" fn Java_com_cc_libackupnext_service_root_RcloneServer_nativeStopServe<'local>(
-    env: EnvUnowned<'local>,
-    _this: JObject<'local>,
-    buffer: JByteBuffer<'local>,
-) -> jint {
-    with_buffer(env, buffer, |ptr, capacity| {
-        stop_serve();
-        write_json(ptr, capacity, &json!({ "ok": true }));
-        0
-    })
-}
-
 /// `RcloneServer.nativeTransferStats(buffer)`：读 rclone 的传输统计。
 ///
 /// 响应：`{"ok":true,"bytes":N,"speed":S}` 或 `{"ok":false,"error":"..."}`
@@ -309,6 +296,27 @@ pub extern "system" fn Java_com_cc_libackupnext_service_root_RcloneServer_native
                 capacity,
                 &json!({ "ok": true, "bytes": bytes, "speed": speed }),
             );
+            0
+        }
+        Err(message) => {
+            write_error(ptr, capacity, &message);
+            1
+        }
+    })
+}
+
+/// `RcloneServer.nativeConfigReport(buffer)`：读回全局超时配置，确认 `options/set` 生效。
+///
+/// 响应：`{"ok":true,"timeout":"30s","contimeout":"10s","low_level_retries":0}`
+#[no_mangle]
+pub extern "system" fn Java_com_cc_libackupnext_service_root_RcloneServer_nativeConfigReport<'local>(
+    env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    buffer: JByteBuffer<'local>,
+) -> jint {
+    with_buffer(env, buffer, |ptr, capacity| match config_report() {
+        Ok(report) => {
+            write_json(ptr, capacity, &report);
             0
         }
         Err(message) => {
@@ -375,6 +383,8 @@ unsafe fn symbol<T>(handle: *mut c_void, name: &str) -> Result<T, String> {
 /// 第一次用到远程能力时才加载；重复调用是空操作。
 fn ensure_loaded(path: &str) -> Result<(), String> {
     if API.get().is_some() {
+        // 上次 options/set 没落上时在这里重试（幂等）
+        configure_timeouts();
         return Ok(());
     }
     let cpath = CString::new(path).map_err(|e| format!("librclone 路径无效：{e}"))?;
@@ -395,6 +405,8 @@ fn ensure_loaded(path: &str) -> Result<(), String> {
             obscure,
         });
     }
+    // 必须在 initialize 之后、第一次远程操作之前落地
+    configure_timeouts();
     Ok(())
 }
 
@@ -420,6 +432,78 @@ fn rpc(method: &str, input: &Value) -> Result<Value, String> {
             return Err(format!("{method} 失败：{message}"));
         }
         Ok(value)
+    }
+}
+
+// ==================== 全局超时策略 ====================
+//
+// 远程操作只允许一套判定：rclone 看「到远端的连接有没有进展」。
+// 不能用「已传字节不增长」——core/stats 记的是 rclone 从请求体读到的量，
+// 远端已死时本地管道照样涨（实测断网后每 20s 仍有 ~32KB）。
+// 快操作由 rustic 的 http-read-timeout 先判死，重操作由这里的 Timeout 判死。
+
+/// 一次远程 IO 允许的最长「无进展」时间。取 10s 是为了让重试有机会在短抖动后接上：
+/// rustic 侧整包重试 2 次，最坏 3 枪 × 10s + 退避 ≈ 33s 才判死。
+const REMOTE_TIMEOUT: &str = "10s";
+/// 建连超时；远端关机时所有操作都在这个时间内失败。
+const REMOTE_CONN_TIMEOUT: &str = "10s";
+/// 0 = 一次停顿即失败。重试是整包重传，对 32MB 的 pack 不划算 ——
+/// 真正的重试交给 rustic 侧（按档位配），这里保持 0。
+const REMOTE_LOW_LEVEL_RETRIES: u32 = 0;
+
+/// 写进 librclone 的全局配置，成功一次就够。
+///
+/// 用 `options/set` 而非 `serve/start` 的 `_config`：后者只对那次 rc 调用生效。
+fn configure_timeouts() {
+    static DONE: AtomicBool = AtomicBool::new(false);
+    if DONE.load(Ordering::SeqCst) {
+        return;
+    }
+    // 失败不置位：下次 ensure_loaded 再试，免得没落上还当成成功
+    let applied = rpc(
+        "options/set",
+        &json!({
+            "main": {
+                "Timeout": REMOTE_TIMEOUT,
+                // 字段名是 rclone ConfigInfo 的 Go 名：`--contimeout` 对应 ConnectTimeout
+                "ConnectTimeout": REMOTE_CONN_TIMEOUT,
+                "LowLevelRetries": REMOTE_LOW_LEVEL_RETRIES,
+            }
+        }),
+    )
+    .is_ok();
+    if applied {
+        DONE.store(true, Ordering::SeqCst);
+    }
+}
+
+/// 读回生效值：rclone 对不认识的字段静默忽略，「设过了」不等于「生效了」。
+fn config_report() -> Result<Value, String> {
+    let value = rpc("options/get", &json!({}))?;
+    let main = value.get("main").cloned().unwrap_or(Value::Null);
+    Ok(json!({
+        "ok": true,
+        "timeout": duration_text(main.get("Timeout")),
+        "contimeout": duration_text(main.get("ConnectTimeout")),
+        "low_level_retries": main.get("LowLevelRetries").cloned().unwrap_or(Value::Null),
+    }))
+}
+
+/// Duration 可能是 `"30s"` 也可能是纳秒数，统一成人能读的写法。
+fn duration_text(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .map(|nanos| {
+                if nanos % 1_000_000_000 == 0 {
+                    format!("{}s", nanos / 1_000_000_000)
+                } else {
+                    format!("{}ms", nanos / 1_000_000)
+                }
+            })
+            .unwrap_or_else(|| "未知".to_string()),
+        _ => "未知".to_string(),
     }
 }
 
@@ -512,18 +596,9 @@ fn token() -> String {
     format!("{stamp:x}{seq:x}")
 }
 
-/// 注入新凭据 / 换仓库时停掉旧服务，避免残留监听和旧连接。
-fn stop_serve() {
-    if let Ok(mut guard) = SERVE.lock() {
-        if let Some(old) = guard.take() {
-            let _ = rpc("serve/stop", &json!({ "id": old.id }));
-        }
-    }
-}
-
 /// 起（或复用）一个 `serve restic`，返回给 `RestBackend` 的 URL。
 ///
-/// `key` 用逻辑仓库位置，配合 set_repo 时的 stop_serve 保证配置变化后不复用旧连接。
+/// `key` 用逻辑仓库位置：换了仓库或 inline 配置，key 就变，这里会停掉旧的再起新的。
 fn remote_url(fs: &Value, key: &str, insecure: bool) -> Result<String, String> {
     let mut guard = SERVE
         .lock()
@@ -539,9 +614,8 @@ fn remote_url(fs: &Value, key: &str, insecure: bool) -> Result<String, String> {
 
     let user = token();
     let pass = token();
-    // 15s 硬上限：rclone 自己卡住时（远端不可达、DNS 不响应）不会主动报错，
-    // 只能由这一层给结论。正常链路（握手 + 一次目录请求）在 1~4s 内完成，
-    // 15s 留了足够余量，又不会让用户干等。
+    // 10s 硬上限：rclone 自己卡住时不会主动报错，只能由这一层给结论。
+    // 正常链路（握手 + 一次目录请求）1~4s；这一步是冷启动的第一道门，和快档对齐。
     let response = rpc_with_timeout(
         "serve/start",
         &json!({
@@ -554,7 +628,7 @@ fn remote_url(fs: &Value, key: &str, insecure: bool) -> Result<String, String> {
             // backend 创建时生成的 HTTP transport 会带上它
             "no_check_certificate": insecure,
         }),
-        Duration::from_secs(15),
+        Duration::from_secs(10),
     )?;
     let addr = response
         .get("addr")

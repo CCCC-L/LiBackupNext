@@ -83,10 +83,7 @@ internal class RusticWriterGateway(
         }
     }
 
-    /**
-     * 进度回调：记下当前步骤和「已进入字节进度」，再把帧原样交给调用方。备份和恢复共用。
-     * [onTransportFailure] 在后端判出传输层错误时触发，用来停掉上传量轮询。
-     */
+    /** 进度回调：记下当前步骤，再把帧交给调用方。[onTransportFailure] 用来停掉上传量轮询。 */
     private fun progressCallback(
         onProgress: (BackupProgress) -> Unit,
         onTransportFailure: () -> Unit = {}
@@ -369,7 +366,9 @@ internal class RusticWriterGateway(
                 return@withContext Result.failure(it)
             }
 
-            val failure = parseRusticReply(session.remote.call { session.service().prune(EMPTY_REQUEST) })
+            val failure = parseRusticReply(
+                session.remote.call { session.service().prune(EMPTY_REQUEST) }
+            )
             if (failure != null) {
                 return@withContext Result.failure(session.remote.error(failure))
             }

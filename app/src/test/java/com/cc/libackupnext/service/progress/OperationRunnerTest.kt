@@ -120,16 +120,14 @@ class OperationRunnerTest {
         )
     }
 
-    /** 中断帧一进来就回调；之后涌进来的字节帧必须丢掉，否则条会在等 native 时继续涨。 */
+    /** 中断帧一到就冻结：之后涌进来的字节帧必须丢掉，否则条会在等 native 返回时继续涨。 */
     @Test
-    fun `中断帧立刻回调，并且之后的进度帧不再推进`() = runBlocking {
+    fun `中断帧之后的进度帧不再推进`() = runBlocking {
         var observed: List<BackupStep> = emptyList()
-        val reasons = mutableListOf<String>()
 
         val outcome = runner.run(
             steps = apkSteps(),
-            onSteps = { observed = it },
-            onInterrupted = { reasons += it }
+            onSteps = { observed = it }
         ) { onProgress ->
             onProgress(BackupProgress(stage = "apk", state = "running"))
             onProgress(
@@ -159,13 +157,12 @@ class OperationRunnerTest {
             Result.failure<Unit>(RemoteInterruptedException("无法连接到远程服务器"))
         }
 
-        // 只回调一次，且文案查表而不是把 wire 原样给出去
-        assertEquals(listOf("无法连接到远程服务器"), reasons)
         val apk = observed.first { it.kind == SnapshotKind.APK }
         assertEquals(400L, apk.current)
         // 状态保持 RUNNING：一标失败，进度区就找不到「当前步骤」，条会退回不确定态
         assertEquals(BackupStepStatus.RUNNING, apk.status)
-        assertEquals("无法连接到远程服务器", apk.reason)
+        // 中断帧不进 planner：wire 串（unreachable）绝不能漏到步骤行，否则界面又是一灰一红
+        assertEquals("", apk.reason)
         assertTrue(outcome is OperationOutcome.Interrupted)
     }
 }

@@ -4,6 +4,7 @@ import com.cc.libackupnext.data.BackupStep
 import com.cc.libackupnext.data.BackupProgress
 import com.cc.libackupnext.service.gateway.BackendErrors
 import com.cc.libackupnext.service.gateway.RemoteInterruptedException
+import com.cc.libackupnext.util.AppLog
 
 /**
  * 一次操作（备份 / 覆盖 / 恢复）跑完之后的分类结果。
@@ -40,21 +41,19 @@ sealed interface OperationOutcome {
  * 刻意**不碰通知**：通知需要 Context、应用名、批次序号，属于 UI 关注点。
  * 调用方在 `onProgress` 里顺带更新通知即可，runner 只管步骤模型和结果分类。
  *
- * 断连两条路：快路是后端写 `interrupted` 帧，这里立刻回调并冻结进度；慢路是
- * `execute` 最终返回断连异常。
+ * 断连时后端会先写一帧 `interrupted`：这里立刻冻结进度（丢后续帧），但结论仍由
+ * `execute` 的返回值给出 —— 早报错会让用户在第一笔收尾期间就发起第二笔。
  */
 class OperationRunner(private val planner: OperationPlanner) {
 
     /**
      * @param steps 这次操作的初始步骤（备份用 backupSteps，恢复用 restoreSteps）
      * @param onSteps 步骤变化回调；调用方负责把它写进 Compose 状态
-     * @param onInterrupted 后端判出「连不上」时立刻回调一次（给用户的那句话）
      * @param execute 真正执行的地方，回调参数用来上报进度
      */
     suspend fun <T> run(
         steps: List<BackupStep>,
         onSteps: (List<BackupStep>) -> Unit,
-        onInterrupted: (String) -> Unit = {},
         execute: suspend (onProgress: (BackupProgress) -> Unit) -> Result<T>,
     ): OperationOutcome {
         var current = steps
@@ -63,21 +62,21 @@ class OperationRunner(private val planner: OperationPlanner) {
         // 字节帧来自 binder 线程、传输帧来自轮询协程，都要读改写 steps，不加锁会互相覆盖
         val lock = Any()
 
-        // 收到中断帧后一律丢弃：断连时 rustic 还在读源文件，不丢条会一直涨
+        // 中断帧之后一律丢弃：断连时 rustic 还在读源文件，不丢条会一直涨
         var interrupted = false
         var interruptedText: String? = null
 
         val result = execute { progress ->
             synchronized(lock) {
                 if (interrupted) return@synchronized
-                current = planner.applyProgress(current, progress)
-                onSteps(current)
-                // 先推进度再通知，调用方看到结论时条已经停住
+                // 中断帧不进 planner：步骤保持原样，之后的帧一律丢弃，条就停在判定那一刻
                 if (progress.state == BackupProgress.STATE_INTERRUPTED) {
                     interrupted = true
                     interruptedText = progress.interruptedText
-                    onInterrupted(progress.interruptedText)
+                    return@synchronized
                 }
+                current = planner.applyProgress(current, progress)
+                onSteps(current)
             }
         }
 

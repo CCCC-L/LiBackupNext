@@ -10,14 +10,12 @@ import kotlinx.coroutines.CancellationException
  * 只有断连类原因才说「连不上」：原因由 Rust 侧给，不按「仓库是不是远程」猜，
  * 否则密码错、仓库缺件都会被说成网络问题。依赖全部构造注入，方便单独测。
  *
- * @param isRemote 决定断连时要不要停掉 rclone serve
+ * @param isRemote 决定失败要不要按「断连」语义包装
  * @param onCredentialsStale 断连后让下次调用重新注入凭据
- * @param stopServe 停掉远程服务，让下一次请求重建连接
  */
 internal class RemoteCallHandler(
     private val isRemote: () -> Boolean,
     private val onCredentialsStale: () -> Unit,
-    private val stopServe: suspend () -> Unit,
 ) {
 
     private companion object {
@@ -98,23 +96,23 @@ internal class RemoteCallHandler(
             cause = cause
         )
         if (!failure.transport || !isRemote()) return concise
-        return stopAndWrap(concise.message.orEmpty(), concise.detail, concise)
+        return wrapInterrupted(concise.message.orEmpty(), concise.detail, concise)
     }
 
-    /** 断连收尾：日志 + 让下次重新注入凭据 + 停掉旧 serve。 */
-    private suspend fun stopAndWrap(
+    /**
+     * 断连收尾：日志 + 让下次重新注入凭据。
+     *
+     * **不停 serve**：它是无状态的，rclone 每个请求自己建连；停了反而让下一笔操作
+     * 去等 `serve/start` 的冷启动（远端不可达时要 10s 才失败），把一次网络抖动
+     * 放大成每一笔都慢。配置变化由 `ensureServe` 的 key 比对自动换新。
+     */
+    private fun wrapInterrupted(
         message: String,
         detail: String?,
         cause: Throwable
     ): Throwable {
         AppLog.e(TAG, "远程仓库连接中断：$message", cause)
         onCredentialsStale()
-        // stopServe() 是 suspend：吞掉它自己的异常不能用 runCatching
-        try {
-            stopServe()
-        } catch (stopError: Throwable) {
-            AppLog.w(TAG, "停止远程服务失败", stopError)
-        }
         return RemoteInterruptedException(message, detail, cause)
     }
 

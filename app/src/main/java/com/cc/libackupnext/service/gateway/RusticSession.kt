@@ -41,7 +41,6 @@ internal class RusticSession(
     val remote = RemoteCallHandler(
         isRemote = { repoPrefs.isRemote },
         onCredentialsStale = { invalidateCredentials() },
-        stopServe = { RcloneClient.stopServe() },
     )
 
     private val credentialLock = Mutex()

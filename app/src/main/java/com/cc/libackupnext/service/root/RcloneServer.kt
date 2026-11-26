@@ -27,8 +27,8 @@ object RcloneServer {
 
     private external fun nativeListDirs(buffer: ByteBuffer): Int
     private external fun nativeEnsureServe(buffer: ByteBuffer): Int
-    private external fun nativeStopServe(buffer: ByteBuffer): Int
     private external fun nativeTransferStats(buffer: ByteBuffer): Int
+    private external fun nativeConfigReport(buffer: ByteBuffer): Int
 
     /** 告诉 Rust panic hook 往哪个目录写 rust-panic.txt。 */
     private external fun nativeSetLogDir(path: String): Int
@@ -88,10 +88,10 @@ object RcloneServer {
                 RCLONE_CHANNEL
             )
 
-        override fun stopServe(): String =
-            runQueryNative("{}", ::nativeStopServe, nativeError, "停止远程服务失败", RCLONE_CHANNEL)
-
         override fun transferStats(): String =
             runQueryNative("{}", ::nativeTransferStats, nativeError, "读取传输统计失败", RCLONE_CHANNEL)
+
+        override fun configReport(): String =
+            runQueryNative("{}", ::nativeConfigReport, nativeError, "读取 rclone 配置失败", RCLONE_CHANNEL)
     }
 }

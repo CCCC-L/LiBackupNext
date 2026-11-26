@@ -636,13 +636,6 @@ fun BackupBatchScreen(
                             val last = progressSections.last()
                             progressSections = progressSections.dropLast(1) +
                                     last.copy(steps = steps)
-                        },
-                        // 断连立刻出结论；这一项仍在 native 里收尾，循环要等它返回才停批
-                        onInterrupted = { reason ->
-                            scope.launch {
-                                connectionInterrupted = true
-                                progressError = reason
-                            }
                         }
                     ) { onProgress ->
                         action(item) { progress ->

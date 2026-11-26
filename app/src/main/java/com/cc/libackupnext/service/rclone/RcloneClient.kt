@@ -39,6 +39,10 @@ object RcloneClient : DirectoryBrowser {
         }
     }
 
+    /** 超时配置的日志只打一次。 */
+    @Volatile
+    private var timeoutsReported = false
+
     private suspend fun getService(): IRcloneService = manager.getService()
 
     /**
@@ -161,21 +165,24 @@ object RcloneClient : DirectoryBrowser {
             raw.parseJson<EnsureServeResponse>().url?.takeIf { it.isNotBlank() }
                 ?: error("启动远程服务失败")
         }
-        // 绑定 :rclone 的耗时也算在里面：它和 serve/start 的 15s 是两段
+        // 绑定 :rclone 的耗时也算在里面：它和 serve/start 的 10s 是两段
         AppLog.i(
             TAG,
             "ensureServe 结束，总耗时 ${System.currentTimeMillis() - startedAt}ms，" +
                     "结果=${if (result.isSuccess) "成功" else "失败"}"
         )
+        // 配置在 :root 里设，读回来打一条日志 —— 字段名写错时 rclone 会静默忽略
+        if (result.isSuccess) reportTimeoutsOnce()
         result
     }
 
-    /** 手动停掉当前的 serve restic（配置切换一般由 key 变化自动完成）。 */
-    suspend fun stopServe(): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            call("stopServe") { it.stopServe() }
-            Unit
-        }
+    /** 只读一次：配置是进程级全局的，重复读没有新信息。 */
+    private suspend fun reportTimeoutsOnce() {
+        if (timeoutsReported) return
+        timeoutsReported = true
+        runCatching { getService().configReport() }
+            .onSuccess { AppLog.i(TAG, "rclone 超时配置 $it") }
+            .onFailure { AppLog.w(TAG, "读取 rclone 超时配置失败", it) }
     }
 
     /**

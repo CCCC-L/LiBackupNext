@@ -225,7 +225,7 @@ object RusticServer {
         }
 
         override fun listSnapshots(request: String): String =
-            runQuery(request, ::nativeListSnapshots)
+            runQuery(request, ::nativeListSnapshots, "列出快照失败")
 
         override fun overview(request: String): String =
             runQuery(request, ::nativeOverview, "读取备份概况失败")

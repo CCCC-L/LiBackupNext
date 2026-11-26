@@ -34,8 +34,7 @@ use rustic_core::{
 use rustic_core::repofile::SnapshotFile;
 use rustic_core::repofile::NodeType;
 use rustic_core::{LimitOption, PruneOptions};
-// ErrorReportingBackend 委托读写时要用到的类型。0.14 起 backend / id 是 pub(crate)，
-// 只能从 crate 根部导入。
+// ErrorReportingBackend 委托读写的类型。0.14 起 backend / id 是 pub(crate)，只能从根部导入。
 use rustic_core::{BytesList, FileType, Id, ReadBackend, WriteBackend};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -659,8 +658,9 @@ fn init_repo(
     options: &BTreeMap<String, String>,
     force_init: bool,
 ) -> Result<(), Failure> {
-    // 本地路径和 remote:/rest:/opendal: 走同一个工厂，不再用文件系统判断仓库是否存在
-    let backends = repository_backends(path, options)?;
+    // 本地路径和 remote:/rest:/opendal: 走同一个工厂，不再用文件系统判断仓库是否存在。
+    // 建库要写 config / key，远端首次建目录可能慢，按重档给预算。
+    let backends = repository_backends(path, &with_budget(options, Budget::Bulk))?;
     let repo_opts = repo_options();
     let credentials = Credentials::password(password);
 
@@ -708,7 +708,8 @@ fn repo_layout(path: &str, options: &BTreeMap<String, String>) -> Result<RepoLay
     // 远程只有 config 可信：restic 协议（rclone serve 同样）对不存在的目录返回
     // 200 + 空列表，keys/data/index/snapshots 的「列成功 = 存在」全是假阳性，
     // 空目录会被判成缺件。config 在 = 完整仓库，不在 = 空目录（建不建库由主进程定）。
-    let backends = repository_backends(path, options)?;
+    // 只是读一个 config，算快操作
+    let backends = repository_backends(path, &with_budget(options, Budget::Fast))?;
     let repository =
         Repository::new(&repo_options(), &backends).map_err(|e| describe_error(&e))?;
 
@@ -923,6 +924,9 @@ fn cancelled_error() -> Box<rustic_core::RusticError> {
 /// 只提供机制，不做业务判定 —— 什么算断连由 `classify_error` 决定。
 struct ErrorReportingBackend {
     inner: Arc<dyn WriteBackend>,
+    /// 已经报过断连。并发的在途请求可能同时失败，只有第一个写帧。
+    reported: AtomicBool,
+    /// 报过之后所有读写直接失败，让 archiver 快速收尾。
     cancel: AtomicBool,
 }
 
@@ -930,6 +934,7 @@ impl ErrorReportingBackend {
     fn new(inner: Arc<dyn WriteBackend>) -> Self {
         Self {
             inner,
+            reported: AtomicBool::new(false),
             cancel: AtomicBool::new(false),
         }
     }
@@ -944,7 +949,11 @@ impl ErrorReportingBackend {
             Some(reason) if reason.is_transport() => reason,
             _ => return,
         };
-        // 先落帧再置 cancel：置位后调用会被短路，帧必须已经写进缓冲区。
+        // 抢报告权：并发的在途请求会同时失败，只有第一个写帧
+        if self.reported.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        // 先落帧再置 cancel：置位后后续调用会被短路，帧必须已经写进缓冲区。
         // ACTIVE_PROGRESS 为空说明这次不是备份 / 恢复（列目录、改备注等），静默跳过。
         if let Ok(guard) = ACTIVE_PROGRESS.lock() {
             if let Some(ctx) = guard.as_ref() {
@@ -1082,18 +1091,6 @@ fn repository_backends(
             .remove("rest_url")
             .ok_or_else(|| Failure::app("缺少远程服务地址"))?;
         effective = format!("rest:{url}");
-
-        backend_options
-            .entry("retry".to_string())
-            .or_insert_with(|| "off".to_string());
-        backend_options
-            .entry("http-connect-timeout".to_string())
-            .or_insert_with(|| "5s".to_string());
-        // 两次读之间的空闲超时（不是总时长）：慢但持续的传输不会被打断，卡住才断。
-        // 上传也一样 —— 发完 body 要等响应，远端断了就卡在这一步。
-        backend_options
-            .entry("http-read-timeout".to_string())
-            .or_insert_with(|| "20s".to_string());
     }
 
     let backends = BackendOptions::default()
@@ -1112,12 +1109,62 @@ fn repository_backends(
     }
 }
 
+/// 远程操作的超时档位。每一档只有一个判定者：快档由 rustic 的
+/// `http-read-timeout` 判；重档由 rclone 的 `Timeout` 判，这里只是比它长的保险丝。
+/// 重档还会整包重试 2 次，让短抖动有机会接上。
+#[derive(Clone, Copy)]
+enum Budget {
+    /// 列快照 / 改备注 / 删快照。
+    Fast,
+    /// 备份 / 恢复 / prune / 建库（传 32MB 的 pack）。
+    Bulk,
+}
+
+impl Budget {
+    /// 两次读之间的空闲上限（不是总时长）：慢但持续的传输不会被打断，卡住才断。
+    /// 上传也一样 —— 发完 body 要等响应，远端断了就卡在这一步。
+    fn read_timeout(self) -> &'static str {
+        match self {
+            Budget::Fast => "10s",
+            Budget::Bulk => "40s",
+        }
+    }
+
+    /// 整包重试次数。只有重档给 —— 每次重试都要重传整个 32MB 的 pack；
+    /// 快档给了会把「10s 出结论」拖成 30s。
+    fn retry(self) -> &'static str {
+        match self {
+            Budget::Fast => "0",
+            Budget::Bulk => "2",
+        }
+    }
+}
+
+/// 按档位补齐远程超时参数；其余选项原样保留。
+fn with_budget(
+    options: &BTreeMap<String, String>,
+    budget: Budget,
+) -> BTreeMap<String, String> {
+    let mut options = options.clone();
+    options.insert(
+        "http-read-timeout".to_string(),
+        budget.read_timeout().to_string(),
+    );
+    options.insert("retry".to_string(), budget.retry().to_string());
+    // 打的是 127.0.0.1，正常秒连，这个值只是兜底
+    options.insert("http-connect-timeout".to_string(), "5s".to_string());
+    options
+}
+
 /// 打开仓库（不需要索引，列表/改备注都够用）。
 ///
 /// 走 `new_with_progress`：备份时 rustic 内部的字节进度会经 [BridgeProgressBars]
 /// 写进共享内存。列表 / prune / check 这些操作没有挂进度端，emit 会静默跳过。
-fn open_repo(config: &RepoConfig) -> Result<rustic_core::Repository<rustic_core::OpenStatus>, Failure> {
-    let backends = repository_backends(&config.path, &config.options)?;
+fn open_repo(
+    config: &RepoConfig,
+    budget: Budget,
+) -> Result<rustic_core::Repository<rustic_core::OpenStatus>, Failure> {
+    let backends = repository_backends(&config.path, &with_budget(&config.options, budget))?;
 
     Repository::new_with_progress(&repo_options(), &backends, BridgeProgressBars)
         .map_err(|e| describe_error(&e))?
@@ -1168,7 +1215,7 @@ fn open_repo_cached() -> Result<Arc<Repository<rustic_core::OpenStatus>>, Failur
         *guard = None;
     }
 
-    let repo = Arc::new(open_repo(&config)?);
+    let repo = Arc::new(open_repo(&config, Budget::Fast)?);
     if let Ok(mut guard) = OPEN_REPO.lock() {
         *guard = Some(CachedRepo {
             key,
@@ -1223,7 +1270,7 @@ fn open_indexed_repo_cached() -> Result<Arc<Repository<rustic_core::IndexedFullS
     }
 
     let repo = Arc::new(
-        open_repo(&config)?
+        open_repo(&config, Budget::Bulk)?
             .to_indexed()
             .map_err(|e| describe_error(&e))?,
     );
@@ -1271,7 +1318,8 @@ fn open_backup_repo_cached(
             format!("{}\0batch\0{batch}", repo_key(&config))
         }
         _ => {
-            let backends = repository_backends(&config.path, &config.options)?;
+            let backends =
+                repository_backends(&config.path, &with_budget(&config.options, Budget::Bulk))?;
             let repository =
                 Repository::new_with_progress(&repo_options(), &backends, BridgeProgressBars)
                     .map_err(|e| describe_error(&e))?;
@@ -1299,7 +1347,7 @@ fn open_backup_repo_cached(
         *guard = None;
     }
 
-    let backends = repository_backends(&config.path, &config.options)?;
+    let backends = repository_backends(&config.path, &with_budget(&config.options, Budget::Bulk))?;
     let repository = Repository::new_with_progress(&repo_options(), &backends, BridgeProgressBars)
         .map_err(|e| describe_error(&e))?;
 
@@ -1753,7 +1801,10 @@ struct CleanupResponse {
 fn clean_orphan_icons() -> Result<u32, Failure> {
     let _gate = enter_write_gate();
 
-    let repository = open_repo_cached()?;
+    // 和 prune 是一条链（用户看到的是「整理仓库」一件事），按重档给预算。
+    // 不走缓存：只在 prune 前跑一次，多花的一次 scrypt 可以忽略。
+    let config = repo_config()?;
+    let repository = open_repo(&config, Budget::Bulk)?;
 
     let snapshots = repository
         .get_matching_snapshots(|_| true)
