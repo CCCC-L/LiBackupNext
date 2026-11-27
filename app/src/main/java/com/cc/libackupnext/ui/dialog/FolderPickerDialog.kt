@@ -44,12 +44,15 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
@@ -104,6 +107,35 @@ private data class DirContent(
 /** 把 rclone 返回的子目录名拼回绝对路径；远程的 path 也是同一套斜杠写法。 */
 private fun joinPath(base: String, name: String): String =
     if (base == "/") "/$name" else "$base/$name"
+
+/** 面包屑一段：当前目录用正文色，其余段是主色链接。 */
+@Composable
+private fun BreadcrumbSegment(segment: PathSegment, isCurrent: Boolean, onClick: () -> Unit) {
+    Text(
+        text = segment.label,
+        style = MaterialTheme.typography.bodySmall,
+        color = if (isCurrent) {
+            MaterialTheme.colorScheme.onSurface
+        } else {
+            MaterialTheme.colorScheme.primary
+        },
+        maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 2.dp, vertical = 2.dp)
+    )
+}
+
+/** 面包屑的「/」：不加内边距，间距靠两侧段名的 2dp。 */
+@Composable
+private fun BreadcrumbSeparator() {
+    Text(
+        text = "/",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+}
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -214,6 +246,18 @@ fun FolderPickerDialog(
                     add(PathSegment(segment, current))
                 }
         }
+    }
+
+    /** 远程面包屑：服务根打头，每段一个可跳目录。 */
+    fun remoteSegments(path: String): List<PathSegment> = buildList {
+        add(PathSegment("根目录", "/"))
+        var current = ""
+        path.trim('/').split('/')
+            .filter { it.isNotEmpty() }
+            .forEach { segment ->
+                current = "$current/$segment"
+                add(PathSegment(segment, current))
+            }
     }
 
     /** 选中的物理路径翻译回用户可见路径：仓库里存的永远是 /storage/emulated/<id>/…。 */
@@ -361,17 +405,16 @@ fun FolderPickerDialog(
             },
             label = "FolderPathTransition"
         ) { path ->
-            // 本地把绝对路径拆成可点面包屑：卷根段显示别名，其余段逐层可跳。
             // 按本页 path 算，旧页滑出期间不会串成新路径
             val segments = remember(path, allowRoot, isLocal, userRoot) {
-                if (isLocal && path != VOLUME_PAGE) {
-                    segmentsOf(path)
-                } else {
-                    emptyList()
+                when {
+                    path == VOLUME_PAGE -> emptyList()
+                    isLocal -> segmentsOf(path)
+                    else -> remoteSegments(path)
                 }
             }
-            when {
-                path == VOLUME_PAGE -> Text(
+            if (path == VOLUME_PAGE) {
+                Text(
                     text = "选择存储位置",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -379,54 +422,69 @@ fun FolderPickerDialog(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp)
                 )
-
-                // 远程仍是服务内的绝对路径，没有卷别名这一层
-                !isLocal -> Text(
-                    text = path,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp)
-                )
-
-                else -> Row(
+            } else {
+                // 第一段钉住不滚，深路径下也一直可见
+                val scrollState = rememberScrollState()
+                LaunchedEffect(segments) {
+                    // 等首帧布局完成再滚，此前 maxValue 为 0
+                    withFrameNanos { }
+                    scrollState.scrollTo(scrollState.maxValue)
+                }
+                fun pick(segment: PathSegment) {
+                    hasClicked = true
+                    // 只跳目录；回卷列表走「..」，点当前段等同原地刷新
+                    goTo(segment.path)
+                    if (segment.path == path) refresh++
+                }
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
                         .padding(horizontal = 22.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    segments.forEachIndexed { index, segment ->
-                        if (index > 0) {
-                            Text(
-                                text = "/",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 4.dp)
-                            )
-                        }
-                        val isCurrent = index == segments.lastIndex
-                        Text(
-                            text = segment.label,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (isCurrent) {
-                                MaterialTheme.colorScheme.onSurface
-                            } else {
-                                MaterialTheme.colorScheme.primary
-                            },
-                            maxLines = 1,
+                    BreadcrumbSegment(
+                        segment = segments.first(),
+                        isCurrent = segments.size == 1,
+                        onClick = { pick(segments.first()) }
+                    )
+                    if (segments.size > 1) {
+                        BreadcrumbSeparator()
+                        // 其余段横滑，进目录贴到最右
+                        val fadeColor = MaterialTheme.colorScheme.dialogContainer
+                        Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .clickable {
-                                    hasClicked = true
-                                    // 回「选择存储位置」页走列表里的「..」
-                                    goTo(segment.path)
-                                    // 点当前目录等同原地刷新（page 不变不会重跑加载）
-                                    if (segment.path == path) refresh++
+                                .weight(1f)
+                                .drawWithContent {
+                                    drawContent()
+                                    // 左侧有内容被裁时才渐隐
+                                    if (scrollState.value > 0) {
+                                        drawRect(
+                                            brush = Brush.horizontalGradient(
+                                                colors = listOf(
+                                                    fadeColor,
+                                                    fadeColor.copy(alpha = 0f)
+                                                ),
+                                                startX = 0f,
+                                                endX = 30.dp.toPx()
+                                            )
+                                        )
+                                    }
                                 }
-                                .padding(horizontal = 3.dp, vertical = 2.dp)
-                        )
+                        ) {
+                            Row(
+                                modifier = Modifier.horizontalScroll(scrollState),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                segments.drop(1).forEachIndexed { index, segment ->
+                                    if (index > 0) BreadcrumbSeparator()
+                                    BreadcrumbSegment(
+                                        segment = segment,
+                                        isCurrent = index == segments.size - 2,
+                                        onClick = { pick(segment) }
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
