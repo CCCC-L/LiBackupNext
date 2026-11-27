@@ -362,17 +362,18 @@ class MainViewModel(
                     reader.repoOverview()
                 }
 
-                // 先渲染已安装应用，备份里独有的应用到了再追加。
-                // 静默刷新不走这一步：分两次写列表会闪，等最终结果一次写进去。
+                // 冷重启时先渲染已装应用，再获取快照中的数据。 静默、下拉刷新则和快照中的数据一块写入
                 val installed = installedDeferred.await()
                 Log.d(TAG, "loadApps: userId=$userId, count=${installed.size}, silent=$silent")
                 if (userId != currentUserId.value) return@launch
 
                 if (!silent) {
-                    _allApps.value = installed
-                    _displayApps.value = withContext(Dispatchers.Default) { computeDisplay(installed) }
+                    if (!fromPullRefresh) {
+                        _allApps.value = installed
+                        _displayApps.value = withContext(Dispatchers.Default) { computeDisplay(installed) }
+                        if (scrollToTop) requestScrollToTop()
+                    }
                     _loadedUserId.value = userId
-                    if (scrollToTop) requestScrollToTop()
                 }
 
                 val overviewResult = overviewDeferred.await()
